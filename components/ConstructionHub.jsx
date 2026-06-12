@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, Component } from "react";
+import { supabase } from "../lib/supabase";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -62,6 +63,12 @@ const mkProject = (o={}) => ({
   invoiced:0, paid:0, xeroRef:"",
   actualCosts:[], variations:[], claims:[],
   ...o
+});
+
+const normalizeProject = (p={}) => ({
+  ...p,
+  client: p.client_name ?? p.client ?? "",
+  created: p.created ?? new Date().toISOString().slice(0,10),
 });
 
 const SEED_CLIENTS = [
@@ -607,7 +614,11 @@ class ErrorBoundary extends Component {
 // APP ROOT
 // ═══════════════════════════════════════════════════════════════════════════
 export default function App() {
-  const [projects,  setProjects]  = useLS("qf_projects", SEED_PROJECTS);
+  const [projects,  setProjects]  = useState([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsError, setProjectsError] = useState(null);
+  const [user, setUser] = useState(null);
+  const [companyId, setCompanyId] = useState(null);
   const [clients,   setClients]   = useLS("qf_clients",  SEED_CLIENTS);
   const [rates,     setRates]     = useLS("qf_rates",    SEED_RATES);
   const [cabLib,    setCabLib]    = useLS("qf_cablib",   SEED_CABLIB);
@@ -615,6 +626,47 @@ export default function App() {
   const [xero,      setXero]      = useLS("qf_xero", {connected:false,autoSync:true,twoWay:false,syncPO:false,taxCode:"GST",accountCode:"200",log:[]});
   const [trash,     setTrash]     = useLS("qf_trash", []);
   const [storageErr,setStorageErr]= useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadProjects() {
+      setProjectsLoading(true);
+      setProjectsError(null);
+      try {
+        const { data: userData, error: userError } = await supabase.auth.getUser();
+        if (userError) throw userError;
+        const currentUser = userData?.user;
+        if (!currentUser) throw new Error("No authenticated user found.");
+
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("company_id")
+          .eq("id", currentUser.id)
+          .single();
+        if (profileError) throw profileError;
+        if (!profile?.company_id) throw new Error("User profile missing company_id.");
+
+        const { data: projectData, error: projectError } = await supabase
+          .from("projects")
+          .select("*")
+          .eq("company_id", profile.company_id)
+          .order("created", { ascending: false });
+        if (projectError) throw projectError;
+
+        if (mounted) {
+          setUser(currentUser);
+          setCompanyId(profile.company_id);
+          setProjects((projectData || []).map(normalizeProject));
+        }
+      } catch (err) {
+        if (mounted) setProjectsError(err?.message || String(err));
+      } finally {
+        if (mounted) setProjectsLoading(false);
+      }
+    }
+    loadProjects();
+    return () => { mounted = false; };
+  }, []);
 
   // surface localStorage quota failures instead of silently dropping saves
   useEffect(()=>{
@@ -627,12 +679,48 @@ export default function App() {
   const lastBackup=(()=>{if(typeof window==="undefined")return Date.now();try{return parseInt(localStorage.getItem("qf_lastBackup"))||0;}catch{return 0;}})();
   const backupStale = projects.length>0 && (Date.now()-lastBackup > 7*86400000);
 
-  function trashProject(id){
+  async function trashProject(id){
     const p=projects.find(x=>x.id===id); if(!p) return;
-    setTrash(t=>[{...p,trashedAt:new Date().toISOString()},...t].slice(0,25));
-    setProjects(ps=>ps.filter(x=>x.id!==id));
-    pop(`"${p.name}" moved to Trash — restore from Settings.`);
+    try {
+      const { error } = await supabase.from("projects").delete().eq("id", id);
+      if (error) throw error;
+      setTrash(t=>[{...p,trashedAt:new Date().toISOString()},...t].slice(0,25));
+      setProjects(ps=>ps.filter(x=>x.id!==id));
+      pop(`"${p.name}" moved to Trash — restore from Settings.`);
+    } catch (err) {
+      pop(err?.message||String(err), "error");
+      console.error(err);
+    }
   }
+
+  async function createProject(np){
+    if(!user||!companyId) return pop("Unable to create project — user not loaded.","error");
+    try {
+      const insert = {
+        company_id: companyId,
+        name: np.name,
+        client_name: np.client,
+        address: np.address,
+        status: "draft",
+        quote_value: 0,
+        created_by: user.id,
+      };
+      const { data, error } = await supabase.from("projects").insert(insert).select().single();
+      if (error) throw error;
+      const project = normalizeProject({
+        ...mkProject({overhead: company.defaultOverhead, margin: company.defaultMargin, gst: company.defaultGst||15}),
+        ...data,
+      });
+      setProjects(ps=>[project,...ps]);
+      pop("Project created!");
+      return project;
+    } catch (err) {
+      pop(err?.message||String(err), "error");
+      console.error(err);
+      throw err;
+    }
+  }
+
   function restoreProject(id){
     const p=trash.find(x=>x.id===id); if(!p) return;
     const {trashedAt,...clean}=p;
@@ -755,7 +843,7 @@ export default function App() {
             />
           : <>
               {nav==="dashboard" && <Dashboard projects={projects} xero={xero} onOpen={openProj} setNav={setNav}/>}
-              {nav==="projects"  && <ProjectsModule projects={projects} setProjects={setProjects} company={company} onOpen={openProj} onTrash={trashProject} pop={pop}/>}
+              {nav==="projects"  && <ProjectsModule projects={projects} loading={projectsLoading} error={projectsError} company={company} onOpen={openProj} onTrash={trashProject} pop={pop} createProject={createProject}/>}
               {nav==="clients"   && <ClientsModule clients={clients} setClients={setClients} projects={projects} pop={pop}/>}
               {nav==="rates"     && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
               {nav==="xero"      && <XeroModule projects={projects} xero={xero} setXero={setXero} mutProj={mutProj} pop={pop}/>}
@@ -852,11 +940,27 @@ function Dashboard({projects, xero, onOpen, setNav}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // PROJECTS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function ProjectsModule({projects,setProjects,company,onOpen,onTrash,pop}) {
+function ProjectsModule({projects,loading,error,company,onOpen,onTrash,pop,createProject}) {
   const [showNew,setShowNew]=useState(false);
   const [np,setNp]=useState({name:"",client:"",address:""});
   const [filter,setFilter]=useState("all");
   const [search,setSearch]=useState("");
+
+  if (loading) return <div>
+    <Hdr sub="Create, manage and track all project quotes and jobs." action={<Btn v="pri" onClick={()=>setShowNew(true)} disabled>+ New Project</Btn>}>Projects</Hdr>
+    <Card hi sx={{marginBottom:16}}>
+      <div style={{fontWeight:700,color:T.accent,marginBottom:10}}>Loading projects…</div>
+      <div style={{color:T.muted,fontSize:13}}>Fetching your company projects from Supabase. Please wait.</div>
+    </Card>
+  </div>;
+
+  if (error) return <div>
+    <Hdr sub="Create, manage and track all project quotes and jobs." action={<Btn v="pri" onClick={()=>setShowNew(true)} disabled>+ New Project</Btn>}>Projects</Hdr>
+    <Card hi sx={{marginBottom:16}}>
+      <div style={{fontWeight:700,color:T.red,marginBottom:10}}>Unable to load projects</div>
+      <div style={{color:T.muted,fontSize:13}}>{error}</div>
+    </Card>
+  </div>;
 
   const filtered = projects.filter(p=>{
     const ms = filter==="all"||p.status===filter;
@@ -864,12 +968,13 @@ function ProjectsModule({projects,setProjects,company,onOpen,onTrash,pop}) {
     return ms&&mq;
   });
 
-  function create() {
+  async function create() {
     if(!np.name.trim()) return pop("Project name required.","error");
-    setProjects(ps=>[mkProject({...np,overhead:company.defaultOverhead,margin:company.defaultMargin,gst:company.defaultGst||15}),...ps]);
-    setNp({name:"",client:"",address:""});
-    setShowNew(false);
-    pop("Project created!");
+    try {
+      await createProject({...np});
+      setNp({name:"",client:"",address:""});
+      setShowNew(false);
+    } catch {}
   }
 
   return <div>
