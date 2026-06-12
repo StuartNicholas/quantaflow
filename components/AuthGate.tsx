@@ -41,22 +41,12 @@ export default function AuthGate({ children }: AuthGateProps) {
 
     try {
       if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-
+        const { error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
-
         setMessage("Account created. Check your email if confirmation is enabled.");
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-
         setMessage("Signed in successfully.");
       }
     } catch (error: any) {
@@ -72,74 +62,64 @@ export default function AuthGate({ children }: AuthGateProps) {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
-        <p className="text-slate-400">Loading QuantaFlow...</p>
+      <main style={styles.page}>
+        <p style={styles.muted}>Loading QuantaFlow...</p>
       </main>
     );
   }
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-8">
-          <h1 className="text-3xl font-bold">QuantaFlow</h1>
-          <p className="text-slate-400 mt-2">
+      <main style={styles.page}>
+        <div style={styles.card}>
+          <div style={styles.logo}>QF</div>
+
+          <h1 style={styles.title}>QuantaFlow</h1>
+          <p style={styles.subtitle}>
             Sign in to access your construction estimating platform.
           </p>
 
-          <div className="flex gap-2 mt-6">
+          <div style={styles.tabs}>
             <button
               onClick={() => setMode("login")}
-              className={`flex-1 rounded-lg px-4 py-3 font-semibold ${
-                mode === "login" ? "bg-amber-500 text-black" : "bg-slate-800"
-              }`}
+              style={mode === "login" ? styles.activeTab : styles.tab}
             >
               Login
             </button>
             <button
               onClick={() => setMode("signup")}
-              className={`flex-1 rounded-lg px-4 py-3 font-semibold ${
-                mode === "signup" ? "bg-amber-500 text-black" : "bg-slate-800"
-              }`}
+              style={mode === "signup" ? styles.activeTab : styles.tab}
             >
               Sign Up
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            <div>
-              <label className="text-sm text-slate-400">Email</label>
-              <input
-                type="email"
-                required
-                className="w-full mt-2 bg-slate-800 border border-slate-700 rounded-lg p-3"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </div>
+          <form onSubmit={handleSubmit} style={styles.form}>
+            <label style={styles.label}>Email</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              style={styles.input}
+            />
 
-            <div>
-              <label className="text-sm text-slate-400">Password</label>
-              <input
-                type="password"
-                required
-                minLength={6}
-                className="w-full mt-2 bg-slate-800 border border-slate-700 rounded-lg p-3"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </div>
+            <label style={styles.label}>Password</label>
+            <input
+              type="password"
+              required
+              minLength={6}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              style={styles.input}
+            />
 
-            <button
-              type="submit"
-              disabled={authLoading}
-              className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 text-black rounded-lg px-4 py-3 font-bold"
-            >
+            <button type="submit" disabled={authLoading} style={styles.submit}>
               {authLoading ? "Please wait..." : mode === "login" ? "Login" : "Create Account"}
             </button>
           </form>
 
-          {message && <p className="mt-4 text-sm text-amber-300">{message}</p>}
+          {message && <p style={styles.message}>{message}</p>}
         </div>
       </main>
     );
@@ -147,12 +127,9 @@ export default function AuthGate({ children }: AuthGateProps) {
 
   return (
     <>
-      <div className="fixed top-4 right-4 z-50 flex items-center gap-3 bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white">
-        <span className="text-slate-300">{user.email}</span>
-        <button
-          onClick={signOut}
-          className="bg-red-600 hover:bg-red-500 rounded-lg px-3 py-1 font-semibold"
-        >
+      <div style={styles.userBar}>
+        <span>{user.email}</span>
+        <button onClick={signOut} style={styles.logout}>
           Logout
         </button>
       </div>
@@ -160,3 +137,137 @@ export default function AuthGate({ children }: AuthGateProps) {
     </>
   );
 }
+
+const styles: Record<string, React.CSSProperties> = {
+  page: {
+    minHeight: "100vh",
+    background:
+      "radial-gradient(circle at top, rgba(245,158,11,0.12), transparent 35%), #07090c",
+    color: "white",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+    fontFamily: "Arial, sans-serif",
+  },
+  card: {
+    width: "100%",
+    maxWidth: 430,
+    background: "#101820",
+    border: "1px solid #243241",
+    borderRadius: 20,
+    padding: 32,
+    boxShadow: "0 30px 80px rgba(0,0,0,0.45)",
+  },
+  logo: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    background: "#f59e0b",
+    color: "#111827",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontWeight: 900,
+    marginBottom: 20,
+  },
+  title: {
+    fontSize: 34,
+    fontWeight: 900,
+    margin: 0,
+  },
+  subtitle: {
+    color: "#94a3b8",
+    marginTop: 10,
+    lineHeight: 1.5,
+  },
+  tabs: {
+    display: "flex",
+    gap: 10,
+    marginTop: 28,
+  },
+  tab: {
+    flex: 1,
+    padding: "12px 16px",
+    borderRadius: 10,
+    border: "1px solid #334155",
+    background: "#1e293b",
+    color: "#cbd5e1",
+    cursor: "pointer",
+    fontWeight: 700,
+  },
+  activeTab: {
+    flex: 1,
+    padding: "12px 16px",
+    borderRadius: 10,
+    border: "1px solid #f59e0b",
+    background: "#f59e0b",
+    color: "#111827",
+    cursor: "pointer",
+    fontWeight: 900,
+  },
+  form: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    marginTop: 24,
+  },
+  label: {
+    color: "#cbd5e1",
+    fontSize: 14,
+    marginTop: 8,
+  },
+  input: {
+    background: "#0f172a",
+    color: "white",
+    border: "1px solid #334155",
+    borderRadius: 10,
+    padding: 14,
+    fontSize: 16,
+    outline: "none",
+  },
+  submit: {
+    marginTop: 16,
+    background: "#f59e0b",
+    color: "#111827",
+    border: 0,
+    borderRadius: 10,
+    padding: 14,
+    fontSize: 16,
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+  message: {
+    color: "#fbbf24",
+    marginTop: 18,
+    fontSize: 14,
+  },
+  muted: {
+    color: "#94a3b8",
+  },
+  userBar: {
+    position: "fixed",
+    top: 16,
+    right: 16,
+    zIndex: 9999,
+    background: "#101820",
+    border: "1px solid #243241",
+    borderRadius: 12,
+    padding: "10px 12px",
+    color: "white",
+    display: "flex",
+    gap: 12,
+    alignItems: "center",
+    fontFamily: "Arial, sans-serif",
+    fontSize: 14,
+  },
+  logout: {
+    background: "#dc2626",
+    color: "white",
+    border: 0,
+    borderRadius: 8,
+    padding: "6px 10px",
+    cursor: "pointer",
+    fontWeight: 700,
+  },
+};
