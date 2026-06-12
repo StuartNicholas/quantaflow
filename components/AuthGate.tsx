@@ -16,17 +16,67 @@ export default function AuthGate({ children }: AuthGateProps) {
   const [user, setUser] = useState<any>(null);
   const [message, setMessage] = useState("");
 
+  async function ensureUserSetup(currentUser: any) {
+    if (!currentUser) return;
+
+    const { data: existingProfile } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", currentUser.id)
+      .maybeSingle();
+
+    if (existingProfile) return;
+
+    const { data: company, error: companyError } = await supabase
+      .from("companies")
+      .insert({
+        name: "My Construction Company",
+      })
+      .select()
+      .single();
+
+    if (companyError) {
+      console.error(companyError);
+      setMessage("Could not create company profile.");
+      return;
+    }
+
+    const { error: profileError } = await supabase.from("profiles").insert({
+      id: currentUser.id,
+      company_id: company.id,
+      full_name: currentUser.email,
+      role: "owner",
+    });
+
+    if (profileError) {
+      console.error(profileError);
+      setMessage("Could not create user profile.");
+    }
+  }
+
   useEffect(() => {
     async function loadSession() {
       const { data } = await supabase.auth.getSession();
-      setUser(data.session?.user ?? null);
+      const currentUser = data.session?.user ?? null;
+
+      if (currentUser) {
+        await ensureUserSetup(currentUser);
+      }
+
+      setUser(currentUser);
       setLoading(false);
     }
 
     loadSession();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      const currentUser = session?.user ?? null;
+
+      if (currentUser) {
+        await ensureUserSetup(currentUser);
+      }
+
+      setUser(currentUser);
     });
 
     return () => {
