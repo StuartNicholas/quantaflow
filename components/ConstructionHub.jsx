@@ -828,10 +828,7 @@ export default function App() {
           Export a backup NOW from Settings, then clear old projects via Trash.
           <span style={{marginLeft:10,cursor:"pointer",textDecoration:"underline"}} onClick={()=>setStorageErr(null)}>dismiss</span>
         </div>}
-        {!storageErr&&backupStale&&<div style={{background:T.yellowDim,border:`1px solid ${T.yellow}45`,borderRadius:7,
-          padding:"9px 16px",marginBottom:14,fontSize:12,color:T.yellow}}>
-          💾 No backup in over a week. Your data lives only in this browser — Settings → Export All Data takes 5 seconds.
-        </div>}
+        {/* Supabase project sync is now active, so the old local-browser backup warning has been removed. */}
 
         <ErrorBoundary>
         {curProj
