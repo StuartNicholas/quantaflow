@@ -9,6 +9,11 @@ import { supabase } from "../lib/supabase";
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Collision-proof IDs (Date.now() collides when many items are created in one tick)
+// Sandbox-safe dialogs: window.prompt/confirm throw in some deploy sandboxes
+// (Turbopack/Vercel). These wrappers degrade gracefully instead of crashing.
+function safeConfirm(msg){ try{ return window.confirm(msg); }catch{ return true; } }
+function safePrompt(msg, def=""){ try{ const v=window.prompt(msg, def); return v===null?null:v; }catch{ return def||null; } }
+
 const uid = () => (typeof window!=="undefined" && window.crypto?.randomUUID ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(36).slice(2,10)}`);
 
 function useLS(key, init) {
@@ -589,6 +594,41 @@ function Toggle({on,onChange,label}) {
   </div>;
 }
 
+// ── Modal shell + a prompt/confirm replacement (window.prompt is blocked in
+//    sandboxed/Turbopack environments, so we use in-app modals everywhere).
+function Modal({title,children,onClose}) {
+  return <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:9998,
+    background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:T.card,border:`1px solid ${T.border}`,
+      borderRadius:11,padding:22,width:"100%",maxWidth:420,boxShadow:"0 20px 60px rgba(0,0,0,0.6)"}}>
+      {title&&<div style={{fontWeight:800,fontSize:15,marginBottom:14,color:T.text}}>{title}</div>}
+      {children}
+    </div>
+  </div>;
+}
+
+// Controlled text-prompt modal. Usage: <PromptModal .../> rendered when open.
+function PromptModal({title,label,initial="",placeholder,confirmText="Save",onConfirm,onCancel}) {
+  const [val,setVal]=useState(initial);
+  return <Modal title={title} onClose={onCancel}>
+    <Inp label={label} value={val} onChange={setVal} placeholder={placeholder}/>
+    <Row gap={8} sx={{justifyContent:"flex-end",marginTop:8}}>
+      <Btn v="gho" sm onClick={onCancel}>Cancel</Btn>
+      <Btn v="pri" sm onClick={()=>onConfirm(val)}>{confirmText}</Btn>
+    </Row>
+  </Modal>;
+}
+
+function ConfirmModal({title,message,confirmText="Delete",danger,onConfirm,onCancel}) {
+  return <Modal title={title} onClose={onCancel}>
+    <div style={{color:T.muted,fontSize:13,lineHeight:1.6,marginBottom:16}}>{message}</div>
+    <Row gap={8} sx={{justifyContent:"flex-end"}}>
+      <Btn v="gho" sm onClick={onCancel}>Cancel</Btn>
+      <Btn v={danger?"red":"pri"} sm onClick={onConfirm}>{confirmText}</Btn>
+    </Row>
+  </Modal>;
+}
+
 // ── ERROR BOUNDARY — one module crashing must not white-screen the app ──────
 class ErrorBoundary extends Component {
   constructor(props){ super(props); this.state={error:null}; }
@@ -1036,7 +1076,7 @@ function ProjectsModule({projects,loading,error,company,onOpen,onTrash,pop,creat
                 <Row gap={5} onClick={e=>e.stopPropagation()}>
                   <Btn sm v="blu" onClick={()=>onOpen(p.id)}>Open</Btn>
                   <Btn sm v="red" onClick={()=>{
-                    if(window.confirm(`Move "${p.name}" to Trash? You can restore it from Settings.`)) onTrash(p.id);
+                    if(safeConfirm(`Move "${p.name}" to Trash? You can restore it from Settings.`)) onTrash(p.id);
                   }}>✕</Btn>
                 </Row>
               </td>
@@ -1606,7 +1646,7 @@ ${EXTRACT_SCHEMA}`;
       if(m.pts.length<2) return pop("Click two points of a known dimension first.","error");
       const [a,b]=m.pts.slice(-2);
       const px=Math.hypot(b.x-a.x,b.y-a.y);
-      const mm=parseFloat(window.prompt("Real-world distance between the two points (mm)?","1000"));
+      const mm=parseFloat(safePrompt("Real-world distance between the two points (mm)?","1000"));
       if(!mm||mm<=0) return;
       calibRef.current[m.pageIdx]=mm/px;
       setMeasure(x=>({...x,tool:"linear",pts:[]}));
@@ -1619,7 +1659,7 @@ ${EXTRACT_SCHEMA}`;
       if(m.pts.length<2) return pop("Click at least two points.","error");
       let px=0; for(let i=1;i<m.pts.length;i++) px+=Math.hypot(m.pts[i].x-m.pts[i-1].x,m.pts[i].y-m.pts[i-1].y);
       const lm=parseFloat((px*mmPerPx/1000).toFixed(2));
-      const label=window.prompt("Label for this length:",`Measured length p${m.pageIdx+1}`);
+      const label=safePrompt("Label for this length:",`Measured length p${m.pageIdx+1}`);
       if(label===null) return;
       onMutate(p=>({...p,takeoffItems:[...(p.takeoffItems||[]),
         {id:Date.now(),layerId:targetLayer,type:"length",label:label||"Measured length",qty:lm,unit:"lm",source:"measured"}]}));
@@ -1631,7 +1671,7 @@ ${EXTRACT_SCHEMA}`;
       let s=0; const P=m.pts;
       for(let i=0;i<P.length;i++){const j=(i+1)%P.length; s+=P[i].x*P[j].y-P[j].x*P[i].y;}
       const m2=parseFloat((Math.abs(s/2)*mmPerPx*mmPerPx/1e6).toFixed(2));
-      const label=window.prompt("Label for this area:",`Measured area p${m.pageIdx+1}`);
+      const label=safePrompt("Label for this area:",`Measured area p${m.pageIdx+1}`);
       if(label===null) return;
       onMutate(p=>({...p,takeoffItems:[...(p.takeoffItems||[]),
         {id:Date.now(),layerId:targetLayer,type:"area",label:label||"Measured area",qty:m2,unit:"m²",source:"measured"}]}));
@@ -1639,7 +1679,7 @@ ${EXTRACT_SCHEMA}`;
       pop(`${m2} m² added to takeoff.`);
     } else if(m.tool==="count") {
       if(!m.counts.length) return pop("Click each item to count first.","error");
-      const label=window.prompt("Label for this count:",`Counted items p${m.pageIdx+1}`);
+      const label=safePrompt("Label for this count:",`Counted items p${m.pageIdx+1}`);
       if(label===null) return;
       onMutate(p=>({...p,takeoffItems:[...(p.takeoffItems||[]),
         {id:Date.now(),layerId:targetLayer,type:"count",label:label||"Counted items",qty:m.counts.length,unit:"ea",source:"measured"}]}));
@@ -2113,7 +2153,7 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
   const [showTpl,setShowTpl]=useState(false);
 
   function saveTemplate(){
-    const name=window.prompt("Template name:",proj.name+" template");
+    const name=safePrompt("Template name:",proj.name+" template");
     if(!name) return;
     setTemplates(ts=>[...ts,{id:Date.now(),name,
       lineItems:(proj.lineItems||[]).map(li=>({category:li.category,description:li.description,qty:li.qty,unit:li.unit,rate:li.rate,margin:li.margin})),
@@ -3065,7 +3105,7 @@ function ClientsModule({clients, setClients, projects, pop}) {
                 <div style={{fontWeight:700,fontSize:14,flex:1}}>{client.name}</div>
                 <Btn sm v="blu" onClick={()=>{setNc({...client});setEditing(true);}}>Edit</Btn>
                 <Btn sm v="red" onClick={()=>{
-                  if(window.confirm(`Delete ${client.name}?`)) {
+                  if(safeConfirm(`Delete ${client.name}?`)) {
                     setClients(cs=>cs.filter(c=>c.id!==sel)); setSel(null); pop("Client deleted.");
                   }
                 }}>Delete</Btn>
@@ -3117,19 +3157,439 @@ function ClientsModule({clients, setClients, projects, pop}) {
 // RATE LIBRARY
 // ═══════════════════════════════════════════════════════════════════════════
 function RateLibrary({rates, setRates, cabLib, setCabLib, pop}) {
-  const [tab,setTab]=useState("trade");
+  const [tab,setTab]=useState("catalogue");
   return <div>
-    <Hdr sub="Central rate libraries used across all project estimates.">Rate Library</Hdr>
+    <Hdr sub="Build your cost catalogue, then set how cabinets are priced from it.">Rate Library</Hdr>
     <Tabs tabs={[
-      {id:"trade",label:"Trade Rates"},
-      {id:"cabinet",label:"🪵 Cabinet Library"},
-      {id:"finish",label:"Finish Library"},
-      {id:"install",label:"Install & Delivery"},
+      {id:"catalogue",label:"📚 Catalogue"},
+      {id:"formula",label:"🧮 Cabinet Formula"},
     ]} active={tab} onChange={setTab}/>
-    {tab==="trade"   && <TradeRates rates={rates} setRates={setRates} pop={pop}/>}
-    {tab==="cabinet" && <CabinetLibrary cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
-    {tab==="finish"  && <FinishLibrary cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
-    {tab==="install" && <InstallLibrary cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
+    {tab==="catalogue"&& <CatalogueLibrary pop={pop}/>}
+    {tab==="formula"  && <CabinetFormula pop={pop}/>}
+  </div>;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CATALOGUE LIBRARY — company-shared, Supabase-backed, user-built nested tabs.
+//   Trade tabs (parent_id NULL) → section tabs → items with drill-down attributes.
+//   Editing gated by can_edit_library(). Uses in-app modals (window.prompt is
+//   blocked in the deployment sandbox).
+// ════════════════════════════════════════════════════════════════════════════
+const inlineInput={background:"transparent",border:"none",color:T.text,fontSize:12,fontFamily:T.font,width:"100%",outline:"none"};
+
+// ── PARAMETRIC CABINET PRICING ──────────────────────────────────────────────
+// Pure function: given a cabinet's dimensions + counts, the company formula
+// rules, and the resolved $ rates from the project preset, return a cost
+// breakdown. No stored cabinet types — computed live from base costs.
+//   cab:   {type, width, height, depth, doors, drawers}  (mm)
+//   rules: a cabinet_formula row
+//   rates: {carcass:$/m², front:$/m², hinge:$/ea, handle:$/ea, foot:$/ea}
+function priceCabinet(cab, rules, rates) {
+  const R=rules||{}, P=rates||{};
+  const type=(cab.type||"Base");
+  // fill missing dims from company defaults
+  let W=+cab.width||0, H=+cab.height||0, D=+cab.depth||0;
+  if(!H||!D){
+    if(/over|wall|upper/i.test(type)){ H=H||R.default_over_h||720; D=D||R.default_over_d||320; }
+    else if(/tall|pantry|broom/i.test(type)){ H=H||R.default_tall_h||2100; D=D||R.default_tall_d||560; }
+    else { H=H||R.default_base_h||720; D=D||R.default_base_d||560; }
+  }
+  if(!W) W=600;
+  const m2=(mm2)=>mm2/1e6;
+  // carcass board area (panels), m²
+  let carcassM2=0;
+  if(R.include_sides!==false)     carcassM2 += 2*m2(H*D);     // 2 sides
+  if(R.include_topbottom!==false) carcassM2 += 2*m2(W*D);     // top + bottom
+  if(R.include_back!==false)      carcassM2 += m2(W*H);       // back
+  carcassM2 += (R.shelves_per_cab??1)*m2(W*D);               // shelves
+  // door/drawer front area, m² (fronts cover the cabinet face: W×H)
+  const fronts=(+cab.doors||0)+(+cab.drawers||0);
+  const frontM2 = fronts>0 ? m2(W*H) : 0;  // full face split across fronts
+  // hardware counts
+  const hinges = (+cab.doors||0)*(R.hinges_per_door??2);
+  const handles= (+cab.doors||0)*(R.handles_per_door??1) + (+cab.drawers||0)*(R.handles_per_drawer??1);
+  const feet   = /base/i.test(type) ? (R.feet_per_base??4) : 0;
+  // costs
+  const carcassCost = carcassM2*(+P.carcass||0);
+  const frontCost   = frontM2*(+P.front||0);
+  const hingeCost   = hinges*(+P.hinge||0);
+  const handleCost  = handles*(+P.handle||0);
+  const footCost    = feet*(+P.foot||0);
+  const assembly    = +R.assembly_per_cab||0;
+  const total = carcassCost+frontCost+hingeCost+handleCost+footCost+assembly;
+  return {
+    dims:{W,H,D}, carcassM2:+carcassM2.toFixed(3), frontM2:+frontM2.toFixed(3),
+    hinges, handles, feet,
+    carcassCost:+carcassCost.toFixed(2), frontCost:+frontCost.toFixed(2),
+    hingeCost:+hingeCost.toFixed(2), handleCost:+handleCost.toFixed(2),
+    footCost:+footCost.toFixed(2), assembly:+assembly.toFixed(2),
+    total:+total.toFixed(2),
+  };
+}
+
+
+
+function CatalogueLibrary({pop}) {
+  const [companyId,setCompanyId]=useState(null);
+  const [canEdit,setCanEdit]=useState(false);
+  const [locked,setLocked]=useState(false);
+  const [role,setRole]=useState(null);
+  const [sections,setSections]=useState([]);
+  const [items,setItems]=useState([]);
+  const [activeTrade,setActiveTrade]=useState(null);
+  const [activeSection,setActiveSection]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [err,setErr]=useState(null);
+  const [newItem,setNewItem]=useState({name:"",unit:"ea",rate:0,supplier:"",notes:"",attrText:""});
+  const [modal,setModal]=useState(null); // {type, ...}
+
+  const trades=sections.filter(s=>!s.parent_id).sort((a,b)=>a.sort_order-b.sort_order);
+  const subSections=sections.filter(s=>s.parent_id===activeTrade).sort((a,b)=>a.sort_order-b.sort_order);
+
+  async function loadShell() {
+    setLoading(true); setErr(null);
+    try {
+      const { data:u }=await supabase.auth.getUser();
+      const uid=u?.user?.id; if(!uid) throw new Error("Not signed in.");
+      const { data:prof }=await supabase.from("profiles").select("company_id,role").eq("id",uid).single();
+      const cid=prof?.company_id; setCompanyId(cid); setRole(prof?.role);
+      const { data:comp }=await supabase.from("companies").select("library_locked,library_master_id").eq("id",cid).maybeSingle();
+      setLocked(!!comp?.library_locked);
+      setCanEdit(prof?.role==="owner" || !comp?.library_locked || comp?.library_master_id===uid);
+      const { data:secs }=await supabase.from("catalogue_sections").select("*").eq("company_id",cid);
+      setSections(secs||[]);
+      const firstTrade=(secs||[]).find(s=>!s.parent_id);
+      if(firstTrade){
+        setActiveTrade(firstTrade.id);
+        setActiveSection((secs||[]).find(s=>s.parent_id===firstTrade.id)?.id||null);
+      }
+    } catch(e){ setErr(e?.message||String(e)); }
+    finally { setLoading(false); }
+  }
+  useEffect(()=>{ loadShell(); },[]);
+
+  useEffect(()=>{
+    if(!activeSection){ setItems([]); return; }
+    let on=true;
+    supabase.from("catalogue_items").select("*").eq("section_id",activeSection).order("sort_order")
+      .then(({data})=>{ if(on) setItems(data||[]); });
+    return ()=>{on=false;};
+  },[activeSection]);
+
+  async function createTrade(name){
+    setModal(null); if(!name) return;
+    const { data,error }=await supabase.from("catalogue_sections")
+      .insert({company_id:companyId,name,sort_order:trades.length}).select().single();
+    if(error) return pop(error.message,"error");
+    setSections(s=>[...s,data]); setActiveTrade(data.id); setActiveSection(null);
+  }
+  async function createSection(name){
+    setModal(null); if(!name) return;
+    const { data,error }=await supabase.from("catalogue_sections")
+      .insert({company_id:companyId,parent_id:activeTrade,name,sort_order:subSections.length}).select().single();
+    if(error) return pop(error.message,"error");
+    setSections(s=>[...s,data]); setActiveSection(data.id);
+  }
+  async function doDelSection(id,isTrade){
+    setModal(null);
+    const { error }=await supabase.from("catalogue_sections").delete().eq("id",id);
+    if(error) return pop(error.message,"error");
+    const remaining=sections.filter(s=>s.id!==id&&s.parent_id!==id);
+    setSections(remaining);
+    if(isTrade){ const t=remaining.find(s=>!s.parent_id); setActiveTrade(t?.id||null); setActiveSection(remaining.find(s=>s.parent_id===t?.id)?.id||null); }
+    else { setActiveSection(remaining.find(s=>s.parent_id===activeTrade)?.id||null); }
+    pop("Deleted.");
+  }
+  async function addItem(){
+    if(!activeSection) return pop("Select a section tab first.","error");
+    if(!newItem.name) return pop("Item name required.","error");
+    let attributes={};
+    if(newItem.attrText.trim()){
+      newItem.attrText.split(",").forEach(pair=>{
+        const [k,...v]=pair.split(":"); if(!k||!v.length) return;
+        const val=v.join(":").trim(); const num=parseFloat(val);
+        attributes[k.trim()]=(!isNaN(num)&&String(num)===val)?num:val;
+      });
+    }
+    const { data,error }=await supabase.from("catalogue_items").insert({
+      company_id:companyId,section_id:activeSection,name:newItem.name,unit:newItem.unit,
+      rate:parseFloat(newItem.rate)||0,supplier:newItem.supplier,notes:newItem.notes,
+      attributes,sort_order:items.length,
+    }).select().single();
+    if(error) return pop(error.message,"error");
+    setItems(it=>[...it,data]);
+    setNewItem({name:"",unit:"ea",rate:0,supplier:"",notes:"",attrText:""});
+    pop("Item added.");
+  }
+  async function updItem(id,field,value){
+    setItems(it=>it.map(x=>x.id===id?{...x,[field]:value}:x));
+    const patch={[field]:field==="rate"?(parseFloat(value)||0):value};
+    await supabase.from("catalogue_items").update(patch).eq("id",id);
+  }
+  async function delItem(id){
+    const { error }=await supabase.from("catalogue_items").delete().eq("id",id);
+    if(error) return pop(error.message,"error");
+    setItems(it=>it.filter(x=>x.id!==id)); pop("Removed.");
+  }
+  async function toggleLock(){
+    if(role!=="owner") return pop("Only the owner can lock the library.","error");
+    const { data:u }=await supabase.auth.getUser();
+    const next=!locked;
+    const { error }=await supabase.from("companies")
+      .update({library_locked:next,library_master_id:next?u?.user?.id:null}).eq("id",companyId);
+    if(error) return pop(error.message,"error");
+    setLocked(next); setCanEdit(true);
+    pop(next?"Library locked — only you (owner) can edit now.":"Library unlocked — all staff can edit.");
+  }
+
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading catalogue…</div></Card>;
+  if(err) return <Card><div style={{color:T.red,fontSize:13}}>Couldn't load catalogue: {err}</div>
+    <div style={{color:T.faint,fontSize:12,marginTop:6}}>If this mentions a missing table, run the CATALOGUE Layer 1 SQL in Supabase first.</div></Card>;
+
+  return <div>
+    {modal?.type==="trade"&&<PromptModal title="New trade tab" label="Trade name"
+      placeholder="e.g. Cabinetry, Electrical, Plumbing" confirmText="Add trade"
+      onConfirm={createTrade} onCancel={()=>setModal(null)}/>}
+    {modal?.type==="section"&&<PromptModal title="New section tab" label="Section name"
+      placeholder="e.g. Board, Hardware, Assembly" confirmText="Add section"
+      onConfirm={createSection} onCancel={()=>setModal(null)}/>}
+    {modal?.type==="delSection"&&<ConfirmModal title="Delete tab" danger confirmText="Delete"
+      message={modal.isTrade?"Delete this trade and ALL its sections and items? This cannot be undone."
+        :"Delete this section and all its items? This cannot be undone."}
+      onConfirm={()=>doDelSection(modal.id,modal.isTrade)} onCancel={()=>setModal(null)}/>}
+
+    <Row gap={8} sx={{marginBottom:14,flexWrap:"wrap"}}>
+      <Bdg color={canEdit?T.green:T.faint}>{canEdit?"You can edit":"Read-only"}</Bdg>
+      {locked&&<Bdg color={T.yellow}>🔒 Locked to master editor</Bdg>}
+      {role==="owner"&&<Btn sm v={locked?"yel":"gho"} onClick={toggleLock}>{locked?"Unlock library":"Lock to me only"}</Btn>}
+      <div style={{marginLeft:"auto",color:T.faint,fontSize:11}}>Shared across your whole company</div>
+    </Row>
+
+    {trades.length===0
+      ? <Card hi sx={{textAlign:"center",padding:40}}>
+          <div style={{fontSize:34,marginBottom:10}}>📚</div>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>Build your catalogue</div>
+          <div style={{color:T.muted,fontSize:13,marginBottom:16,maxWidth:440,marginInline:"auto"}}>
+            Start by adding a trade (e.g. Cabinetry), then sections inside it (Board, Hardware, Assembly), then your items with rates. Everything is shared across your company.
+          </div>
+          {canEdit
+            ? <Btn v="pri" onClick={()=>setModal({type:"trade"})}>+ Add your first trade</Btn>
+            : <div style={{color:T.faint,fontSize:12}}>The library is locked — ask your master editor to set it up.</div>}
+        </Card>
+      : <>
+        <Row gap={6} sx={{marginBottom:12,flexWrap:"wrap"}}>
+          {trades.map(t=><div key={t.id} onClick={()=>{setActiveTrade(t.id);setActiveSection(sections.find(s=>s.parent_id===t.id)?.id||null);}}
+            style={{padding:"7px 14px",borderRadius:7,cursor:"pointer",fontSize:13,fontWeight:700,
+              display:"flex",alignItems:"center",gap:8,
+              background:activeTrade===t.id?T.accentDim:T.card2,color:activeTrade===t.id?T.accent:T.muted,
+              border:`1px solid ${activeTrade===t.id?T.accentBrd:T.border}`}}>
+            {t.icon&&<span>{t.icon}</span>}{t.name}
+            {canEdit&&activeTrade===t.id&&<span onClick={e=>{e.stopPropagation();setModal({type:"delSection",id:t.id,isTrade:true});}}
+              style={{color:T.red,marginLeft:4,fontSize:14}}>×</span>}
+          </div>)}
+          {canEdit&&<Btn sm v="gho" onClick={()=>setModal({type:"trade"})}>+ Trade</Btn>}
+        </Row>
+
+        <Row gap={6} sx={{marginBottom:16,flexWrap:"wrap"}}>
+          {subSections.map(s=><div key={s.id} onClick={()=>setActiveSection(s.id)}
+            style={{padding:"5px 12px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:600,
+              display:"flex",alignItems:"center",gap:6,
+              background:activeSection===s.id?T.blueDim:"transparent",color:activeSection===s.id?T.blue:T.muted,
+              border:`1px solid ${activeSection===s.id?`${T.blue}44`:T.border}`}}>
+            {s.name}
+            {canEdit&&activeSection===s.id&&<span onClick={e=>{e.stopPropagation();setModal({type:"delSection",id:s.id,isTrade:false});}}
+              style={{color:T.red,marginLeft:2}}>×</span>}
+          </div>)}
+          {canEdit&&activeTrade&&<Btn sm v="gho" onClick={()=>setModal({type:"section"})}>+ Section</Btn>}
+        </Row>
+
+        {!activeSection
+          ? <Card><div style={{color:T.muted,fontSize:13}}>Add a section tab (Board, Hardware…) to start adding items.</div></Card>
+          : <Card sx={{padding:0,overflow:"hidden"}}>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead><tr style={{background:T.bg,color:T.faint,fontSize:11,textAlign:"left"}}>
+                    {["Item","Unit","Rate","Supplier","Details","Notes",canEdit?"":null].filter(x=>x!==null).map((h,i)=>
+                      <th key={i} style={{padding:"8px 12px",fontWeight:600}}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {items.map(it=><tr key={it.id} style={{borderTop:`1px solid ${T.border}`}}>
+                      <td style={{padding:"6px 12px",minWidth:160}}>
+                        {canEdit?<input value={it.name} onChange={e=>updItem(it.id,"name",e.target.value)} style={inlineInput}/>:<span style={{color:T.text}}>{it.name}</span>}
+                      </td>
+                      <td style={{padding:"6px 12px"}}>
+                        {canEdit?<input value={it.unit||""} onChange={e=>updItem(it.id,"unit",e.target.value)} style={{...inlineInput,width:60}}/>:<span style={{color:T.muted}}>{it.unit}</span>}
+                      </td>
+                      <td style={{padding:"6px 12px"}}>
+                        {canEdit?<input type="number" value={it.rate} onChange={e=>updItem(it.id,"rate",e.target.value)} style={{...inlineInput,width:90,color:T.accent,fontFamily:T.mono}}/>:<span style={{color:T.accent,fontFamily:T.mono}}>{$$(it.rate)}</span>}
+                      </td>
+                      <td style={{padding:"6px 12px"}}>
+                        {canEdit?<input value={it.supplier||""} onChange={e=>updItem(it.id,"supplier",e.target.value)} style={inlineInput}/>:<span style={{color:T.muted}}>{it.supplier}</span>}
+                      </td>
+                      <td style={{padding:"6px 12px",color:T.muted,fontSize:11,fontFamily:T.mono}}>
+                        {Object.entries(it.attributes||{}).map(([k,v])=>`${k}: ${v}`).join(" · ")||"—"}
+                      </td>
+                      <td style={{padding:"6px 12px",color:T.faint,fontSize:11}}>{it.notes}</td>
+                      {canEdit&&<td style={{padding:"6px 12px"}}>
+                        <span onClick={()=>delItem(it.id)} style={{color:T.red,cursor:"pointer"}}>✕</span>
+                      </td>}
+                    </tr>)}
+                    {items.length===0&&<tr><td colSpan={7} style={{padding:"16px 12px",color:T.faint,fontSize:12}}>No items in this section yet.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+
+              {canEdit&&<div style={{borderTop:`1px solid ${T.border}`,padding:14,background:T.bg}}>
+                <div style={{fontWeight:600,fontSize:12,color:T.muted,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>Add item</div>
+                <div style={{display:"grid",gridTemplateColumns:"2fr 70px 90px 1.5fr",gap:8,marginBottom:8}}>
+                  <Inp label="Name" value={newItem.name} onChange={v=>setNewItem(x=>({...x,name:v}))} placeholder="e.g. 18mm White Melamine" sx={{marginBottom:0}}/>
+                  <Inp label="Unit" value={newItem.unit} onChange={v=>setNewItem(x=>({...x,unit:v}))} placeholder="m2" sx={{marginBottom:0}}/>
+                  <Inp label="Rate $" value={newItem.rate} onChange={v=>setNewItem(x=>({...x,rate:v}))} type="number" mono sx={{marginBottom:0}}/>
+                  <Inp label="Supplier" value={newItem.supplier} onChange={v=>setNewItem(x=>({...x,supplier:v}))} sx={{marginBottom:0}}/>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"2fr 2fr auto",gap:8,alignItems:"flex-end"}}>
+                  <Inp label="Details (key:value, comma-separated)" value={newItem.attrText} onChange={v=>setNewItem(x=>({...x,attrText:v}))} placeholder="thickness:18, substrate:MR MDF" sx={{marginBottom:0}}/>
+                  <Inp label="Notes" value={newItem.notes} onChange={v=>setNewItem(x=>({...x,notes:v}))} sx={{marginBottom:0}}/>
+                  <Btn v="pri" onClick={addItem}>+ Add</Btn>
+                </div>
+              </div>}
+            </Card>}
+      </>}
+  </div>;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CABINET FORMULA — the editable rule-set + a live worked example. One row per
+// company. Pairs with per-project presets (which catalogue items to pull from).
+// ════════════════════════════════════════════════════════════════════════════
+function CabinetFormula({pop}) {
+  const [companyId,setCompanyId]=useState(null);
+  const [canEdit,setCanEdit]=useState(false);
+  const [rules,setRules]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [err,setErr]=useState(null);
+  // worked-example inputs + sample rates so the shop sees the maths
+  const [ex,setEx]=useState({type:"Base",width:1000,height:720,depth:560,doors:2,drawers:0});
+  const [exRates,setExRates]=useState({carcass:52,front:85,hinge:3.5,handle:6,foot:1.2});
+
+  useEffect(()=>{(async()=>{
+    setLoading(true); setErr(null);
+    try{
+      const { data:u }=await supabase.auth.getUser();
+      const uid=u?.user?.id; if(!uid) throw new Error("Not signed in.");
+      const { data:prof }=await supabase.from("profiles").select("company_id,role").eq("id",uid).single();
+      const cid=prof?.company_id; setCompanyId(cid);
+      const { data:comp }=await supabase.from("companies").select("library_locked,library_master_id").eq("id",cid).maybeSingle();
+      setCanEdit(prof?.role==="owner" || !comp?.library_locked || comp?.library_master_id===uid);
+      let { data:f }=await supabase.from("cabinet_formula").select("*").eq("company_id",cid).maybeSingle();
+      if(!f){
+        const { data:created }=await supabase.from("cabinet_formula").insert({company_id:cid}).select().single();
+        f=created;
+      }
+      setRules(f);
+    }catch(e){ setErr(e?.message||String(e)); }
+    finally{ setLoading(false); }
+  })();},[]);
+
+  function setRule(k,v){ setRules(r=>({...r,[k]:v})); }
+  async function save(){
+    if(!canEdit) return pop("Library is locked — only the master editor can change the formula.","error");
+    const { error }=await supabase.from("cabinet_formula").update({...rules,updated_at:new Date().toISOString()}).eq("company_id",companyId);
+    if(error) return pop(error.message,"error");
+    pop("Formula saved.");
+  }
+
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading formula…</div></Card>;
+  if(err) return <Card><div style={{color:T.red,fontSize:13}}>Couldn't load: {err}</div>
+    <div style={{color:T.faint,fontSize:12,marginTop:6}}>If this mentions a missing table, run the CABINET-FORMULA Layer 3 SQL in Supabase first.</div></Card>;
+
+  const r=rules||{};
+  const calc=priceCabinet(ex, r, exRates);
+
+  return <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+    {/* RULES */}
+    <Card>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>How a cabinet's cost is built</div>
+      <div style={{color:T.faint,fontSize:11,marginBottom:14}}>
+        The AI reads cabinet type, size and door/drawer counts off the plans. These rules turn that into quantities, which are priced against each project's chosen catalogue items.
+      </div>
+
+      <div style={{fontWeight:600,fontSize:11,color:T.accent,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Carcass board (panels counted)</div>
+      <Toggle on={r.include_sides!==false} onChange={v=>setRule("include_sides",v)} label="2 sides (Height × Depth)"/>
+      <Toggle on={r.include_topbottom!==false} onChange={v=>setRule("include_topbottom",v)} label="Top + bottom (Width × Depth)"/>
+      <Toggle on={r.include_back!==false} onChange={v=>setRule("include_back",v)} label="Back panel (Width × Height)"/>
+      <Inp label="Shelves per cabinet (each Width × Depth)" value={r.shelves_per_cab} onChange={v=>setRule("shelves_per_cab",parseInt(v)||0)} type="number" mono/>
+
+      <div style={{fontWeight:600,fontSize:11,color:T.accent,textTransform:"uppercase",letterSpacing:"0.05em",margin:"14px 0 8px"}}>Hardware rules</div>
+      <Row gap={8}>
+        <Inp label="Hinges / door" value={r.hinges_per_door} onChange={v=>setRule("hinges_per_door",parseFloat(v)||0)} type="number" mono sx={{flex:1}}/>
+        <Inp label="Handles / door" value={r.handles_per_door} onChange={v=>setRule("handles_per_door",parseFloat(v)||0)} type="number" mono sx={{flex:1}}/>
+      </Row>
+      <Row gap={8}>
+        <Inp label="Handles / drawer" value={r.handles_per_drawer} onChange={v=>setRule("handles_per_drawer",parseFloat(v)||0)} type="number" mono sx={{flex:1}}/>
+        <Inp label="Feet / base cabinet" value={r.feet_per_base} onChange={v=>setRule("feet_per_base",parseFloat(v)||0)} type="number" mono sx={{flex:1}}/>
+      </Row>
+
+      <div style={{fontWeight:600,fontSize:11,color:T.accent,textTransform:"uppercase",letterSpacing:"0.05em",margin:"14px 0 8px"}}>Default sizes (mm, used when the plan doesn't give one)</div>
+      <Row gap={8}>
+        <Inp label="Base H" value={r.default_base_h} onChange={v=>setRule("default_base_h",parseInt(v)||0)} type="number" mono sx={{flex:1}}/>
+        <Inp label="Base D" value={r.default_base_d} onChange={v=>setRule("default_base_d",parseInt(v)||0)} type="number" mono sx={{flex:1}}/>
+        <Inp label="Over H" value={r.default_over_h} onChange={v=>setRule("default_over_h",parseInt(v)||0)} type="number" mono sx={{flex:1}}/>
+        <Inp label="Tall H" value={r.default_tall_h} onChange={v=>setRule("default_tall_h",parseInt(v)||0)} type="number" mono sx={{flex:1}}/>
+      </Row>
+      <Inp label="Assembly / labour add-on per cabinet ($)" value={r.assembly_per_cab} onChange={v=>setRule("assembly_per_cab",parseFloat(v)||0)} type="number" mono/>
+
+      {canEdit
+        ? <Btn v="pri" full sx={{marginTop:8}} onClick={save}>Save formula</Btn>
+        : <div style={{color:T.faint,fontSize:12,marginTop:8}}>🔒 Library locked — read-only.</div>}
+    </Card>
+
+    {/* LIVE WORKED EXAMPLE */}
+    <Card hi>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>Live worked example</div>
+      <div style={{color:T.faint,fontSize:11,marginBottom:12}}>
+        Enter a cabinet and sample rates to see exactly how the formula prices it. In a real project these rates come from the catalogue items you choose in the project's Cabinet Preset.
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+        <Sel label="Type" value={ex.type} onChange={v=>setEx(x=>({...x,type:v}))} options={["Base","Overhead","Tall"]}/>
+        <Inp label="Width mm" value={ex.width} onChange={v=>setEx(x=>({...x,width:+v||0}))} type="number" mono/>
+        <Inp label="Height mm" value={ex.height} onChange={v=>setEx(x=>({...x,height:+v||0}))} type="number" mono/>
+        <Inp label="Depth mm" value={ex.depth} onChange={v=>setEx(x=>({...x,depth:+v||0}))} type="number" mono/>
+        <Inp label="Doors" value={ex.doors} onChange={v=>setEx(x=>({...x,doors:+v||0}))} type="number" mono/>
+        <Inp label="Drawers" value={ex.drawers} onChange={v=>setEx(x=>({...x,drawers:+v||0}))} type="number" mono/>
+      </div>
+
+      <div style={{fontWeight:600,fontSize:11,color:T.muted,textTransform:"uppercase",letterSpacing:"0.05em",margin:"12px 0 6px"}}>Sample rates (from catalogue)</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:6}}>
+        <Inp label="Carc/m²" value={exRates.carcass} onChange={v=>setExRates(x=>({...x,carcass:+v||0}))} type="number" mono/>
+        <Inp label="Front/m²" value={exRates.front} onChange={v=>setExRates(x=>({...x,front:+v||0}))} type="number" mono/>
+        <Inp label="Hinge" value={exRates.hinge} onChange={v=>setExRates(x=>({...x,hinge:+v||0}))} type="number" mono/>
+        <Inp label="Handle" value={exRates.handle} onChange={v=>setExRates(x=>({...x,handle:+v||0}))} type="number" mono/>
+        <Inp label="Foot" value={exRates.foot} onChange={v=>setExRates(x=>({...x,foot:+v||0}))} type="number" mono/>
+      </div>
+
+      <div style={{marginTop:14,background:T.bg,borderRadius:8,padding:14,border:`1px solid ${T.border}`}}>
+        {[
+          ["Carcass board",`${calc.carcassM2} m² × $${exRates.carcass}`,calc.carcassCost],
+          ["Door/drawer fronts",`${calc.frontM2} m² × $${exRates.front}`,calc.frontCost],
+          ["Hinges",`${calc.hinges} × $${exRates.hinge}`,calc.hingeCost],
+          ["Handles",`${calc.handles} × $${exRates.handle}`,calc.handleCost],
+          ["Feet",`${calc.feet} × $${exRates.foot}`,calc.footCost],
+          ["Assembly",``,calc.assembly],
+        ].map(([label,detail,val])=>(val>0||label==="Assembly")&&<div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6,fontSize:12}}>
+          <span style={{color:T.text}}>{label} <span style={{color:T.faint,fontSize:11,fontFamily:T.mono}}>{detail}</span></span>
+          <span style={{fontFamily:T.mono,color:T.muted}}>{$$(val)}</span>
+        </div>)}
+        <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${T.border}`,paddingTop:9,marginTop:6}}>
+          <span style={{fontWeight:800,fontSize:14}}>Cabinet cost</span>
+          <span style={{fontFamily:T.mono,fontWeight:800,fontSize:16,color:T.accent}}>{$$(calc.total)}</span>
+        </div>
+      </div>
+      <div style={{color:T.faint,fontSize:11,marginTop:8}}>
+        Computed live — no stored cabinet types. The AI takeoff runs this same formula on every cabinet it reads, using the project's selected catalogue items.
+      </div>
+    </Card>
   </div>;
 }
 
@@ -3696,7 +4156,7 @@ function SettingsModule({company, setCompany, trash, setTrash, onRestore, pop}) 
                   try{
                     const dump=JSON.parse(ev.target.result);
                     if(!dump.data) throw new Error("Not a QuantaFlow backup");
-                    if(!window.confirm("Restore will REPLACE all current data with the backup. Continue?")) return;
+                    if(!safeConfirm("Restore will REPLACE all current data with the backup. Continue?")) return;
                     Object.entries(dump.data).forEach(([k,v])=>localStorage.setItem(k,JSON.stringify(v)));
                     pop("Backup restored — reloading…");
                     setTimeout(()=>window.location.reload(),900);
@@ -3746,13 +4206,13 @@ function SettingsModule({company, setCompany, trash, setTrash, onRestore, pop}) 
                   <Row gap={6}>
                     <Btn sm v="grn" onClick={()=>onRestore(p.id)}>Restore</Btn>
                     <Btn sm v="red" onClick={()=>{
-                      if(window.confirm(`PERMANENTLY delete "${p.name}"? This cannot be undone.`))
+                      if(safeConfirm(`PERMANENTLY delete "${p.name}"? This cannot be undone.`))
                         setTrash(t=>t.filter(x=>x.id!==p.id));
                     }}>Delete Forever</Btn>
                   </Row>
                 </div>)}
                 <Btn sm v="gho" sx={{marginTop:10}} onClick={()=>{
-                  if(window.confirm("Empty trash permanently?")) {setTrash([]);pop("Trash emptied.");}
+                  if(safeConfirm("Empty trash permanently?")) {setTrash([]);pop("Trash emptied.");}
                 }}>Empty Trash</Btn>
               </>
             : <div style={{color:T.faint,fontSize:12}}>Deleted projects land here and can be restored. Keeps the last 25.</div>}
