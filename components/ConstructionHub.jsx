@@ -1100,11 +1100,12 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
 
   const TABS = [
     {id:"takeoff",  label:"① Takeoff"},
-    {id:"estimate", label:"② Estimate"},
-    {id:"quote",    label:"③ Quote"},
-    {id:"schedule", label:"④ Schedule"},
-    {id:"jobcost",  label:"⑤ Job Costs"},
-    {id:"claims",   label:"⑥ Claims"},
+    {id:"preset",   label:"② Cabinet Preset"},
+    {id:"estimate", label:"③ Estimate"},
+    {id:"quote",    label:"④ Quote"},
+    {id:"schedule", label:"⑤ Schedule"},
+    {id:"jobcost",  label:"⑥ Job Costs"},
+    {id:"claims",   label:"⑦ Claims"},
     {id:"info",     label:"Project Info"},
   ];
 
@@ -1124,12 +1125,218 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     </Row>
     <Tabs tabs={TABS} active={tab} onChange={setTab}/>
     {tab==="takeoff"  && <TakeoffModule proj={proj} cabLib={cabLib} onMutate={onMutate} pop={pop}/>}
+    {tab==="preset"   && <CabinetPreset proj={proj} pop={pop}/>}
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
     {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} onMutate={onMutate} pop={pop}/>}
     {tab==="schedule" && <ScheduleModule proj={proj} onMutate={onMutate} pop={pop}/>}
     {tab==="jobcost"  && <JobCostModule proj={proj} onMutate={onMutate} c={c} pop={pop}/>}
     {tab==="claims"   && <ClaimsModule proj={proj} onMutate={onMutate} c={c} onPushXero={onPushXero} pop={pop}/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CABINET PRESET — per project: choose which catalogue items feed the formula.
+// ═══════════════════════════════════════════════════════════════════════════
+function CabinetPreset({proj, pop}) {
+  const [companyId,setCompanyId]=useState(null);
+  const [items,setItems]=useState([]);
+  const [sections,setSections]=useState([]);   // trade + section tabs
+  const [preset,setPreset]=useState(null);
+  const [rules,setRules]=useState(null);
+  const [templates,setTemplates]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [err,setErr]=useState(null);
+  const [modal,setModal]=useState(null);
+
+  // Slot → catalogue-section mapping. Cabinetry is pre-wired by section NAME;
+  // editable per project and saveable in a template (slot_map).
+  const SLOTS=[
+    {key:"carcass_item_id", label:"Carcass board", defaultSection:"Board",    rate:"$/m²"},
+    {key:"front_item_id",   label:"Door/drawer front board", defaultSection:"Board", rate:"$/m²"},
+    {key:"hinge_item_id",   label:"Hinge",   defaultSection:"Hardware", rate:"$/ea"},
+    {key:"handle_item_id",  label:"Handle",  defaultSection:"Hardware", rate:"$/ea"},
+    {key:"foot_item_id",    label:"Foot/leg",defaultSection:"Hardware", rate:"$/ea"},
+  ];
+
+  useEffect(()=>{(async()=>{
+    setLoading(true); setErr(null);
+    try{
+      const { data:u }=await supabase.auth.getUser();
+      const uid=u?.user?.id; if(!uid) throw new Error("Not signed in.");
+      const { data:prof }=await supabase.from("profiles").select("company_id").eq("id",uid).single();
+      const cid=prof?.company_id; setCompanyId(cid);
+      const [{data:its},{data:secs},{data:r},{data:pr},{data:tpls}]=await Promise.all([
+        supabase.from("catalogue_items").select("id,name,unit,rate,section_id").eq("company_id",cid).order("name"),
+        supabase.from("catalogue_sections").select("id,name,parent_id").eq("company_id",cid),
+        supabase.from("cabinet_formula").select("*").eq("company_id",cid).maybeSingle(),
+        supabase.from("project_cabinet_preset").select("*").eq("project_id",proj.id).maybeSingle(),
+        supabase.from("preset_templates").select("*").eq("company_id",cid).order("name"),
+      ]);
+      setItems(its||[]); setSections(secs||[]); setRules(r); setTemplates(tpls||[]);
+      if(pr) setPreset(pr);
+      else {
+        const { data:created }=await supabase.from("project_cabinet_preset")
+          .insert({project_id:proj.id,company_id:cid}).select().single();
+        setPreset(created);
+      }
+    }catch(e){ setErr(e?.message||String(e)); }
+    finally{ setLoading(false); }
+  })();},[proj.id]);
+
+  async function setField(field,value){
+    setPreset(p=>({...p,[field]:value}));
+    await supabase.from("project_cabinet_preset").update({[field]:value||null,updated_at:new Date().toISOString()}).eq("project_id",proj.id);
+  }
+
+  // slot_map stored on the preset row (jsonb) lets a slot point at a section by id.
+  const slotMap=preset?.slot_map||{};
+  async function setSlotSection(slotKey,sectionId){
+    const next={...slotMap,[slotKey]:sectionId||undefined};
+    setPreset(p=>({...p,slot_map:next}));
+    await supabase.from("project_cabinet_preset").update({slot_map:next}).eq("project_id",proj.id);
+  }
+
+  // Resolve which section a slot should filter on: explicit slot_map → else
+  // match a section whose name contains the slot's defaultSection word.
+  function sectionForSlot(slot){
+    if(slotMap[slot.key]) return slotMap[slot.key];
+    const want=slot.defaultSection.toLowerCase();
+    const hit=sections.find(s=>s.parent_id&&s.name.toLowerCase().includes(want))
+            ||sections.find(s=>s.name.toLowerCase().includes(want));
+    return hit?.id||null;
+  }
+  function itemsForSlot(slot){
+    const secId=sectionForSlot(slot);
+    const list = secId ? items.filter(it=>it.section_id===secId) : items;
+    return [{value:"",label:"— not set —"},
+      ...list.map(it=>({value:it.id,label:`${it.name} ($${(+it.rate).toFixed(2)}${it.unit?"/"+it.unit:""})`}))];
+  }
+
+  async function applyTemplate(t){
+    const patch={
+      carcass_item_id:t.carcass_item_id, front_item_id:t.front_item_id,
+      hinge_item_id:t.hinge_item_id, handle_item_id:t.handle_item_id,
+      foot_item_id:t.foot_item_id, slot_map:t.slot_map||{},
+    };
+    setPreset(p=>({...p,...patch}));
+    await supabase.from("project_cabinet_preset").update(patch).eq("project_id",proj.id);
+    setModal(null); pop(`Applied template "${t.name}".`);
+  }
+  async function saveTemplate(name){
+    setModal(null); if(!name) return;
+    const row={company_id:companyId,name,trade:"cabinetry",
+      carcass_item_id:preset?.carcass_item_id||null, front_item_id:preset?.front_item_id||null,
+      hinge_item_id:preset?.hinge_item_id||null, handle_item_id:preset?.handle_item_id||null,
+      foot_item_id:preset?.foot_item_id||null, slot_map:slotMap};
+    const { data,error }=await supabase.from("preset_templates").insert(row).select().single();
+    if(error) return pop(error.message,"error");
+    setTemplates(t=>[...t,data]); pop(`Saved template "${name}" — reuse it on any project.`);
+  }
+  async function delTemplate(id){
+    await supabase.from("preset_templates").delete().eq("id",id);
+    setTemplates(t=>t.filter(x=>x.id!==id)); pop("Template deleted.");
+  }
+
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading preset…</div></Card>;
+  if(err) return <Card><div style={{color:T.red,fontSize:13}}>Couldn't load: {err}</div>
+    <div style={{color:T.faint,fontSize:12,marginTop:6}}>If this mentions a missing table, run the Layer 3 & 4 SQL in Supabase.</div></Card>;
+
+  const noItems=items.length===0;
+  const subSections=sections.filter(s=>s.parent_id);
+  const rateOf=id=>{ const it=items.find(x=>x.id===id); return it?+it.rate:0; };
+  const sampleRates={
+    carcass:rateOf(preset?.carcass_item_id), front:rateOf(preset?.front_item_id),
+    hinge:rateOf(preset?.hinge_item_id), handle:rateOf(preset?.handle_item_id), foot:rateOf(preset?.foot_item_id),
+  };
+  const sample=rules?priceCabinet({type:"Base",width:1000,height:720,depth:560,doors:2,drawers:0},rules,sampleRates):null;
+
+  return <div>
+    {modal?.type==="saveTpl"&&<PromptModal title="Save as preset template"
+      label="Template name" placeholder="e.g. Standard Kitchen, Budget Laundry"
+      confirmText="Save template" onConfirm={saveTemplate} onCancel={()=>setModal(null)}/>}
+    {modal?.type==="applyTpl"&&<Modal title="Apply a preset template" onClose={()=>setModal(null)}>
+      {templates.length===0
+        ? <div style={{color:T.faint,fontSize:13}}>No templates yet. Set up this project's preset, then “Save as template”.</div>
+        : templates.map(t=><div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${T.border}`}}>
+            <span style={{fontSize:13,color:T.text,fontWeight:600}}>{t.name}</span>
+            <Row gap={6}>
+              <Btn sm v="grn" onClick={()=>applyTemplate(t)}>Apply</Btn>
+              <Btn sm v="red" onClick={()=>delTemplate(t.id)}>✕</Btn>
+            </Row>
+          </div>)}
+    </Modal>}
+
+    <Card hi sx={{marginBottom:14}}>
+      <Row gap={8} sx={{flexWrap:"wrap",alignItems:"center"}}>
+        <div>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>Cabinet pricing for this project</div>
+          <div style={{color:T.faint,fontSize:12,lineHeight:1.6,maxWidth:560}}>
+            Pick the materials and hardware for this job — each dropdown shows only items from the matching catalogue section. Change them and every cabinet re-prices. Save a setup as a template to reuse across projects.
+          </div>
+        </div>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          <Btn sm v="gho" onClick={()=>setModal({type:"applyTpl"})}>📋 Apply template</Btn>
+          <Btn sm v="pri" onClick={()=>setModal({type:"saveTpl"})}>💾 Save as template</Btn>
+        </div>
+      </Row>
+    </Card>
+
+    {noItems
+      ? <Card><div style={{color:T.muted,fontSize:13}}>Your catalogue is empty. Add board and hardware items in <b>Rate Library → Catalogue</b> first, then choose them here.</div></Card>
+      : <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <Card>
+          <div style={{fontWeight:700,fontSize:12,color:T.accent,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.05em"}}>Materials & hardware for this project</div>
+          {SLOTS.map(slot=>{
+            const secId=sectionForSlot(slot);
+            const secName=sections.find(s=>s.id===secId)?.name;
+            return <div key={slot.key} style={{marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:2}}>
+                <span style={{fontSize:13,color:T.muted}}>{slot.label} <span style={{color:T.faint,fontSize:11}}>({slot.rate})</span></span>
+                <select value={secId||""} onChange={e=>setSlotSection(slot.key,e.target.value)}
+                  title="Which catalogue section this dropdown pulls from"
+                  style={{background:"transparent",border:"none",color:T.faint,fontSize:11,cursor:"pointer",textAlign:"right"}}>
+                  <option value="">auto: {slot.defaultSection}</option>
+                  {subSections.map(s=><option key={s.id} value={s.id}>from: {s.name}</option>)}
+                </select>
+              </div>
+              <Sel value={preset?.[slot.key]||""} onChange={v=>setField(slot.key,v)} options={itemsForSlot(slot)}/>
+              {secId&&itemsForSlot(slot).length<=1&&<div style={{color:T.yellow,fontSize:10,marginTop:2}}>
+                No items in “{secName}”. Add some in the catalogue, or repoint the section above.
+              </div>}
+            </div>;
+          })}
+          <div style={{color:T.faint,fontSize:11,marginTop:2}}>
+            Each dropdown is filtered to one catalogue section so the list stays short. Use the small “from:” selector on the right to repoint a slot to a different section.
+          </div>
+        </Card>
+
+        <Card hi>
+          <div style={{fontWeight:700,fontSize:12,color:T.muted,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.05em"}}>Sample: 2-Door 1000mm Base</div>
+          {!rules
+            ? <div style={{color:T.faint,fontSize:12}}>Set up the company formula in Rate Library → Cabinet Formula first.</div>
+            : sample&&<div style={{background:T.bg,borderRadius:8,padding:14,border:`1px solid ${T.border}`}}>
+              {[
+                ["Carcass",`${sample.carcassM2} m²`,sample.carcassCost],
+                ["Fronts",`${sample.frontM2} m²`,sample.frontCost],
+                ["Hinges",`${sample.hinges}`,sample.hingeCost],
+                ["Handles",`${sample.handles}`,sample.handleCost],
+                ["Feet",`${sample.feet}`,sample.footCost],
+                ["Assembly","",sample.assembly],
+              ].map(([l,d,v])=>(v>0||l==="Assembly")&&<div key={l} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:5}}>
+                <span style={{color:T.text}}>{l} <span style={{color:T.faint,fontSize:11,fontFamily:T.mono}}>{d}</span></span>
+                <span style={{fontFamily:T.mono,color:T.muted}}>{$$(v)}</span>
+              </div>)}
+              <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${T.border}`,paddingTop:8,marginTop:4}}>
+                <span style={{fontWeight:800,fontSize:13}}>Per cabinet</span>
+                <span style={{fontFamily:T.mono,fontWeight:800,fontSize:15,color:T.accent}}>{$$(sample.total)}</span>
+              </div>
+            </div>}
+          {(!preset?.carcass_item_id||!preset?.front_item_id)&&<div style={{color:T.yellow,fontSize:11,marginTop:10}}>
+            ⚠ Choose at least a carcass and front board for cabinets to price on this project.
+          </div>}
+        </Card>
+      </div>}
   </div>;
 }
 
@@ -1701,14 +1908,12 @@ ${EXTRACT_SCHEMA}`;
   }
 
   // Fix: map takeoff items to correct estimate categories using layer name + label content
-  function pushToEstimate() {
+  async function pushToEstimate() {
     const layerMap={};
     (proj.takeoffLayers||[]).forEach(l=>{ layerMap[l.id]=l.name.toLowerCase(); });
     function guessCategory(item) {
       const ln=layerMap[item.layerId]||"";
       const lb=(item.label||"").toLowerCase();
-      const nt=(item.notes||"").toLowerCase();
-      // Structured cabinetry items carry a `cab` field — use it directly
       if(item.cab) {
         if(item.cab.type==="Benchtop"||item.cab.type==="Splashback") return "Benchtops";
         return "Cabinetry";
@@ -1728,18 +1933,23 @@ ${EXTRACT_SCHEMA}`;
       if(lb.includes("room")||lb.includes("floor")) return "Flooring";
       return "Other";
     }
-    const cfg=proj.cabConfig||cabLib||SEED_CABLIB;
+
+    // Load the project's cabinet pricing context (formula rules + chosen rates) once.
+    let pricing=null;
+    try{
+      const { data:u }=await supabase.auth.getUser();
+      const { data:prof }=await supabase.from("profiles").select("company_id").eq("id",u?.user?.id).single();
+      if(prof?.company_id) pricing=await loadCabinetPricing(prof.company_id, proj.id);
+    }catch{}
+
     const toAdd=(proj.takeoffItems||[]).map(ti=>{
       let rate=0;
-      if(ti.cab){
-        const priced=priceCabLine(ti.cab,cfg);
-        if(priced){
-          // ea-mode install is in unitCost; lm/m² install charged per qty unit
-          rate=priced.installMode!=="ea"
-            ? priced.supply+priced.installCost
-            : priced.unitCost;
-          rate=parseFloat(rate.toFixed(2));
-        }
+      // Price real cabinet lines (not benchtop/splashback) via the parametric formula
+      if(ti.cab && pricing?.ready && pricing.rules &&
+         ti.cab.type!=="Benchtop" && ti.cab.type!=="Splashback"){
+        const {doors,drawers}=parseCabConfig(ti.cab.config);
+        const pr=priceCabinet({type:ti.cab.type,width:ti.cab.width,doors,drawers}, pricing.rules, pricing.rates);
+        rate=pr.total;
       }
       return {
         id:uid(),
@@ -1751,7 +1961,10 @@ ${EXTRACT_SCHEMA}`;
     });
     onMutate(p=>({...p,lineItems:[...(p.lineItems||[]),...toAdd]}));
     const priced=toAdd.filter(x=>x.rate>0).length;
-    pop(`${toAdd.length} items pushed to Estimate${priced?` — ${priced} auto-priced from Cabinet Library`:""}.`);
+    if(!pricing?.ready)
+      pop(`${toAdd.length} items pushed. Set the Cabinet Preset to auto-price cabinets.`,"info");
+    else
+      pop(`${toAdd.length} items pushed — ${priced} cabinets auto-priced from your catalogue.`);
   }
 
   const ai = proj.aiSummary;
@@ -3226,6 +3439,44 @@ function priceCabinet(cab, rules, rates) {
     total:+total.toFixed(2),
   };
 }
+
+// Parse an AI "config" string into door/drawer counts (e.g. "2 Door" → doors:2).
+function parseCabConfig(config){
+  const s=(config||"").toLowerCase();
+  let doors=0, drawers=0;
+  const dm=s.match(/(\d+)\s*draw/); if(dm) drawers=+dm[1];
+  const hm=s.match(/(\d+)\s*door/); if(hm) doors=+hm[1];
+  if(!doors&&!drawers){ if(/door/.test(s))doors=1; if(/draw/.test(s))drawers=1; }
+  return {doors,drawers};
+}
+
+// Resolve a project's cabinet pricing context once (formula rules + chosen rates),
+// then price any AI cabinet line. Returns {ctx, price(cabLine)} or null if unset.
+async function loadCabinetPricing(companyId, projectId){
+  const [{data:rules},{data:preset}]=await Promise.all([
+    supabase.from("cabinet_formula").select("*").eq("company_id",companyId).maybeSingle(),
+    supabase.from("project_cabinet_preset").select("*").eq("project_id",projectId).maybeSingle(),
+  ]);
+  if(!rules||!preset) return {rules,preset,rates:null,ready:false};
+  // fetch the chosen catalogue items' rates
+  const ids=[preset.carcass_item_id,preset.front_item_id,preset.hinge_item_id,preset.handle_item_id,preset.foot_item_id].filter(Boolean);
+  let rateMap={};
+  if(ids.length){
+    const {data:items}=await supabase.from("catalogue_items").select("id,rate").in("id",ids);
+    (items||[]).forEach(it=>{ rateMap[it.id]=+it.rate||0; });
+  }
+  const rates={
+    carcass: rateMap[preset.carcass_item_id]||0,
+    front:   rateMap[preset.front_item_id]||0,
+    hinge:   rateMap[preset.hinge_item_id]||0,
+    handle:  rateMap[preset.handle_item_id]||0,
+    foot:    rateMap[preset.foot_item_id]||0,
+  };
+  const ready = !!(preset.carcass_item_id||preset.front_item_id);
+  return {rules,preset,rates,ready};
+}
+
+
 
 
 
