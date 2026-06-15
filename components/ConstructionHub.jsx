@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef, Component } from "react";
 import { supabase } from "../lib/supabase";
+import { listClients as dbListClients, createClient as dbCreateClient, updateClient as dbUpdateClient, deleteClient as dbDeleteClient } from "../lib/db/clients";
+import { getEstimate as dbGetEstimate, updateEstimate as dbUpdateEstimate, addItem as dbAddItem, addItems as dbAddItems, updateItem as dbUpdateItem, deleteItem as dbDeleteItem } from "../lib/db/estimates";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -659,13 +661,52 @@ export default function App() {
   const [projectsError, setProjectsError] = useState(null);
   const [user, setUser] = useState(null);
   const [companyId, setCompanyId] = useState(null);
-  const [clients,   setClients]   = useLS("qf_clients",  SEED_CLIENTS);
+  const [clients,   setClients]   = useState([]);
+  const [clientsLoading, setClientsLoading] = useState(true);
   const [rates,     setRates]     = useLS("qf_rates",    SEED_RATES);
   const [cabLib,    setCabLib]    = useLS("qf_cablib",   SEED_CABLIB);
   const [company,   setCompany]   = useLS("qf_company",  SEED_COMPANY);
   const [xero,      setXero]      = useLS("qf_xero", {connected:false,autoSync:true,twoWay:false,syncPO:false,taxCode:"GST",accountCode:"200",log:[]});
   const [trash,     setTrash]     = useLS("qf_trash", []);
   const [storageErr,setStorageErr]= useState(null);
+  const [clientImport, setClientImport] = useState(null); // {legacy:[...]} when a one-time import is offered
+
+  // Load clients from Supabase; offer a one-time, non-destructive import of any
+  // legacy localStorage clients (qf_clients) the first time the table is empty.
+  async function reloadClients() {
+    setClientsLoading(true);
+    const { data, error } = await dbListClients();
+    if (!error) {
+      setClients(data || []);
+      // offer legacy import once
+      try {
+        const migrated = localStorage.getItem("qf_migrated_clients");
+        const legacyRaw = localStorage.getItem("qf_clients");
+        const legacy = legacyRaw ? JSON.parse(legacyRaw) : [];
+        if (!migrated && (data||[]).length === 0 && Array.isArray(legacy) && legacy.length > 0) {
+          setClientImport({ legacy });
+        }
+      } catch {}
+    }
+    setClientsLoading(false);
+  }
+  useEffect(() => { reloadClients(); }, []);
+
+  async function runClientImport() {
+    const legacy = clientImport?.legacy || [];
+    for (const c of legacy) {
+      await dbCreateClient({
+        name: c.name || c.company || "Imported client",
+        contact: c.name || null, email: c.email || null,
+        phone: c.phone || null, address: c.address || null,
+        notes: [c.company?`Company: ${c.company}`:"", c.abn?`ABN: ${c.abn}`:"", c.notes||""].filter(Boolean).join(" · ") || null,
+      });
+    }
+    try { localStorage.setItem("qf_migrated_clients","true"); } catch {}
+    setClientImport(null);
+    await reloadClients();
+    pop(`${legacy.length} clients imported.`);
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -862,6 +903,15 @@ export default function App() {
       <main style={{flex:1,overflowY:"auto",padding:26,minWidth:0}}>
         {toast && <Toast msg={toast.msg} type={toast.type} onDone={()=>setToast(null)}/>}
 
+        {clientImport&&<div style={{background:T.blueDim,border:`1px solid ${T.blue}55`,borderRadius:7,
+          padding:"10px 16px",marginBottom:14,fontSize:13,color:T.blue,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <span>📥 Found {clientImport.legacy.length} client{clientImport.legacy.length!==1?"s":""} saved in this browser from before. Import them into your company account?</span>
+          <span style={{marginLeft:"auto",display:"flex",gap:8}}>
+            <Btn sm v="pri" onClick={runClientImport}>Import now</Btn>
+            <Btn sm v="gho" onClick={()=>{try{localStorage.setItem("qf_migrated_clients","true");}catch{};setClientImport(null);}}>No thanks</Btn>
+          </span>
+        </div>}
+
         {storageErr&&<div style={{background:T.redDim,border:`1px solid ${T.red}55`,borderRadius:7,
           padding:"10px 16px",marginBottom:14,fontSize:13,color:T.red,fontWeight:600}}>
           ⚠ Browser storage is full or unavailable ({storageErr}) — recent changes may not be saving.
@@ -881,7 +931,7 @@ export default function App() {
           : <>
               {nav==="dashboard" && <Dashboard projects={projects} xero={xero} onOpen={openProj} setNav={setNav}/>}
               {nav==="projects"  && <ProjectsModule projects={projects} loading={projectsLoading} error={projectsError} company={company} onOpen={openProj} onTrash={trashProject} pop={pop} createProject={createProject}/>}
-              {nav==="clients"   && <ClientsModule clients={clients} setClients={setClients} projects={projects} pop={pop}/>}
+              {nav==="clients"   && <ClientsModule clients={clients} reloadClients={reloadClients} clientsLoading={clientsLoading} projects={projects} pop={pop}/>}
               {nav==="rates"     && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
               {nav==="xero"      && <XeroModule projects={projects} xero={xero} setXero={setXero} mutProj={mutProj} pop={pop}/>}
               {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} trash={trash} setTrash={setTrash} onRestore={restoreProject} pop={pop}/>}
@@ -1103,11 +1153,18 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {id:"preset",   label:"② Cabinet Preset"},
     {id:"estimate", label:"③ Estimate"},
     {id:"quote",    label:"④ Quote"},
-    {id:"schedule", label:"⑤ Schedule"},
-    {id:"jobcost",  label:"⑥ Job Costs"},
-    {id:"claims",   label:"⑦ Claims"},
+    {id:"jobcost",  label:"Job Costs"},
+    {id:"claims",   label:"Claims"},
     {id:"info",     label:"Project Info"},
   ];
+
+  // Placeholder for modules parked for a future version (per V1 scope)
+  const Parked = ({name,desc}) => <Card sx={{textAlign:"center",padding:48}}>
+    <div style={{fontSize:30,marginBottom:10,opacity:0.5}}>🔒</div>
+    <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>{name}</div>
+    <div style={{color:T.muted,fontSize:13,maxWidth:440,marginInline:"auto"}}>{desc}</div>
+    <div style={{marginTop:12}}><Bdg color={T.faint}>Coming in a later version</Bdg></div>
+  </Card>;
 
   return <div>
     <Row gap={8} sx={{marginBottom:14,flexWrap:"wrap"}}>
@@ -1128,9 +1185,8 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="preset"   && <CabinetPreset proj={proj} pop={pop}/>}
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
     {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} onMutate={onMutate} pop={pop}/>}
-    {tab==="schedule" && <ScheduleModule proj={proj} onMutate={onMutate} pop={pop}/>}
-    {tab==="jobcost"  && <JobCostModule proj={proj} onMutate={onMutate} c={c} pop={pop}/>}
-    {tab==="claims"   && <ClaimsModule proj={proj} onMutate={onMutate} c={c} onPushXero={onPushXero} pop={pop}/>}
+    {tab==="jobcost"  && <Parked name="Job Costs" desc="Actual-cost tracking and estimate-vs-actual reporting arrives in a later version. Version 1 focuses on estimating and commercial control."/>}
+    {tab==="claims"   && <Parked name="Progress Claims" desc="Progress claim scheduling and invoicing will be added in a later version, integrating with Xero rather than rebuilding accounting."/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
   </div>;
 }
@@ -3236,27 +3292,41 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // CLIENTS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function ClientsModule({clients, setClients, projects, pop}) {
+function ClientsModule({clients, reloadClients, clientsLoading, projects, pop}) {
   const [sel, setSel] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [nc, setNc] = useState({name:"",company:"",email:"",phone:"",address:"",abn:"",notes:""});
+  const [nc, setNc] = useState({name:"",contact:"",email:"",phone:"",address:"",notes:""});
   const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const client = clients.find(c=>c.id===sel);
   const clientProjs = sel ? projects.filter(p=>p.clientId===sel||p.client===client?.name) : [];
-  const filtered = clients.filter(c=>!search||[c.name,c.company,c.email].join(" ").toLowerCase().includes(search.toLowerCase()));
+  const filtered = clients.filter(c=>!search||[c.name,c.contact,c.email].join(" ").toLowerCase().includes(search.toLowerCase()));
 
-  function saveNew() {
+  async function saveNew() {
     if(!nc.name.trim()) return pop("Name required.","error");
-    setClients(cs=>[...cs,{...nc,id:Date.now()}]);
-    setNc({name:"",company:"",email:"",phone:"",address:"",abn:"",notes:""});
-    setShowNew(false); pop("Client added.");
+    setBusy(true);
+    const { error } = await dbCreateClient(nc);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setNc({name:"",contact:"",email:"",phone:"",address:"",notes:""});
+    setShowNew(false); await reloadClients(); pop("Client added.");
   }
 
-  function saveEdit() {
-    setClients(cs=>cs.map(c=>c.id===sel?{...c,...nc}:c));
-    setEditing(false); pop("Client updated.");
+  async function saveEdit() {
+    setBusy(true);
+    const { error } = await dbUpdateClient(sel, nc);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setEditing(false); await reloadClients(); pop("Client updated.");
+  }
+
+  async function removeClient() {
+    if(!safeConfirm(`Delete ${client.name}?`)) return;
+    const { error } = await dbDeleteClient(sel, client.name);
+    if(error) return pop(error,"error");
+    setSel(null); await reloadClients(); pop("Client deleted.");
   }
 
   return <div>
@@ -3265,18 +3335,19 @@ function ClientsModule({clients, setClients, projects, pop}) {
       Clients
     </Hdr>
 
+    {clientsLoading&&<div style={{color:T.muted,fontSize:13,marginBottom:12}}>Loading clients…</div>}
+
     {showNew&&<Card hi sx={{marginBottom:16}}>
       <div style={{fontWeight:700,marginBottom:12,color:T.accent}}>New Client</div>
       <Grid2 gap={10}>
         <Inp label="Full Name" value={nc.name} onChange={v=>setNc(x=>({...x,name:v}))} placeholder="Contact name"/>
-        <Inp label="Company" value={nc.company} onChange={v=>setNc(x=>({...x,company:v}))} placeholder="Company or trust name"/>
+        <Inp label="Contact / Company" value={nc.contact} onChange={v=>setNc(x=>({...x,contact:v}))} placeholder="Company or trust name"/>
         <Inp label="Email" value={nc.email} onChange={v=>setNc(x=>({...x,email:v}))} placeholder="email@example.com"/>
         <Inp label="Phone" value={nc.phone} onChange={v=>setNc(x=>({...x,phone:v}))} placeholder="Mobile or landline"/>
         <Inp label="Address" value={nc.address} onChange={v=>setNc(x=>({...x,address:v}))} sx={{gridColumn:"1/-1"}}/>
-        <Inp label="ABN / NZBN" value={nc.abn} onChange={v=>setNc(x=>({...x,abn:v}))}/>
-        <Inp label="Notes" value={nc.notes} onChange={v=>setNc(x=>({...x,notes:v}))}/>
+        <Inp label="Notes" value={nc.notes} onChange={v=>setNc(x=>({...x,notes:v}))} sx={{gridColumn:"1/-1"}}/>
       </Grid2>
-      <Row gap={8}><Btn v="pri" onClick={saveNew}>Save Client</Btn><Btn onClick={()=>setShowNew(false)}>Cancel</Btn></Row>
+      <Row gap={8}><Btn v="pri" onClick={saveNew} disabled={busy}>{busy?"Saving…":"Save Client"}</Btn><Btn onClick={()=>setShowNew(false)}>Cancel</Btn></Row>
     </Card>}
 
     <Row gap={10} sx={{marginBottom:14}}>
@@ -3298,7 +3369,7 @@ function ClientsModule({clients, setClients, projects, pop}) {
             border:`1px solid ${sel===c.id?T.accentBrd:T.border}`}}>
             <div>
               <div style={{fontWeight:700,fontSize:13,color:T.text}}>{c.name}</div>
-              {c.company&&<div style={{color:T.muted,fontSize:12,marginTop:1}}>{c.company}</div>}
+              {c.contact&&<div style={{color:T.muted,fontSize:12,marginTop:1}}>{c.contact}</div>}
               {c.email&&<div style={{color:T.faint,fontSize:11,marginTop:2}}>{c.email}</div>}
             </div>
             <div style={{textAlign:"right"}}>
@@ -3307,7 +3378,7 @@ function ClientsModule({clients, setClients, projects, pop}) {
             </div>
           </div>;
         })}
-        {!filtered.length&&<div style={{color:T.faint,fontSize:13}}>No clients found.</div>}
+        {!filtered.length&&!clientsLoading&&<div style={{color:T.faint,fontSize:13}}>No clients found.</div>}
       </div>
 
       {/* Client detail */}
@@ -3316,19 +3387,14 @@ function ClientsModule({clients, setClients, projects, pop}) {
           ? <>
               <Row gap={8} sx={{marginBottom:14}}>
                 <div style={{fontWeight:700,fontSize:14,flex:1}}>{client.name}</div>
-                <Btn sm v="blu" onClick={()=>{setNc({...client});setEditing(true);}}>Edit</Btn>
-                <Btn sm v="red" onClick={()=>{
-                  if(safeConfirm(`Delete ${client.name}?`)) {
-                    setClients(cs=>cs.filter(c=>c.id!==sel)); setSel(null); pop("Client deleted.");
-                  }
-                }}>Delete</Btn>
+                <Btn sm v="blu" onClick={()=>{setNc({name:client.name||"",contact:client.contact||"",email:client.email||"",phone:client.phone||"",address:client.address||"",notes:client.notes||""});setEditing(true);}}>Edit</Btn>
+                <Btn sm v="red" onClick={removeClient}>Delete</Btn>
               </Row>
-              {client.company&&<div style={{color:T.muted,fontSize:13,marginBottom:6}}>{client.company}</div>}
+              {client.contact&&<div style={{color:T.muted,fontSize:13,marginBottom:6}}>{client.contact}</div>}
               <div style={{fontSize:13,lineHeight:2.1,marginBottom:14}}>
                 {client.email&&<div><span style={{color:T.faint}}>✉ </span>{client.email}</div>}
                 {client.phone&&<div><span style={{color:T.faint}}>📞 </span>{client.phone}</div>}
                 {client.address&&<div><span style={{color:T.faint}}>📍 </span>{client.address}</div>}
-                {client.abn&&<div><span style={{color:T.faint}}>ABN </span>{client.abn}</div>}
               </div>
               {client.notes&&<div style={{fontSize:12,color:T.muted,marginBottom:14,padding:"8px 10px",
                 background:T.bg,borderRadius:5}}>{client.notes}</div>}
@@ -3351,14 +3417,13 @@ function ClientsModule({clients, setClients, projects, pop}) {
               <div style={{fontWeight:700,marginBottom:12,color:T.accent}}>Edit Client</div>
               <Grid2 gap={10}>
                 <Inp label="Full Name" value={nc.name} onChange={v=>setNc(x=>({...x,name:v}))}/>
-                <Inp label="Company" value={nc.company} onChange={v=>setNc(x=>({...x,company:v}))}/>
+                <Inp label="Contact / Company" value={nc.contact} onChange={v=>setNc(x=>({...x,contact:v}))}/>
                 <Inp label="Email" value={nc.email} onChange={v=>setNc(x=>({...x,email:v}))}/>
                 <Inp label="Phone" value={nc.phone} onChange={v=>setNc(x=>({...x,phone:v}))}/>
                 <Inp label="Address" value={nc.address} onChange={v=>setNc(x=>({...x,address:v}))} sx={{gridColumn:"1/-1"}}/>
-                <Inp label="ABN / NZBN" value={nc.abn} onChange={v=>setNc(x=>({...x,abn:v}))}/>
-                <Inp label="Notes" value={nc.notes} onChange={v=>setNc(x=>({...x,notes:v}))}/>
+                <Inp label="Notes" value={nc.notes} onChange={v=>setNc(x=>({...x,notes:v}))} sx={{gridColumn:"1/-1"}}/>
               </Grid2>
-              <Row gap={8}><Btn v="pri" onClick={saveEdit}>Save</Btn><Btn onClick={()=>setEditing(false)}>Cancel</Btn></Row>
+              <Row gap={8}><Btn v="pri" onClick={saveEdit} disabled={busy}>{busy?"Saving…":"Save"}</Btn><Btn onClick={()=>setEditing(false)}>Cancel</Btn></Row>
             </>
         }
       </Card>}
