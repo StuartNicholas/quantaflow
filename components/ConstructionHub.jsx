@@ -3545,9 +3545,11 @@ function RateLibrary({rates, setRates, cabLib, setCabLib, pop}) {
     <Tabs tabs={[
       {id:"catalogue",label:"📚 Catalogue"},
       {id:"formula",label:"🧮 Cabinet Formula"},
+      {id:"library",label:"🗄️ Cabinet Library"},
     ]} active={tab} onChange={setTab}/>
     {tab==="catalogue"&& <CatalogueLibrary pop={pop}/>}
     {tab==="formula"  && <CabinetFormula pop={pop}/>}
+    {tab==="library"  && <CabinetLibraryTab pop={pop}/>}
   </div>;
 }
 
@@ -3573,7 +3575,7 @@ function priceCabinet(cab, rules, rates) {
   let W=+cab.width||0, H=+cab.height||0, D=+cab.depth||0;
   if(!H||!D){
     if(/over|wall|upper/i.test(type)){ H=H||R.default_over_h||720; D=D||R.default_over_d||320; }
-    else if(/tall|pantry|broom/i.test(type)){ H=H||R.default_tall_h||2100; D=D||R.default_tall_d||560; }
+    else if(/tall|pantry|broom/i.test(type)){ H=H||R.tall_height_default||R.default_tall_h||2400; D=D||R.default_tall_d||560; }
     else { H=H||R.default_base_h||720; D=D||R.default_base_d||560; }
   }
   if(!W) W=600;
@@ -3584,15 +3586,49 @@ function priceCabinet(cab, rules, rates) {
   if(R.include_topbottom!==false) carcassM2 += 2*m2(W*D);     // top + bottom
   if(R.include_back!==false)      carcassM2 += m2(W*H);       // back
   carcassM2 += (R.shelves_per_cab??1)*m2(W*D);               // shelves
+  // match spreadsheet: round carcass m² to 3 decimals before costing
+  carcassM2 = Math.round(carcassM2*1000)/1000;
   // door/drawer front area, m² (fronts cover the cabinet face: W×H)
-  const fronts=(+cab.doors||0)+(+cab.drawers||0);
-  const frontM2 = fronts>0 ? m2(W*H) : 0;  // full face split across fronts
-  // hardware counts
-  const hinges = (+cab.doors||0)*(R.hinges_per_door??2);
-  const handles= (+cab.doors||0)*(R.handles_per_door??1) + (+cab.drawers||0)*(R.handles_per_drawer??1);
-  const feet   = /base/i.test(type) ? (R.feet_per_base??4) : 0;
-  // costs
+  const doors=+cab.doors||0, drawers=+cab.drawers||0;
+  const fronts=doors+drawers;
+  const frontM2 = fronts>0 ? m2(W*H) : 0;
+
   const carcassCost = carcassM2*(+P.carcass||0);
+
+  // ── SPREADSHEET model (default): flat hardware $/door & $/drawer, a supplier
+  //    calibration multiplier on the carcass+hardware+assembly subtotal, and
+  //    fronts priced separately at the finish rate. Reproduces the real sheet.
+  if((R.pricing_model||"spreadsheet")==="spreadsheet"){
+    const doorHwEach   = R.door_hardware_cost   ?? 12;
+    const drawerHwEach  = R.drawer_hardware_cost ?? 95;
+    const calibration  = R.supplier_calibration ?? 1;
+    const finishRate   = (+P.front)||R.default_finish_rate||165; // project front rate else company finish rate
+    const doorHwCost   = doors*doorHwEach;
+    const drawerHwCost = drawers*drawerHwEach;
+    const assembly     = +R.assembly_per_cab||0;
+    const baseCost     = carcassCost + doorHwCost + drawerHwCost + assembly; // "Base Cabinet Cost" (N)
+    const supplyCost   = baseCost*calibration;                              // "Supplier C&A Cost" (O)
+    const frontCost    = frontM2*finishRate;                                // fronts via finish library
+    const total        = supplyCost + frontCost;
+    return {
+      model:"spreadsheet",
+      dims:{W,H,D}, carcassM2:+carcassM2.toFixed(3), frontM2:+frontM2.toFixed(3),
+      doors, drawers,
+      carcassCost:+carcassCost.toFixed(2),
+      doorHwCost:+doorHwCost.toFixed(2), drawerHwCost:+drawerHwCost.toFixed(2),
+      assembly:+assembly.toFixed(2),
+      baseCost:+baseCost.toFixed(2),
+      calibration,
+      supplyCost:+supplyCost.toFixed(2),
+      frontCost:+frontCost.toFixed(2),
+      total:+total.toFixed(2),
+    };
+  }
+
+  // ── COMPONENT model (alternative): per-hinge/handle/foot pricing.
+  const hinges = doors*(R.hinges_per_door??2);
+  const handles= doors*(R.handles_per_door??1) + drawers*(R.handles_per_drawer??1);
+  const feet   = /base/i.test(type) ? (R.feet_per_base??4) : 0;
   const frontCost   = frontM2*(+P.front||0);
   const hingeCost   = hinges*(+P.hinge||0);
   const handleCost  = handles*(+P.handle||0);
@@ -3600,6 +3636,7 @@ function priceCabinet(cab, rules, rates) {
   const assembly    = +R.assembly_per_cab||0;
   const total = carcassCost+frontCost+hingeCost+handleCost+footCost+assembly;
   return {
+    model:"components",
     dims:{W,H,D}, carcassM2:+carcassM2.toFixed(3), frontM2:+frontM2.toFixed(3),
     hinges, handles, feet,
     carcassCost:+carcassCost.toFixed(2), frontCost:+frontCost.toFixed(2),
@@ -3607,6 +3644,42 @@ function priceCabinet(cab, rules, rates) {
     footCost:+footCost.toFixed(2), assembly:+assembly.toFixed(2),
     total:+total.toFixed(2),
   };
+}
+
+// Generate the cabinet "type catalogue": the distinct type+config rows that the
+// library expands across widths. Mirrors the spreadsheet's CABINET_LIBRARY tab.
+// Editable defaults; companies can override ranges via the formula row.
+const CABINET_TYPES = [
+  {type:"Base",     config:"1 Door",  doors:1, drawers:0, wMin:300, wMax:600},
+  {type:"Base",     config:"2 Door",  doors:2, drawers:0, wMin:500, wMax:1200},
+  {type:"Base",     config:"1 Drawer",doors:0, drawers:1, wMin:300, wMax:1200},
+  {type:"Base",     config:"2 Drawer",doors:0, drawers:2, wMin:300, wMax:1200},
+  {type:"Base",     config:"3 Drawer",doors:0, drawers:3, wMin:300, wMax:1200},
+  {type:"Base",     config:"4 Drawer",doors:0, drawers:4, wMin:300, wMax:1200},
+  {type:"Base",     config:"5 Drawer",doors:0, drawers:5, wMin:300, wMax:1200},
+  {type:"Overhead", config:"1 Door",  doors:1, drawers:0, wMin:300, wMax:600},
+  {type:"Overhead", config:"2 Door",  doors:2, drawers:0, wMin:500, wMax:1200},
+  {type:"Tall",     config:"1 Door",  doors:1, drawers:0, wMin:300, wMax:600},
+  {type:"Tall",     config:"2 Door",  doors:2, drawers:0, wMin:500, wMax:1200},
+];
+
+// Build the full priced library for a project given formula rules + resolved rates.
+function generateCabinetLibrary(rules, rates){
+  const step=rules?.width_step||50;
+  const gMin=rules?.width_min??300, gMax=rules?.width_max??1200;
+  const out=[];
+  CABINET_TYPES.forEach(ct=>{
+    const lo=Math.max(ct.wMin, gMin), hi=Math.min(ct.wMax, gMax);
+    for(let w=lo; w<=hi; w+=step){
+      const priced=priceCabinet({type:ct.type,config:ct.config,width:w,doors:ct.doors,drawers:ct.drawers}, rules, rates);
+      out.push({
+        key:`${ct.type}|${ct.config}|${w}`,
+        type:ct.type, config:ct.config, width:w, doors:ct.doors, drawers:ct.drawers,
+        price:priced.total, breakdown:priced,
+      });
+    }
+  });
+  return out;
 }
 
 // Parse an AI "config" string into door/drawer counts (e.g. "2 Door" → doors:2).
@@ -4010,6 +4083,108 @@ function CabinetFormula({pop}) {
         Computed live — no stored cabinet types. The AI takeoff runs this same formula on every cabinet it reads, using the project's selected catalogue items.
       </div>
     </Card>
+  </div>;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CABINET LIBRARY TAB — the generated, per-company priced grid (mirrors the
+// spreadsheet's CABINET_LIBRARY). Every type×config×width, priced live from the
+// formula + the company's rates. Browsable, searchable; the source for pick-lists.
+// ════════════════════════════════════════════════════════════════════════════
+function CabinetLibraryTab({pop}) {
+  const [companyId,setCompanyId]=useState(null);
+  const [rules,setRules]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [err,setErr]=useState(null);
+  const [search,setSearch]=useState("");
+  const [typeFilter,setTypeFilter]=useState("All");
+  // company-level reference rates used to GENERATE the library preview. These are
+  // the "house" rates; a project's preset can override them when pricing for real.
+  const [rates,setRates]=useState({carcass:52,front:165});
+
+  useEffect(()=>{(async()=>{
+    setLoading(true); setErr(null);
+    try{
+      const { data:u }=await supabase.auth.getUser();
+      const uid=u?.user?.id; if(!uid) throw new Error("Not signed in.");
+      const { data:prof }=await supabase.from("profiles").select("company_id").eq("id",uid).single();
+      const cid=prof?.company_id; setCompanyId(cid);
+      let { data:f }=await supabase.from("cabinet_formula").select("*").eq("company_id",cid).maybeSingle();
+      if(!f){ const { data:created }=await supabase.from("cabinet_formula").insert({company_id:cid}).select().single(); f=created; }
+      setRules(f);
+    }catch(e){ setErr(e?.message||String(e)); }
+    finally{ setLoading(false); }
+  })();},[]);
+
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading library…</div></Card>;
+  if(err) return <Card><div style={{color:T.red,fontSize:13}}>Couldn't load: {err}</div>
+    <div style={{color:T.faint,fontSize:12,marginTop:6}}>If this mentions a missing column, run the CABINET-LIBRARY Layer 6 SQL in Supabase.</div></Card>;
+
+  const lib=generateCabinetLibrary(rules, rates);
+  const types=["All",...new Set(CABINET_TYPES.map(t=>t.type))];
+  const filtered=lib.filter(c=>{
+    if(typeFilter!=="All"&&c.type!==typeFilter) return false;
+    if(search){ const s=search.toLowerCase(); return `${c.type} ${c.config} ${c.width}`.toLowerCase().includes(s); }
+    return true;
+  });
+  // group by type|config for display
+  const groups={};
+  filtered.forEach(c=>{ const k=`${c.type} · ${c.config}`; (groups[k]=groups[k]||[]).push(c); });
+
+  return <div>
+    <Card hi sx={{marginBottom:14}}>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>Generated cabinet library</div>
+      <div style={{color:T.faint,fontSize:12,lineHeight:1.6,marginBottom:12,maxWidth:640}}>
+        Every cabinet type, config and width — priced live from your Cabinet Formula and the rates below. Nothing is stored; change a rate or the formula and the whole library re-prices instantly. This is the list your Estimate and Takeoff pick-lists draw from.
+      </div>
+      <Row gap={10} sx={{flexWrap:"wrap",alignItems:"flex-end"}}>
+        <Inp label="House carcass board $/m²" value={rates.carcass} onChange={v=>setRates(r=>({...r,carcass:+v||0}))} type="number" mono sx={{width:160,marginBottom:0}}/>
+        <Inp label="House finish (fronts) $/m²" value={rates.front} onChange={v=>setRates(r=>({...r,front:+v||0}))} type="number" mono sx={{width:160,marginBottom:0}}/>
+        <div style={{color:T.faint,fontSize:11,maxWidth:280}}>
+          These are reference rates for the preview. Real quotes use each project's chosen catalogue items via its Cabinet Preset.
+        </div>
+      </Row>
+    </Card>
+
+    <Row gap={10} sx={{marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search e.g. 2 door 900…"
+        style={{flex:1,minWidth:200,background:T.card,border:`1px solid ${T.border}`,borderRadius:5,padding:"7px 11px",color:T.text,fontSize:13,outline:"none",fontFamily:T.font}}/>
+      <Row gap={6}>
+        {types.map(t=><div key={t} onClick={()=>setTypeFilter(t)} style={{padding:"5px 12px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:600,
+          background:typeFilter===t?T.accentDim:T.card,color:typeFilter===t?T.accent:T.muted,border:`1px solid ${typeFilter===t?T.accentBrd:T.border}`}}>{t}</div>)}
+      </Row>
+      <Bdg color={T.faint}>{filtered.length} cabinets</Bdg>
+    </Row>
+
+    {Object.entries(groups).map(([grp,cabs])=>(
+      <Card key={grp} sx={{marginBottom:12,padding:0,overflow:"hidden"}}>
+        <div style={{padding:"9px 14px",background:T.bg,borderBottom:`1px solid ${T.border}`,fontWeight:700,fontSize:12,color:T.accent,display:"flex",justifyContent:"space-between"}}>
+          <span>{grp}</span><span style={{color:T.faint,fontWeight:400}}>{cabs.length} sizes</span>
+        </div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead><tr style={{color:T.faint,fontSize:11,textAlign:"left"}}>
+              {["Width","Carcass m²","Carcass $","Hardware $","Assembly $","× Calib.","Supply $","Fronts $","Cabinet $"].map((h,i)=>
+                <th key={i} style={{padding:"6px 12px",fontWeight:600,textAlign:i>0?"right":"left"}}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {cabs.map(c=>{const b=c.breakdown;return <tr key={c.key} style={{borderTop:`1px solid ${T.border}`}}>
+                <td style={{padding:"5px 12px",fontWeight:700}}>{c.width}mm</td>
+                <td style={{padding:"5px 12px",textAlign:"right",color:T.muted,fontFamily:T.mono}}>{b.carcassM2}</td>
+                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$(b.carcassCost)}</td>
+                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$((b.doorHwCost||0)+(b.drawerHwCost||0))}</td>
+                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$(b.assembly)}</td>
+                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.faint}}>×{b.calibration}</td>
+                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.text}}>{$$(b.supplyCost)}</td>
+                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$(b.frontCost)}</td>
+                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,fontWeight:800,color:T.accent}}>{$$(c.price)}</td>
+              </tr>;})}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    ))}
+    {filtered.length===0&&<Card><div style={{color:T.faint,fontSize:13}}>No cabinets match your search.</div></Card>}
   </div>;
 }
 
