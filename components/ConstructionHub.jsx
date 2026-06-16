@@ -3325,10 +3325,12 @@ function QuoteModule({proj, company, c, onMutate, pop}) {
   const [estimate,     setEstimate]     = useState(null);
   const [estItems,     setEstItems]     = useState([]);
   const [showIssue,    setShowIssue]    = useState(false);
-  const [issueOpts,    setIssueOpts]    = useState({gst_pct:proj.gst||10, deposit_pct:0, notes:""});
+  const [depositPct,   setDepositPct]   = useState(0);
+  const [gstPct,       setGstPct]       = useState(proj.gst||10);
+  const [issueNotes,   setIssueNotes]   = useState("");
   const [busy,         setBusy]         = useState(false);
 
-  async function reload() {
+  async function reload(keepSel) {
     setLoading(true);
     const [{ data: vers }, { data: est }] = await Promise.all([
       dbListQuoteVersions(proj.id),
@@ -3337,10 +3339,9 @@ function QuoteModule({proj, company, c, onMutate, pop}) {
     setVersions(vers||[]);
     if(est) { setEstimate(est.estimate); setEstItems(est.items||[]); }
     setLoading(false);
-    // auto-select newest version
-    if(vers&&vers.length>0&&!selId) setSelId(vers[0].id);
+    if(!keepSel && vers && vers.length>0) setSelId(vers[0].id);
   }
-  useEffect(()=>{ reload(); },[proj.id]);
+  useEffect(()=>{ reload(false); },[proj.id]);
 
   useEffect(()=>{
     if(!selId) return;
@@ -3350,13 +3351,22 @@ function QuoteModule({proj, company, c, onMutate, pop}) {
 
   const selVersion = versions.find(v=>v.id===selId);
 
+  // Document always shows: locked version if one selected, otherwise live draft
+  const isDraft    = !selVersion;
+  const docItems   = isDraft ? estItems : selItems;
+  const docMargin  = isDraft ? (estimate?.margin_pct??0)  : (selVersion?.margin_pct??0);
+  const docOverhd  = isDraft ? (estimate?.overhead_pct??0): (selVersion?.overhead_pct??0);
+  const docGst     = isDraft ? gstPct                     : (selVersion?.gst_pct??10);
+  const docDeposit = isDraft ? depositPct                 : (selVersion?.deposit_pct??0);
+
   async function issue() {
     setBusy(true);
-    const { data, error } = await dbIssueQuote(proj.id, issueOpts);
+    const { data, error } = await dbIssueQuote(proj.id, {gst_pct:gstPct, deposit_pct:depositPct, notes:issueNotes});
     setBusy(false);
     if(error) return pop(error,"error");
     setShowIssue(false);
-    await reload();
+    setIssueNotes("");
+    await reload(false);
     setSelId(data.id);
     pop(`Quote v${data.version_number} issued and locked.`);
   }
@@ -3370,130 +3380,107 @@ function QuoteModule({proj, company, c, onMutate, pop}) {
     setVersions(vs=>vs.map(v=>v.id===id?{...v,...data}:v));
   }
 
-  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading quote versions…</div></Card>;
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading…</div></Card>;
 
   const hasEstItems = estItems.length > 0;
+  const nextVNum = versions.length + 1;
 
   return <div>
-    {/* Header */}
-    <Row gap={8} sx={{marginBottom:16,flexWrap:"wrap"}}>
-      <div style={{flex:1}}>
-        <div style={{fontWeight:800,fontSize:16,color:T.text}}>Quote Versions</div>
-        <div style={{color:T.muted,fontSize:12,marginTop:2}}>
-          Each issued quote is a locked snapshot of your estimate at that moment.
+
+    {/* ── Control bar ── */}
+    <Row gap={8} sx={{marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+
+      {/* Version tabs */}
+      {versions.length>0&&<>
+        <div onClick={()=>setSelId(null)}
+          style={{padding:"4px 12px",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:isDraft?700:400,
+            background:isDraft?T.accentDim:T.card,border:`1px solid ${isDraft?T.accentBrd:T.border}`,
+            color:isDraft?T.accent:T.muted}}>
+          Draft
         </div>
+        {[...versions].reverse().map(v=>{
+          const st=QV_STATUS[v.status]||QV_STATUS.draft;
+          const isSel=selId===v.id;
+          return <div key={v.id} onClick={()=>setSelId(v.id)}
+            style={{padding:"4px 12px",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:isSel?700:400,
+              background:isSel?T.accentDim:T.card,border:`1px solid ${isSel?T.accentBrd:T.border}`,
+              color:isSel?T.accent:T.text,display:"flex",gap:6,alignItems:"center"}}>
+            v{v.version_number}
+            <span style={{fontSize:10,color:st.color,fontWeight:600}}>{st.label}</span>
+          </div>;
+        })}
+      </>}
+      {versions.length===0&&<Bdg color={T.yellow}>Draft Preview</Bdg>}
+
+      <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        {/* Draft-only controls: deposit + GST inputs affect live preview */}
+        {isDraft&&<>
+          <Inp label="Deposit %" value={depositPct} onChange={v=>setDepositPct(parseFloat(v)||0)}
+            type="number" mono sx={{width:90,marginBottom:0}}/>
+          <Inp label="GST %" value={gstPct} onChange={v=>setGstPct(parseFloat(v)||10)}
+            type="number" mono sx={{width:80,marginBottom:0}}/>
+        </>}
+
+        {/* Version status actions */}
+        {selVersion?.status==="draft"&&<>
+          <Btn sm v="blu" onClick={()=>setStatus(selVersion.id,"sent")}>Mark Sent</Btn>
+          <Btn sm v="grn" onClick={()=>setStatus(selVersion.id,"accepted")}>✓ Accepted</Btn>
+          <Btn sm v="red" onClick={()=>setStatus(selVersion.id,"declined")}>✕ Declined</Btn>
+        </>}
+        {selVersion?.status==="sent"&&<>
+          <Btn sm v="grn" onClick={()=>setStatus(selVersion.id,"accepted")}>✓ Client Accepted</Btn>
+          <Btn sm v="red" onClick={()=>setStatus(selVersion.id,"declined")}>✕ Declined</Btn>
+        </>}
+
+        <Btn sm v="gho" onClick={()=>{ window.print(); pop("Use browser Print → Save as PDF","info"); }}>⎙ Print</Btn>
+        {hasEstItems&&<Btn sm v="pri" onClick={()=>setShowIssue(s=>!s)}>
+          {versions.length===0?"Issue Quote v1":`Issue New (v${nextVNum})`}
+        </Btn>}
       </div>
-      {!showIssue&&<Btn v="pri" onClick={()=>{
-        setIssueOpts({gst_pct:proj.gst||10,deposit_pct:0,notes:""});
-        setShowIssue(true);
-      }} disabled={!hasEstItems}>
-        {versions.length===0?"Issue Quote v1":`Issue New Version (v${versions.length+1})`}
-      </Btn>}
-      {!hasEstItems&&<span style={{color:T.faint,fontSize:12,alignSelf:"center"}}>Add items to the Estimate tab first.</span>}
     </Row>
 
-    {/* Issue form */}
-    {showIssue&&<Card hi sx={{marginBottom:16}}>
-      <div style={{fontWeight:700,marginBottom:12,color:T.accent}}>
-        Issue Quote v{versions.length+1}
-      </div>
-      <div style={{color:T.muted,fontSize:12,marginBottom:12}}>
-        This will lock a snapshot of your current {estItems.length} estimate items. The snapshot cannot be edited after issuing.
-      </div>
-      <Grid2 gap={10}>
-        <Inp label="GST %" type="number" mono value={issueOpts.gst_pct}
-          onChange={v=>setIssueOpts(x=>({...x,gst_pct:parseFloat(v)||10}))}/>
-        <Inp label="Deposit %" type="number" mono value={issueOpts.deposit_pct}
-          onChange={v=>setIssueOpts(x=>({...x,deposit_pct:parseFloat(v)||0}))}/>
-      </Grid2>
-      <Inp label="Notes (optional)" value={issueOpts.notes}
-        onChange={v=>setIssueOpts(x=>({...x,notes:v}))} rows={2}/>
-      <Row gap={8}>
-        <Btn v="pri" onClick={issue} disabled={busy}>{busy?"Issuing…":"Issue & Lock"}</Btn>
-        <Btn onClick={()=>setShowIssue(false)}>Cancel</Btn>
+    {/* ── Compact issue form ── */}
+    {showIssue&&<Card hi sx={{marginBottom:14}}>
+      <Row gap={10} sx={{flexWrap:"wrap",alignItems:"flex-end"}}>
+        <div style={{color:T.accent,fontWeight:700,fontSize:13,alignSelf:"center",whiteSpace:"nowrap"}}>
+          Issue v{nextVNum} · {estItems.length} items
+        </div>
+        <Inp label="GST %" type="number" mono value={gstPct}
+          onChange={v=>setGstPct(parseFloat(v)||10)} sx={{width:90,marginBottom:0}}/>
+        <Inp label="Deposit %" type="number" mono value={depositPct}
+          onChange={v=>setDepositPct(parseFloat(v)||0)} sx={{width:100,marginBottom:0}}/>
+        <Inp label="Notes (optional)" value={issueNotes}
+          onChange={v=>setIssueNotes(v)} sx={{flex:1,minWidth:160,marginBottom:0}}/>
+        <Btn v="pri" onClick={issue} disabled={busy} sx={{marginBottom:12}}>{busy?"Issuing…":"Issue & Lock"}</Btn>
+        <Btn onClick={()=>setShowIssue(false)} sx={{marginBottom:12}}>Cancel</Btn>
       </Row>
     </Card>}
 
-    {/* No versions yet */}
-    {versions.length===0&&!showIssue&&<Card>
-      <div style={{textAlign:"center",padding:"32px 0",color:T.faint}}>
-        <div style={{fontSize:28,marginBottom:10}}>📄</div>
-        <div style={{fontWeight:700,fontSize:14,color:T.muted,marginBottom:6}}>No quotes issued yet</div>
-        <div style={{fontSize:12,maxWidth:380,margin:"0 auto",lineHeight:1.6}}>
-          Your estimate is in progress. When you're ready to send it to the client,
-          click "Issue Quote v1" to lock a versioned snapshot.
-        </div>
-        {hasEstItems&&<div style={{marginTop:16}}>
-          <Btn v="pri" onClick={()=>{setIssueOpts({gst_pct:proj.gst||10,deposit_pct:0,notes:""});setShowIssue(true);}}>
-            Issue Quote v1
-          </Btn>
-        </div>}
-      </div>
-    </Card>}
-
-    {/* Version list + document */}
-    {versions.length>0&&<div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:14,alignItems:"start"}}>
-
-      {/* Left: version list */}
-      <div>
-        {versions.map(v=>{
-          const st = QV_STATUS[v.status]||QV_STATUS.draft;
-          const isSel = v.id===selId;
-          return <div key={v.id} onClick={()=>setSelId(v.id)}
-            style={{padding:"12px 14px",borderRadius:7,marginBottom:6,cursor:"pointer",
-              background:isSel?T.accentDim:T.card,border:`1px solid ${isSel?T.accentBrd:T.border}`}}>
-            <Row gap={6}>
-              <span style={{fontWeight:800,fontSize:13,color:isSel?T.accent:T.text}}>v{v.version_number}</span>
-              <span style={{fontSize:10,fontWeight:600,color:st.color,background:`${st.color}18`,
-                border:`1px solid ${st.color}35`,borderRadius:3,padding:"1px 5px"}}>{st.label}</span>
-            </Row>
-            <div style={{fontFamily:T.mono,fontSize:12,color:T.accent,fontWeight:700,marginTop:4}}>
-              {v.total_inc_gst!=null?$$(v.total_inc_gst):"—"}
-            </div>
-            {v.issued_at&&<div style={{color:T.faint,fontSize:11,marginTop:2}}>
-              {new Date(v.issued_at).toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"})}
-            </div>}
-          </div>;
-        })}
-      </div>
-
-      {/* Right: selected version */}
-      {selVersion&&<div>
-        {/* Status actions */}
-        <Row gap={8} sx={{marginBottom:14,flexWrap:"wrap"}}>
-          <div style={{flex:1}}>
-            {selVersion.notes&&<div style={{fontSize:12,color:T.muted}}>{selVersion.notes}</div>}
-          </div>
-          {selVersion.status==="draft"&&<>
-            <Btn sm v="blu" onClick={()=>setStatus(selVersion.id,"sent")}>Mark Sent</Btn>
-            <Btn sm v="grn" onClick={()=>setStatus(selVersion.id,"accepted")}>Client Accepted</Btn>
-            <Btn sm v="red" onClick={()=>setStatus(selVersion.id,"declined")}>Mark Declined</Btn>
-          </>}
-          {selVersion.status==="sent"&&<>
-            <Btn sm v="grn" onClick={()=>setStatus(selVersion.id,"accepted")}>Client Accepted</Btn>
-            <Btn sm v="red" onClick={()=>setStatus(selVersion.id,"declined")}>Mark Declined</Btn>
-          </>}
-          <Btn sm v="gho" onClick={()=>window.print()}>⎙ Print</Btn>
-        </Row>
-        {selVersion.status==="superseded"&&<div style={{
-          background:`${T.yellow}18`,border:`1px solid ${T.yellow}50`,borderRadius:6,
-          padding:"8px 14px",fontSize:12,color:T.yellow,marginBottom:12}}>
-          This version was superseded when a newer quote was issued. It is read-only.
-        </div>}
-        {loadingItems
-          ? <Card><div style={{color:T.muted,fontSize:13}}>Loading…</div></Card>
-          : <QuoteDocument
-              items={selItems}
-              marginPct={selVersion.margin_pct}
-              overheadPct={selVersion.overhead_pct}
-              gstPct={selVersion.gst_pct}
-              depositPct={selVersion.deposit_pct}
-              versionNum={selVersion.version_number}
-              issuedAt={selVersion.issued_at}
-              proj={proj}
-              company={company}/>}
-      </div>}
+    {/* ── Superseded banner ── */}
+    {selVersion?.status==="superseded"&&<div style={{
+      background:`${T.yellow}18`,border:`1px solid ${T.yellow}50`,borderRadius:6,
+      padding:"8px 14px",fontSize:12,color:T.yellow,marginBottom:12}}>
+      This version was superseded when a newer quote was issued. It is read-only.
     </div>}
+
+    {/* ── Quote document — always visible ── */}
+    {docItems.length===0&&isDraft
+      ? <Card><div style={{color:T.faint,fontSize:13,textAlign:"center",padding:24}}>
+          No estimate items yet — add items in the Estimate tab to preview the quote here.
+        </div></Card>
+      : loadingItems
+        ? <Card><div style={{color:T.muted,fontSize:13}}>Loading version…</div></Card>
+        : <QuoteDocument
+            items={docItems}
+            marginPct={docMargin}
+            overheadPct={docOverhd}
+            gstPct={docGst}
+            depositPct={docDeposit}
+            versionNum={isDraft?null:selVersion?.version_number}
+            issuedAt={isDraft?null:selVersion?.issued_at}
+            proj={proj}
+            company={company}/>
+    }
   </div>;
 }
 
