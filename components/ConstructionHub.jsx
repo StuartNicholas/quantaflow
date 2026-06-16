@@ -2281,7 +2281,8 @@ ${EXTRACT_SCHEMA}`;
       if(ti.cab && pricing?.ready && pricing.rules &&
          ti.cab.type!=="Benchtop" && ti.cab.type!=="Splashback"){
         const {doors,drawers}=parseCabConfig(ti.cab.config);
-        const pr=priceCabinet({type:ti.cab.type,width:ti.cab.width,doors,drawers}, pricing.rules, pricing.rates);
+        const roomRates=ratesFor(ti.cab.room, pricing);
+        const pr=priceCabinet({type:ti.cab.type,width:ti.cab.width,doors,drawers}, pricing.rules, roomRates);
         rate=pr.total;
       }
       return {
@@ -4097,13 +4098,17 @@ function estimateSheets(parts, sheet){
 // Resolve a project's cabinet pricing context once (formula rules + chosen rates),
 // then price any AI cabinet line. Returns {ctx, price(cabLine)} or null if unset.
 async function loadCabinetPricing(companyId, projectId){
-  const [{data:rules},{data:preset}]=await Promise.all([
+  const [{data:rules},{data:preset},{data:roomRows}]=await Promise.all([
     supabase.from("cabinet_formula").select("*").eq("company_id",companyId).maybeSingle(),
     supabase.from("project_cabinet_preset").select("*").eq("project_id",projectId).maybeSingle(),
+    supabase.from("project_room_preset").select("*").eq("project_id",projectId),
   ]);
-  if(!rules||!preset) return {rules,preset,rates:null,ready:false};
-  // fetch the chosen catalogue items' rates
-  const ids=[preset.carcass_item_id,preset.front_item_id,preset.hinge_item_id,preset.handle_item_id,preset.foot_item_id].filter(Boolean);
+  if(!rules||!preset) return {rules,preset,rates:null,roomPresets:[],rateMap:{},ready:false};
+  const roomPresets=roomRows||[];
+  // collect all unique catalogue item IDs: project-level + every room override in one query
+  const projectIds=[preset.carcass_item_id,preset.front_item_id,preset.hinge_item_id,preset.handle_item_id,preset.foot_item_id];
+  const roomIds=roomPresets.flatMap(r=>[r.carcass_item_id,r.front_item_id,r.hinge_item_id,r.handle_item_id,r.foot_item_id]);
+  const ids=[...new Set([...projectIds,...roomIds])].filter(Boolean);
   let rateMap={};
   if(ids.length){
     const {data:items}=await supabase.from("catalogue_items").select("id,rate").in("id",ids);
@@ -4117,7 +4122,26 @@ async function loadCabinetPricing(companyId, projectId){
     foot:    rateMap[preset.foot_item_id]||0,
   };
   const ready = !!(preset.carcass_item_id||preset.front_item_id);
-  return {rules,preset,rates,ready};
+  return {rules,preset,rates,roomPresets,rateMap,ready};
+}
+
+// Resolve the correct rates object for a given room name.
+// Falls back to the project-level rates if no matching room override exists.
+// Unset slots in a room row inherit from the project-level rate (partial overrides are fine).
+function ratesFor(room, pricing){
+  const roomPresets=pricing.roomPresets||[];
+  if(!room||!roomPresets.length) return pricing.rates;
+  const name=(room||"").toLowerCase();
+  const rp=roomPresets.find(r=>(r.room_name||r.room||"").toLowerCase()===name);
+  if(!rp) return pricing.rates;
+  const m=pricing.rateMap||{};
+  return {
+    carcass: rp.carcass_item_id ? (m[rp.carcass_item_id]||0) : pricing.rates.carcass,
+    front:   rp.front_item_id   ? (m[rp.front_item_id]||0)   : pricing.rates.front,
+    hinge:   rp.hinge_item_id   ? (m[rp.hinge_item_id]||0)   : pricing.rates.hinge,
+    handle:  rp.handle_item_id  ? (m[rp.handle_item_id]||0)  : pricing.rates.handle,
+    foot:    rp.foot_item_id    ? (m[rp.foot_item_id]||0)    : pricing.rates.foot,
+  };
 }
 
 
@@ -4135,7 +4159,7 @@ function CatalogueLibrary({pop}) {
   const [activeSection,setActiveSection]=useState(null);
   const [loading,setLoading]=useState(true);
   const [err,setErr]=useState(null);
-  const [newItem,setNewItem]=useState({name:"",unit:"ea",rate:0,supplier:"",notes:"",attrText:""});
+  const [newItem,setNewItem]=useState({name:"",unit:"ea",rate:0,supplier:"",notes:"",attrText:"",sheet_length_mm:"",sheet_width_mm:"",kerf_mm:"",trim_mm:""});
   const [modal,setModal]=useState(null); // {type, ...}
 
   const trades=sections.filter(s=>!s.parent_id).sort((a,b)=>a.sort_order-b.sort_order);
@@ -4210,16 +4234,23 @@ function CatalogueLibrary({pop}) {
       company_id:companyId,section_id:activeSection,name:newItem.name,unit:newItem.unit,
       rate:parseFloat(newItem.rate)||0,supplier:newItem.supplier,notes:newItem.notes,
       attributes,sort_order:items.length,
+      sheet_length_mm: newItem.sheet_length_mm ? parseFloat(newItem.sheet_length_mm)||null : null,
+      sheet_width_mm:  newItem.sheet_width_mm  ? parseFloat(newItem.sheet_width_mm)||null  : null,
+      kerf_mm:         newItem.kerf_mm         ? parseFloat(newItem.kerf_mm)||null         : null,
+      trim_mm:         newItem.trim_mm         ? parseFloat(newItem.trim_mm)||null         : null,
     }).select().single();
     if(error) return pop(error.message,"error");
     setItems(it=>[...it,data]);
-    setNewItem({name:"",unit:"ea",rate:0,supplier:"",notes:"",attrText:""});
+    setNewItem({name:"",unit:"ea",rate:0,supplier:"",notes:"",attrText:"",sheet_length_mm:"",sheet_width_mm:"",kerf_mm:"",trim_mm:""});
     pop("Item added.");
   }
   async function updItem(id,field,value){
     setItems(it=>it.map(x=>x.id===id?{...x,[field]:value}:x));
-    const patch={[field]:field==="rate"?(parseFloat(value)||0):value};
-    await supabase.from("catalogue_items").update(patch).eq("id",id);
+    let v=value;
+    if(field==="rate") v=parseFloat(value)||0;
+    else if(["sheet_length_mm","sheet_width_mm","kerf_mm","trim_mm"].includes(field))
+      v=value===""||value===null ? null : parseFloat(value)||null;
+    await supabase.from("catalogue_items").update({[field]:v}).eq("id",id);
   }
   async function delItem(id){
     const { error }=await supabase.from("catalogue_items").delete().eq("id",id);
@@ -4304,7 +4335,7 @@ function CatalogueLibrary({pop}) {
               <div style={{overflowX:"auto"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead><tr style={{background:T.bg,color:T.faint,fontSize:11,textAlign:"left"}}>
-                    {["Item","Unit","Rate","Supplier","Details","Notes",canEdit?"":null].filter(x=>x!==null).map((h,i)=>
+                    {["Item","Unit","Rate","Supplier","Details","Notes","Sheet (mm)",canEdit?"":null].filter(x=>x!==null).map((h,i)=>
                       <th key={i} style={{padding:"8px 12px",fontWeight:600}}>{h}</th>)}
                   </tr></thead>
                   <tbody>
@@ -4325,11 +4356,28 @@ function CatalogueLibrary({pop}) {
                         {Object.entries(it.attributes||{}).map(([k,v])=>`${k}: ${v}`).join(" · ")||"—"}
                       </td>
                       <td style={{padding:"6px 12px",color:T.faint,fontSize:11}}>{it.notes}</td>
+                      <td style={{padding:"6px 8px",minWidth:200}}>
+                        {canEdit
+                          ? <div style={{display:"flex",alignItems:"center",gap:3,fontSize:11,color:T.muted}}>
+                              <input type="number" placeholder="3600" value={it.sheet_length_mm||""} onChange={e=>updItem(it.id,"sheet_length_mm",e.target.value)} style={{...inlineInput,width:48,fontFamily:T.mono,color:T.text}}/>
+                              <span>×</span>
+                              <input type="number" placeholder="1800" value={it.sheet_width_mm||""} onChange={e=>updItem(it.id,"sheet_width_mm",e.target.value)} style={{...inlineInput,width:48,fontFamily:T.mono,color:T.text}}/>
+                              <span style={{marginLeft:4}}>k</span>
+                              <input type="number" placeholder="4" value={it.kerf_mm||""} onChange={e=>updItem(it.id,"kerf_mm",e.target.value)} style={{...inlineInput,width:34,fontFamily:T.mono,color:T.text}}/>
+                              <span>t</span>
+                              <input type="number" placeholder="10" value={it.trim_mm||""} onChange={e=>updItem(it.id,"trim_mm",e.target.value)} style={{...inlineInput,width:34,fontFamily:T.mono,color:T.text}}/>
+                            </div>
+                          : <span style={{color:T.muted,fontSize:11,fontFamily:T.mono}}>
+                              {it.sheet_length_mm||it.sheet_width_mm
+                                ? `${it.sheet_length_mm||3600}×${it.sheet_width_mm||1800} k${it.kerf_mm??4} t${it.trim_mm??10}`
+                                : "—"}
+                            </span>}
+                      </td>
                       {canEdit&&<td style={{padding:"6px 12px"}}>
                         <span onClick={()=>delItem(it.id)} style={{color:T.red,cursor:"pointer"}}>✕</span>
                       </td>}
                     </tr>)}
-                    {items.length===0&&<tr><td colSpan={7} style={{padding:"16px 12px",color:T.faint,fontSize:12}}>No items in this section yet.</td></tr>}
+                    {items.length===0&&<tr><td colSpan={8} style={{padding:"16px 12px",color:T.faint,fontSize:12}}>No items in this section yet.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -4342,11 +4390,18 @@ function CatalogueLibrary({pop}) {
                   <Inp label="Rate $" value={newItem.rate} onChange={v=>setNewItem(x=>({...x,rate:v}))} type="number" mono sx={{marginBottom:0}}/>
                   <Inp label="Supplier" value={newItem.supplier} onChange={v=>setNewItem(x=>({...x,supplier:v}))} sx={{marginBottom:0}}/>
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"2fr 2fr auto",gap:8,alignItems:"flex-end"}}>
+                <div style={{display:"grid",gridTemplateColumns:"2fr 2fr auto",gap:8,alignItems:"flex-end",marginBottom:8}}>
                   <Inp label="Details (key:value, comma-separated)" value={newItem.attrText} onChange={v=>setNewItem(x=>({...x,attrText:v}))} placeholder="thickness:18, substrate:MR MDF" sx={{marginBottom:0}}/>
                   <Inp label="Notes" value={newItem.notes} onChange={v=>setNewItem(x=>({...x,notes:v}))} sx={{marginBottom:0}}/>
                   <Btn v="pri" onClick={addItem}>+ Add</Btn>
                 </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8}}>
+                  <Inp label="Sheet length (mm)" value={newItem.sheet_length_mm} onChange={v=>setNewItem(x=>({...x,sheet_length_mm:v}))} type="number" mono placeholder="3600" sx={{marginBottom:0}}/>
+                  <Inp label="Sheet width (mm)" value={newItem.sheet_width_mm} onChange={v=>setNewItem(x=>({...x,sheet_width_mm:v}))} type="number" mono placeholder="1800" sx={{marginBottom:0}}/>
+                  <Inp label="Kerf (mm)" value={newItem.kerf_mm} onChange={v=>setNewItem(x=>({...x,kerf_mm:v}))} type="number" mono placeholder="4" sx={{marginBottom:0}}/>
+                  <Inp label="Trim allowance (mm)" value={newItem.trim_mm} onChange={v=>setNewItem(x=>({...x,trim_mm:v}))} type="number" mono placeholder="10" sx={{marginBottom:0}}/>
+                </div>
+                <div style={{color:T.faint,fontSize:11,marginTop:5}}>Board items only — leave blank to use defaults (3600×1800, kerf 4mm, trim 10mm).</div>
               </div>}
             </Card>}
       </>}
