@@ -7,6 +7,7 @@ import { listBuilders as dbListBuilders, createBuilder as dbCreateBuilder, updat
 import { listSuppliers as dbListSuppliers, createSupplier as dbCreateSupplier, updateSupplier as dbUpdateSupplier, deleteSupplier as dbDeleteSupplier } from "../lib/db/suppliers";
 import { getEstimate as dbGetEstimate, updateEstimate as dbUpdateEstimate, addItem as dbAddItem, addItems as dbAddItems, updateItem as dbUpdateItem, deleteItem as dbDeleteItem } from "../lib/db/estimates";
 import { updateProjectQuoteValue as dbUpdateProjectQuoteValue } from "../lib/db/projects";
+import { listQuoteVersions as dbListQuoteVersions, getQuoteVersionItems as dbGetQuoteVersionItems, issueQuote as dbIssueQuote, updateQuoteStatus as dbUpdateQuoteStatus } from "../lib/db/quotes";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -3180,151 +3181,319 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// QUOTE MODULE
+// QUOTE MODULE — versioned, locked snapshots of the working estimate.
 // ═══════════════════════════════════════════════════════════════════════════
-function QuoteModule({proj, company, c, onMutate, pop}) {
-  const today = new Date().toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
-  const expiry = new Date(Date.now()+30*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
-  const ref = `Q-${proj.id}-${new Date().getFullYear()}`;
-  const grouped = CATS.filter(cat=>(proj.lineItems||[]).some(li=>li.category===cat));
-  const depositAmt = c.total*((proj.depositPct||0)/100);
 
-  return <div>
-    <Row gap={8} sx={{marginBottom:16,flexWrap:"wrap"}}>
-      <Btn v="pri" onClick={()=>{ window.print(); pop("Use browser Print → Save as PDF","info"); }}>⎙ Print / Save PDF</Btn>
-      <Btn v="blu" onClick={()=>pop("Open your email client to send the saved PDF.","info")}>✉ Email Client</Btn>
-      {["sent","quoting"].includes(proj.status)&&<>
-        <Btn v="grn" onClick={()=>{onMutate(p=>({...p,status:"approved"}));pop("Quote marked ACCEPTED — project approved. 🎉");}}>✓ Client Accepted</Btn>
-        <Btn v="red" onClick={()=>{onMutate(p=>({...p,status:"lost"}));pop("Quote marked as lost.","info");}}>✕ Lost</Btn>
-      </>}
-      <div style={{marginLeft:"auto",display:"flex",alignItems:"flex-end",gap:8}}>
-        <Inp label="Deposit %" value={proj.depositPct||0} onChange={v=>onMutate(p=>({...p,depositPct:v}))} type="number" mono sx={{width:90,marginBottom:0}}/>
-        {depositAmt>0&&<span style={{fontFamily:T.mono,color:T.green,fontWeight:700,fontSize:13,paddingBottom:9}}>{$$(depositAmt,true)} deposit</span>}
-      </div>
-    </Row>
+// Shared print-ready quote document. Accepts either a locked version snapshot
+// or a computed draft preview — caller normalises the data shape.
+function QuoteDocument({items, marginPct, overheadPct, gstPct, depositPct, versionNum, issuedAt, proj, company}) {
+  const sub = (items||[]).reduce((s,item)=> s+(item.qty||0)*(item.rate||0)*(1+((item.margin_pct??marginPct??0)/100)), 0);
+  const ovhd = sub*(overheadPct||0)/100;
+  const exGst = sub+ovhd;
+  const gstAmt = exGst*(gstPct||10)/100;
+  const total = exGst+gstAmt;
+  const depositAmt = total*(depositPct||0)/100;
+  const ref = versionNum
+    ? `Q${String(versionNum).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`
+    : `DRAFT-${(proj.id||"").slice(0,6).toUpperCase()}`;
+  const dateStr = issuedAt
+    ? new Date(issuedAt).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"})
+    : new Date().toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+  const expiryStr = issuedAt
+    ? new Date(new Date(issuedAt).getTime()+30*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"})
+    : new Date(Date.now()+30*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+  const cats = [...new Set((items||[]).map(i=>i.category).filter(Boolean))];
 
-    {/* Print-ready white document */}
-    <div style={{background:"#fff",color:"#111827",borderRadius:8,padding:"44px 54px",
-      maxWidth:840,fontFamily:"Georgia,serif",fontSize:13,lineHeight:1.65,margin:"0 auto",
-      boxShadow:"0 4px 40px rgba(0,0,0,0.5)"}}>
+  return <div style={{background:"#fff",color:"#111827",borderRadius:8,padding:"44px 54px",
+    maxWidth:840,fontFamily:"Georgia,serif",fontSize:13,lineHeight:1.65,margin:"0 auto",
+    boxShadow:"0 4px 40px rgba(0,0,0,0.5)"}}>
 
-      {/* Header */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:28}}>
-        <div>
-          <div style={{fontWeight:900,fontSize:22,color:"#111827",fontFamily:"system-ui,sans-serif",marginBottom:4}}>{company.name}</div>
-          <div style={{color:"#6b7280",fontSize:12,lineHeight:1.75}}>
-            {company.address}<br/>
-            {company.phone} · {company.email}<br/>
-            {company.website}
-            {company.abn&&<><br/>ABN / NZBN: {company.abn}</>}
-          </div>
-        </div>
-        <div style={{textAlign:"right"}}>
-          <div style={{fontWeight:900,fontSize:32,color:"#b45309",fontFamily:"system-ui,sans-serif",letterSpacing:"-1px"}}>QUOTE</div>
-          <div style={{color:"#6b7280",fontSize:12,marginTop:6,lineHeight:1.75}}>
-            Ref: <strong>{ref}</strong><br/>
-            Date: {today}<br/>
-            Valid until: {expiry}
-          </div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:28}}>
+      <div>
+        <div style={{fontWeight:900,fontSize:22,color:"#111827",fontFamily:"system-ui,sans-serif",marginBottom:4}}>{company.name}</div>
+        <div style={{color:"#6b7280",fontSize:12,lineHeight:1.75}}>
+          {company.address}<br/>
+          {company.phone} · {company.email}<br/>
+          {company.website}
+          {company.abn&&<><br/>ABN / NZBN: {company.abn}</>}
         </div>
       </div>
-      <hr style={{border:"none",borderTop:"2px solid #b45309",marginBottom:24}}/>
-
-      {/* Client */}
-      <div style={{marginBottom:20}}>
-        <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
-          color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>Prepared For</div>
-        <div style={{fontWeight:700,fontSize:15}}>{proj.client}</div>
-        <div style={{color:"#6b7280"}}>{proj.address}</div>
-      </div>
-
-      {/* Project */}
-      <div style={{marginBottom:22,background:"#faf7f2",borderRadius:6,padding:"12px 18px"}}>
-        <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",marginBottom:3}}>{proj.name}</div>
-        {(proj.description||proj.notes)&&<div style={{color:"#6b7280",fontSize:12}}>{proj.description||proj.notes}</div>}
-      </div>
-
-      {/* Line items by category */}
-      {grouped.map(cat=>{
-        const catItems=(proj.lineItems||[]).filter(li=>li.category===cat);
-        return <div key={cat} style={{marginBottom:18}}>
-          <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
-            textTransform:"uppercase",letterSpacing:"0.05em",color:"#b45309",
-            marginBottom:5,paddingBottom:3,borderBottom:"1px solid #e8d8b0"}}>{cat}</div>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-            <thead><tr style={{color:"#9ca3af",textAlign:"left",fontFamily:"system-ui,sans-serif",fontSize:11}}>
-              <th style={{padding:"3px 0",fontWeight:600}}>Description</th>
-              <th style={{padding:"3px 8px",textAlign:"right",fontWeight:600}}>Qty</th>
-              <th style={{padding:"3px 8px",textAlign:"right",fontWeight:600}}>Unit</th>
-              <th style={{padding:"3px 0",textAlign:"right",fontWeight:600}}>Amount</th>
-            </tr></thead>
-            <tbody>{catItems.map(li=><tr key={li.id} style={{borderBottom:"1px solid #f0e8d8"}}>
-              <td style={{padding:"5px 0"}}>{li.description}</td>
-              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace"}}>{li.qty}</td>
-              <td style={{padding:"5px 8px",textAlign:"right",color:"#9ca3af"}}>{li.unit}</td>
-              <td style={{padding:"5px 0",textAlign:"right",fontFamily:"monospace",fontWeight:600}}>
-                {$$((li.qty||0)*(li.rate||0))}
-              </td>
-            </tr>)}</tbody>
-          </table>
-        </div>;
-      })}
-
-      {/* Approved Variations */}
-      {(proj.variations||[]).filter(v=>v.status==="approved").length>0&&<div style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,textTransform:"uppercase",
-          color:"#b45309",marginBottom:5,paddingBottom:3,borderBottom:"1px solid #e8d8b0"}}>Approved Variations</div>
-        {(proj.variations||[]).filter(v=>v.status==="approved").map(v=>
-          <div key={v.id} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12}}>
-            <span>{v.ref}: {v.description}</span>
-            <span style={{fontFamily:"monospace",fontWeight:600}}>{$$(v.amount)}</span>
-          </div>)}
-      </div>}
-
-      {/* Totals */}
-      <div style={{marginTop:22,borderTop:"2px solid #b45309",paddingTop:16,maxWidth:310,marginLeft:"auto"}}>
-        {[
-          {l:"Subtotal",v:$$(c.sub)},
-          {l:`Overhead & Margin (${proj.overhead}%)`,v:$$(c.ovhd)},
-          c.varTotal!==0&&{l:"Approved Variations",v:$$(c.varTotal)},
-          (c.extras||0)!==0&&{l:"Project Management, Delivery & Handling",v:$$(c.extras)},
-          {l:"Total ex. GST",v:$$(c.exGst),bold:true},
-          {l:`GST (${proj.gst}%)`,v:$$(c.gstAmt)},
-        ].filter(Boolean).map(r=><div key={r.l} style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-          <span style={{color:"#6b7280",fontFamily:"system-ui,sans-serif",fontSize:12}}>{r.l}</span>
-          <span style={{fontFamily:"monospace",fontWeight:r.bold?700:400}}>{r.v}</span>
-        </div>)}
-        <div style={{display:"flex",justifyContent:"space-between",borderTop:"2px solid #111827",paddingTop:9,marginTop:6}}>
-          <span style={{fontWeight:900,fontFamily:"system-ui,sans-serif",fontSize:15}}>TOTAL (inc. GST)</span>
-          <span style={{fontFamily:"monospace",fontWeight:900,fontSize:17,color:"#b45309"}}>{$$(c.total)}</span>
+      <div style={{textAlign:"right"}}>
+        <div style={{fontWeight:900,fontSize:32,color:"#b45309",fontFamily:"system-ui,sans-serif",letterSpacing:"-1px"}}>QUOTE</div>
+        <div style={{color:"#6b7280",fontSize:12,marginTop:6,lineHeight:1.75}}>
+          Ref: <strong>{ref}</strong><br/>
+          Date: {dateStr}<br/>
+          Valid until: {expiryStr}
         </div>
-        {(proj.depositPct||0)>0&&<div style={{marginTop:8,paddingTop:7,borderTop:"1px dashed #d1d5db"}}>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:12}}>
-            <span style={{color:"#6b7280",fontFamily:"system-ui,sans-serif"}}>Deposit on acceptance ({proj.depositPct}%)</span>
-            <span style={{fontFamily:"monospace",fontWeight:700,color:"#166534"}}>{$$(depositAmt)}</span>
-          </div>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:12}}>
-            <span style={{color:"#6b7280",fontFamily:"system-ui,sans-serif"}}>Balance per progress claims</span>
-            <span style={{fontFamily:"monospace",color:"#6b7280"}}>{$$(c.total-depositAmt)}</span>
-          </div>
-        </div>}
-      </div>
-
-      {/* Bank details */}
-      {company.bankAccount&&<div style={{marginTop:22,padding:"10px 14px",background:"#f9fafb",
-        borderRadius:4,fontSize:12,color:"#6b7280",borderLeft:"3px solid #e5e7eb"}}>
-        <strong style={{color:"#111827"}}>Payment Details: </strong>
-        {company.bankName} · {company.bankAccount}
-      </div>}
-
-      {/* Footer */}
-      <div style={{marginTop:16,fontSize:11,color:"#9ca3af",borderTop:"1px solid #f3f4f6",paddingTop:12,lineHeight:1.7}}>
-        {company.quoteValidity||"This quote is valid for 30 days."}<br/>
-        {company.paymentTerms||"Payment due within 14 days of invoice date."}<br/>
-        All pricing in {company.currency||"AUD"}, GST included at {proj.gst}%.
-        Work to be carried out in accordance with applicable building codes and regulations.
       </div>
     </div>
+    <hr style={{border:"none",borderTop:"2px solid #b45309",marginBottom:24}}/>
+
+    <div style={{marginBottom:20}}>
+      <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
+        color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>Prepared For</div>
+      <div style={{fontWeight:700,fontSize:15}}>{proj.client}</div>
+      <div style={{color:"#6b7280"}}>{proj.address}</div>
+    </div>
+
+    <div style={{marginBottom:22,background:"#faf7f2",borderRadius:6,padding:"12px 18px"}}>
+      <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",marginBottom:3}}>{proj.name}</div>
+      {(proj.description||proj.notes)&&<div style={{color:"#6b7280",fontSize:12}}>{proj.description||proj.notes}</div>}
+    </div>
+
+    {cats.length===0&&<div style={{color:"#9ca3af",fontSize:12,padding:"16px 0",textAlign:"center"}}>No line items.</div>}
+    {cats.map(cat=>{
+      const catItems=(items||[]).filter(li=>li.category===cat);
+      return <div key={cat} style={{marginBottom:18}}>
+        <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+          textTransform:"uppercase",letterSpacing:"0.05em",color:"#b45309",
+          marginBottom:5,paddingBottom:3,borderBottom:"1px solid #e8d8b0"}}>{cat}</div>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead><tr style={{color:"#9ca3af",textAlign:"left",fontFamily:"system-ui,sans-serif",fontSize:11}}>
+            <th style={{padding:"3px 0",fontWeight:600}}>Description</th>
+            <th style={{padding:"3px 8px",textAlign:"right",fontWeight:600}}>Qty</th>
+            <th style={{padding:"3px 8px",textAlign:"right",fontWeight:600}}>Unit</th>
+            <th style={{padding:"3px 0",textAlign:"right",fontWeight:600}}>Amount</th>
+          </tr></thead>
+          <tbody>{catItems.map((li,i)=><tr key={li.id||i} style={{borderBottom:"1px solid #f0e8d8"}}>
+            <td style={{padding:"5px 0"}}>{li.description}</td>
+            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace"}}>{li.qty}</td>
+            <td style={{padding:"5px 8px",textAlign:"right",color:"#9ca3af"}}>{li.unit}</td>
+            <td style={{padding:"5px 0",textAlign:"right",fontFamily:"monospace",fontWeight:600}}>
+              {$$((li.qty||0)*(li.rate||0)*(1+((li.margin_pct??marginPct??0)/100)))}
+            </td>
+          </tr>)}</tbody>
+        </table>
+      </div>;
+    })}
+
+    <div style={{marginTop:22,borderTop:"2px solid #b45309",paddingTop:16,maxWidth:310,marginLeft:"auto"}}>
+      {[
+        {l:"Subtotal",v:$$(sub)},
+        {l:`Overhead & Margin (${overheadPct||0}%)`,v:$$(ovhd)},
+        {l:"Total ex. GST",v:$$(exGst),bold:true},
+        {l:`GST (${gstPct||10}%)`,v:$$(gstAmt)},
+      ].map(r=><div key={r.l} style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+        <span style={{color:"#6b7280",fontFamily:"system-ui,sans-serif",fontSize:12}}>{r.l}</span>
+        <span style={{fontFamily:"monospace",fontWeight:r.bold?700:400}}>{r.v}</span>
+      </div>)}
+      <div style={{display:"flex",justifyContent:"space-between",borderTop:"2px solid #111827",paddingTop:9,marginTop:6}}>
+        <span style={{fontWeight:900,fontFamily:"system-ui,sans-serif",fontSize:15}}>TOTAL (inc. GST)</span>
+        <span style={{fontFamily:"monospace",fontWeight:900,fontSize:17,color:"#b45309"}}>{$$(total)}</span>
+      </div>
+      {(depositPct||0)>0&&<div style={{marginTop:8,paddingTop:7,borderTop:"1px dashed #d1d5db"}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12}}>
+          <span style={{color:"#6b7280",fontFamily:"system-ui,sans-serif"}}>Deposit on acceptance ({depositPct}%)</span>
+          <span style={{fontFamily:"monospace",fontWeight:700,color:"#166534"}}>{$$(depositAmt)}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12}}>
+          <span style={{color:"#6b7280",fontFamily:"system-ui,sans-serif"}}>Balance per progress claims</span>
+          <span style={{fontFamily:"monospace",color:"#6b7280"}}>{$$(total-depositAmt)}</span>
+        </div>
+      </div>}
+    </div>
+
+    {company.bankAccount&&<div style={{marginTop:22,padding:"10px 14px",background:"#f9fafb",
+      borderRadius:4,fontSize:12,color:"#6b7280",borderLeft:"3px solid #e5e7eb"}}>
+      <strong style={{color:"#111827"}}>Payment Details: </strong>
+      {company.bankName} · {company.bankAccount}
+    </div>}
+
+    <div style={{marginTop:16,fontSize:11,color:"#9ca3af",borderTop:"1px solid #f3f4f6",paddingTop:12,lineHeight:1.7}}>
+      {company.quoteValidity||"This quote is valid for 30 days."}<br/>
+      {company.paymentTerms||"Payment due within 14 days of invoice date."}<br/>
+      All pricing in {company.currency||"AUD"}, GST included at {gstPct||10}%.
+      Work to be carried out in accordance with applicable building codes and regulations.
+    </div>
+  </div>;
+}
+
+const QV_STATUS = {
+  draft:      {color:"#ca8a04", label:"Draft"},
+  sent:       {color:"#2563eb", label:"Sent"},
+  accepted:   {color:"#16a34a", label:"Accepted"},
+  declined:   {color:"#dc2626", label:"Declined"},
+  superseded: {color:"#6b7280", label:"Superseded"},
+};
+
+function QuoteModule({proj, company, c, onMutate, pop}) {
+  const [versions,     setVersions]     = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [selId,        setSelId]        = useState(null);
+  const [selItems,     setSelItems]     = useState([]);
+  const [loadingItems, setLoadingItems] = useState(false);
+  const [estimate,     setEstimate]     = useState(null);
+  const [estItems,     setEstItems]     = useState([]);
+  const [showIssue,    setShowIssue]    = useState(false);
+  const [issueOpts,    setIssueOpts]    = useState({gst_pct:proj.gst||10, deposit_pct:0, notes:""});
+  const [busy,         setBusy]         = useState(false);
+
+  async function reload() {
+    setLoading(true);
+    const [{ data: vers }, { data: est }] = await Promise.all([
+      dbListQuoteVersions(proj.id),
+      dbGetEstimate(proj.id),
+    ]);
+    setVersions(vers||[]);
+    if(est) { setEstimate(est.estimate); setEstItems(est.items||[]); }
+    setLoading(false);
+    // auto-select newest version
+    if(vers&&vers.length>0&&!selId) setSelId(vers[0].id);
+  }
+  useEffect(()=>{ reload(); },[proj.id]);
+
+  useEffect(()=>{
+    if(!selId) return;
+    setLoadingItems(true);
+    dbGetQuoteVersionItems(selId).then(({data})=>{ setSelItems(data||[]); setLoadingItems(false); });
+  },[selId]);
+
+  const selVersion = versions.find(v=>v.id===selId);
+
+  async function issue() {
+    setBusy(true);
+    const { data, error } = await dbIssueQuote(proj.id, issueOpts);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setShowIssue(false);
+    await reload();
+    setSelId(data.id);
+    pop(`Quote v${data.version_number} issued and locked.`);
+  }
+
+  async function setStatus(id, status) {
+    const { data, error } = await dbUpdateQuoteStatus(id, status);
+    if(error) return pop(error,"error");
+    if(status==="accepted") { onMutate(p=>({...p,status:"approved"})); pop("Quote accepted — project marked approved!"); }
+    else if(status==="declined") { onMutate(p=>({...p,status:"lost"})); pop("Quote marked declined.","info"); }
+    else pop(`Quote marked ${status}.`,"info");
+    setVersions(vs=>vs.map(v=>v.id===id?{...v,...data}:v));
+  }
+
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading quote versions…</div></Card>;
+
+  const hasEstItems = estItems.length > 0;
+
+  return <div>
+    {/* Header */}
+    <Row gap={8} sx={{marginBottom:16,flexWrap:"wrap"}}>
+      <div style={{flex:1}}>
+        <div style={{fontWeight:800,fontSize:16,color:T.text}}>Quote Versions</div>
+        <div style={{color:T.muted,fontSize:12,marginTop:2}}>
+          Each issued quote is a locked snapshot of your estimate at that moment.
+        </div>
+      </div>
+      {!showIssue&&<Btn v="pri" onClick={()=>{
+        setIssueOpts({gst_pct:proj.gst||10,deposit_pct:0,notes:""});
+        setShowIssue(true);
+      }} disabled={!hasEstItems}>
+        {versions.length===0?"Issue Quote v1":`Issue New Version (v${versions.length+1})`}
+      </Btn>}
+      {!hasEstItems&&<span style={{color:T.faint,fontSize:12,alignSelf:"center"}}>Add items to the Estimate tab first.</span>}
+    </Row>
+
+    {/* Issue form */}
+    {showIssue&&<Card hi sx={{marginBottom:16}}>
+      <div style={{fontWeight:700,marginBottom:12,color:T.accent}}>
+        Issue Quote v{versions.length+1}
+      </div>
+      <div style={{color:T.muted,fontSize:12,marginBottom:12}}>
+        This will lock a snapshot of your current {estItems.length} estimate items. The snapshot cannot be edited after issuing.
+      </div>
+      <Grid2 gap={10}>
+        <Inp label="GST %" type="number" mono value={issueOpts.gst_pct}
+          onChange={v=>setIssueOpts(x=>({...x,gst_pct:parseFloat(v)||10}))}/>
+        <Inp label="Deposit %" type="number" mono value={issueOpts.deposit_pct}
+          onChange={v=>setIssueOpts(x=>({...x,deposit_pct:parseFloat(v)||0}))}/>
+      </Grid2>
+      <Inp label="Notes (optional)" value={issueOpts.notes}
+        onChange={v=>setIssueOpts(x=>({...x,notes:v}))} rows={2}/>
+      <Row gap={8}>
+        <Btn v="pri" onClick={issue} disabled={busy}>{busy?"Issuing…":"Issue & Lock"}</Btn>
+        <Btn onClick={()=>setShowIssue(false)}>Cancel</Btn>
+      </Row>
+    </Card>}
+
+    {/* No versions yet */}
+    {versions.length===0&&!showIssue&&<Card>
+      <div style={{textAlign:"center",padding:"32px 0",color:T.faint}}>
+        <div style={{fontSize:28,marginBottom:10}}>📄</div>
+        <div style={{fontWeight:700,fontSize:14,color:T.muted,marginBottom:6}}>No quotes issued yet</div>
+        <div style={{fontSize:12,maxWidth:380,margin:"0 auto",lineHeight:1.6}}>
+          Your estimate is in progress. When you're ready to send it to the client,
+          click "Issue Quote v1" to lock a versioned snapshot.
+        </div>
+        {hasEstItems&&<div style={{marginTop:16}}>
+          <Btn v="pri" onClick={()=>{setIssueOpts({gst_pct:proj.gst||10,deposit_pct:0,notes:""});setShowIssue(true);}}>
+            Issue Quote v1
+          </Btn>
+        </div>}
+      </div>
+    </Card>}
+
+    {/* Version list + document */}
+    {versions.length>0&&<div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:14,alignItems:"start"}}>
+
+      {/* Left: version list */}
+      <div>
+        {versions.map(v=>{
+          const st = QV_STATUS[v.status]||QV_STATUS.draft;
+          const isSel = v.id===selId;
+          return <div key={v.id} onClick={()=>setSelId(v.id)}
+            style={{padding:"12px 14px",borderRadius:7,marginBottom:6,cursor:"pointer",
+              background:isSel?T.accentDim:T.card,border:`1px solid ${isSel?T.accentBrd:T.border}`}}>
+            <Row gap={6}>
+              <span style={{fontWeight:800,fontSize:13,color:isSel?T.accent:T.text}}>v{v.version_number}</span>
+              <span style={{fontSize:10,fontWeight:600,color:st.color,background:`${st.color}18`,
+                border:`1px solid ${st.color}35`,borderRadius:3,padding:"1px 5px"}}>{st.label}</span>
+            </Row>
+            <div style={{fontFamily:T.mono,fontSize:12,color:T.accent,fontWeight:700,marginTop:4}}>
+              {v.total_inc_gst!=null?$$(v.total_inc_gst):"—"}
+            </div>
+            {v.issued_at&&<div style={{color:T.faint,fontSize:11,marginTop:2}}>
+              {new Date(v.issued_at).toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"})}
+            </div>}
+          </div>;
+        })}
+      </div>
+
+      {/* Right: selected version */}
+      {selVersion&&<div>
+        {/* Status actions */}
+        <Row gap={8} sx={{marginBottom:14,flexWrap:"wrap"}}>
+          <div style={{flex:1}}>
+            {selVersion.notes&&<div style={{fontSize:12,color:T.muted}}>{selVersion.notes}</div>}
+          </div>
+          {selVersion.status==="draft"&&<>
+            <Btn sm v="blu" onClick={()=>setStatus(selVersion.id,"sent")}>Mark Sent</Btn>
+            <Btn sm v="grn" onClick={()=>setStatus(selVersion.id,"accepted")}>Client Accepted</Btn>
+            <Btn sm v="red" onClick={()=>setStatus(selVersion.id,"declined")}>Mark Declined</Btn>
+          </>}
+          {selVersion.status==="sent"&&<>
+            <Btn sm v="grn" onClick={()=>setStatus(selVersion.id,"accepted")}>Client Accepted</Btn>
+            <Btn sm v="red" onClick={()=>setStatus(selVersion.id,"declined")}>Mark Declined</Btn>
+          </>}
+          <Btn sm v="gho" onClick={()=>window.print()}>⎙ Print</Btn>
+        </Row>
+        {selVersion.status==="superseded"&&<div style={{
+          background:`${T.yellow}18`,border:`1px solid ${T.yellow}50`,borderRadius:6,
+          padding:"8px 14px",fontSize:12,color:T.yellow,marginBottom:12}}>
+          This version was superseded when a newer quote was issued. It is read-only.
+        </div>}
+        {loadingItems
+          ? <Card><div style={{color:T.muted,fontSize:13}}>Loading…</div></Card>
+          : <QuoteDocument
+              items={selItems}
+              marginPct={selVersion.margin_pct}
+              overheadPct={selVersion.overhead_pct}
+              gstPct={selVersion.gst_pct}
+              depositPct={selVersion.deposit_pct}
+              versionNum={selVersion.version_number}
+              issuedAt={selVersion.issued_at}
+              proj={proj}
+              company={company}/>}
+      </div>}
+    </div>}
   </div>;
 }
 
