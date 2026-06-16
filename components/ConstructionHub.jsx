@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, Component } from "react";
 import { supabase } from "../lib/supabase";
 import { listClients as dbListClients, createClient as dbCreateClient, updateClient as dbUpdateClient, deleteClient as dbDeleteClient } from "../lib/db/clients";
+import { listBuilders as dbListBuilders, createBuilder as dbCreateBuilder, updateBuilder as dbUpdateBuilder, deleteBuilder as dbDeleteBuilder } from "../lib/db/builders";
+import { listSuppliers as dbListSuppliers, createSupplier as dbCreateSupplier, updateSupplier as dbUpdateSupplier, deleteSupplier as dbDeleteSupplier } from "../lib/db/suppliers";
 import { getEstimate as dbGetEstimate, updateEstimate as dbUpdateEstimate, addItem as dbAddItem, addItems as dbAddItems, updateItem as dbUpdateItem, deleteItem as dbDeleteItem } from "../lib/db/estimates";
 import { updateProjectQuoteValue as dbUpdateProjectQuoteValue } from "../lib/db/projects";
 
@@ -664,6 +666,8 @@ export default function App() {
   const [companyId, setCompanyId] = useState(null);
   const [clients,   setClients]   = useState([]);
   const [clientsLoading, setClientsLoading] = useState(true);
+  const [builders,  setBuilders]  = useState([]);
+  const [buildersLoading, setBuildersLoading] = useState(true);
   const [rates,     setRates]     = useLS("qf_rates",    SEED_RATES);
   const [cabLib,    setCabLib]    = useLS("qf_cablib",   SEED_CABLIB);
   const [company,   setCompany]   = useLS("qf_company",  SEED_COMPANY);
@@ -722,6 +726,14 @@ export default function App() {
     setClientsLoading(false);
   }
   useEffect(() => { reloadClients(); }, []);
+
+  async function reloadBuilders() {
+    setBuildersLoading(true);
+    const { data } = await dbListBuilders();
+    setBuilders(data || []);
+    setBuildersLoading(false);
+  }
+  useEffect(() => { reloadBuilders(); }, []);
 
   async function runClientImport() {
     const legacy = clientImport?.legacy || [];
@@ -886,12 +898,14 @@ export default function App() {
   const pipeline = projects.reduce((s,p)=>s+calc(p).total, 0);
 
   const NAV = [
-    {id:"dashboard",icon:"▦",label:"Dashboard"},
-    {id:"projects", icon:"◧",label:"Projects"},
-    {id:"clients",  icon:"◎",label:"Clients"},
-    {id:"rates",    icon:"≡",label:"Rate Library"},
-    {id:"xero",     icon:"⟳",label:"Xero Sync"},
-    {id:"settings", icon:"⚙",label:"Settings"},
+    {id:"dashboard", icon:"▦",label:"Dashboard"},
+    {id:"projects",  icon:"◧",label:"Projects"},
+    {id:"clients",   icon:"◎",label:"Clients"},
+    {id:"builders",  icon:"🏗",label:"Builders"},
+    {id:"suppliers", icon:"📦",label:"Suppliers"},
+    {id:"rates",     icon:"≡",label:"Rate Library"},
+    {id:"xero",      icon:"⟳",label:"Xero Sync"},
+    {id:"settings",  icon:"⚙",label:"Settings"},
   ];
 
   if(!mounted) return null;
@@ -995,8 +1009,10 @@ export default function App() {
                 <span style={{marginLeft:"auto"}}><Btn sm v="pri" onClick={returnToProject}>← Back to takeoff</Btn></span>
               </div>}
               {nav==="dashboard" && <Dashboard projects={projects} xero={xero} onOpen={openProj} setNav={setNav}/>}
-              {nav==="projects"  && <ProjectsModule projects={projects} loading={projectsLoading} error={projectsError} company={company} onOpen={openProj} onTrash={trashProject} pop={pop} createProject={createProject}/>}
+              {nav==="projects"  && <ProjectsModule projects={projects} loading={projectsLoading} error={projectsError} company={company} builders={builders} onOpen={openProj} onTrash={trashProject} pop={pop} createProject={createProject}/>}
               {nav==="clients"   && <ClientsModule clients={clients} reloadClients={reloadClients} clientsLoading={clientsLoading} projects={projects} pop={pop}/>}
+              {nav==="builders"  && <BuildersModule builders={builders} reloadBuilders={reloadBuilders} buildersLoading={buildersLoading} projects={projects} pop={pop}/>}
+              {nav==="suppliers" && <SuppliersModule pop={pop}/>}
               {nav==="rates"     && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
               {nav==="xero"      && <XeroModule projects={projects} xero={xero} setXero={setXero} mutProj={mutProj} pop={pop}/>}
               {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} pop={pop}/>}
@@ -1092,9 +1108,9 @@ function Dashboard({projects, xero, onOpen, setNav}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // PROJECTS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function ProjectsModule({projects,loading,error,company,onOpen,onTrash,pop,createProject}) {
+function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,pop,createProject}) {
   const [showNew,setShowNew]=useState(false);
-  const [np,setNp]=useState({name:"",client:"",address:""});
+  const [np,setNp]=useState({name:"",client:"",address:"",builder_id:""});
   const [filter,setFilter]=useState("all");
   const [search,setSearch]=useState("");
 
@@ -1123,8 +1139,8 @@ function ProjectsModule({projects,loading,error,company,onOpen,onTrash,pop,creat
   async function create() {
     if(!np.name.trim()) return pop("Project name required.","error");
     try {
-      await createProject({...np});
-      setNp({name:"",client:"",address:""});
+      await createProject({...np, builder_id: np.builder_id||null});
+      setNp({name:"",client:"",address:"",builder_id:""});
       setShowNew(false);
     } catch {}
   }
@@ -1142,6 +1158,11 @@ function ProjectsModule({projects,loading,error,company,onOpen,onTrash,pop,creat
         <Inp label="Client Name" value={np.client} onChange={v=>setNp(x=>({...x,client:v}))} placeholder="Client or company name"/>
       </Grid2>
       <Inp label="Site Address" value={np.address} onChange={v=>setNp(x=>({...x,address:v}))} placeholder="Full site address"/>
+      <div style={{marginBottom:10}}>
+        <div style={{fontSize:12,color:T.muted,marginBottom:4,fontWeight:600}}>Builder / Head Contractor <span style={{color:T.faint,fontWeight:400}}>(optional)</span></div>
+        <Sel value={np.builder_id||""} onChange={v=>setNp(x=>({...x,builder_id:v}))}
+          options={[{value:"",label:"— no builder —"},...(builders||[]).map(b=>({value:b.id,label:b.name}))]}/>
+      </div>
       <Row gap={8}><Btn v="pri" onClick={create}>Create Project</Btn><Btn onClick={()=>setShowNew(false)}>Cancel</Btn></Row>
     </Card>}
 
@@ -3676,6 +3697,18 @@ function ClaimsModule({proj, onMutate, c, onPushXero, pop}) {
 // PROJECT INFO
 // ═══════════════════════════════════════════════════════════════════════════
 function ProjectInfo({proj, clients, onMutate, pop}) {
+  const [builders, setBuilders] = useState([]);
+  useEffect(()=>{
+    let on=true;
+    dbListBuilders().then(({data})=>{ if(on) setBuilders(data||[]); });
+    return ()=>{on=false;};
+  },[]);
+
+  async function setBuilder(builderId) {
+    onMutate(p=>({...p, builder_id: builderId||null}));
+    await supabase.from("projects").update({builder_id: builderId||null}).eq("id", proj.id);
+  }
+
   return <div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
       <Card>
@@ -3683,6 +3716,11 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
         <Inp label="Project Name" value={proj.name} onChange={v=>onMutate(p=>({...p,name:v}))}/>
         <Inp label="Client" value={proj.client} onChange={v=>onMutate(p=>({...p,client:v}))}/>
         <Inp label="Site Address" value={proj.address} onChange={v=>onMutate(p=>({...p,address:v}))}/>
+        <div style={{marginBottom:10}}>
+          <div style={{fontSize:12,color:T.muted,marginBottom:4,fontWeight:600}}>Builder / Head Contractor <span style={{color:T.faint,fontWeight:400}}>(optional)</span></div>
+          <Sel value={proj.builder_id||""} onChange={setBuilder}
+            options={[{value:"",label:"— no builder —"},...builders.map(b=>({value:b.id,label:b.name}))]}/>
+        </div>
         <Grid2 gap={10}>
           <Inp label="Start Date" value={proj.created} onChange={v=>onMutate(p=>({...p,created:v}))} type="date"/>
           <Inp label="Due Date" value={proj.dueDate||""} onChange={v=>onMutate(p=>({...p,dueDate:v}))} type="date"/>
@@ -3857,6 +3895,277 @@ function ClientsModule({clients, reloadClients, clientsLoading, projects, pop}) 
                 <Inp label="Address" value={nc.address} onChange={v=>setNc(x=>({...x,address:v}))} sx={{gridColumn:"1/-1"}}/>
                 <Inp label="Notes" value={nc.notes} onChange={v=>setNc(x=>({...x,notes:v}))} sx={{gridColumn:"1/-1"}}/>
               </Grid2>
+              <Row gap={8}><Btn v="pri" onClick={saveEdit} disabled={busy}>{busy?"Saving…":"Save"}</Btn><Btn onClick={()=>setEditing(false)}>Cancel</Btn></Row>
+            </>
+        }
+      </Card>}
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BUILDERS MODULE — head contractors / developers who commission joinery work.
+// ═══════════════════════════════════════════════════════════════════════════
+function BuildersModule({builders, reloadBuilders, buildersLoading, projects, pop}) {
+  const [sel,  setSel]  = useState(null);
+  const [showNew, setShowNew] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [nb, setNb] = useState({name:"",contact_name:"",email:"",phone:"",address:"",abn:"",notes:""});
+  const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const builder = builders.find(b=>b.id===sel);
+  const builderProjs = sel ? projects.filter(p=>p.builder_id===sel) : [];
+  const filtered = builders.filter(b=>!search||[b.name,b.contact_name,b.email].join(" ").toLowerCase().includes(search.toLowerCase()));
+
+  async function saveNew() {
+    if(!nb.name.trim()) return pop("Builder name required.","error");
+    setBusy(true);
+    const { error } = await dbCreateBuilder(nb);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setNb({name:"",contact_name:"",email:"",phone:"",address:"",abn:"",notes:""});
+    setShowNew(false); await reloadBuilders(); pop("Builder added.");
+  }
+
+  async function saveEdit() {
+    setBusy(true);
+    const { error } = await dbUpdateBuilder(sel, nb);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setEditing(false); await reloadBuilders(); pop("Builder updated.");
+  }
+
+  async function del(b) {
+    if(!safeConfirm(`Delete "${b.name}"? This cannot be undone.`)) return;
+    const { error } = await dbDeleteBuilder(b.id, b.name);
+    if(error) return pop(error,"error");
+    if(sel===b.id) setSel(null);
+    await reloadBuilders(); pop("Builder deleted.");
+  }
+
+  if(buildersLoading) return <div><Hdr sub="Head contractors and developers who commission your work.">Builders</Hdr><Card><div style={{color:T.muted,fontSize:13}}>Loading builders…</div></Card></div>;
+
+  return <div>
+    <Hdr sub="Head contractors and developers who commission your work."
+      action={<Btn v="pri" onClick={()=>{setShowNew(true);setSel(null);}}>+ Add Builder</Btn>}>Builders</Hdr>
+
+    {showNew&&<Card hi sx={{marginBottom:14}}>
+      <div style={{fontWeight:700,marginBottom:12,color:T.accent}}>New Builder</div>
+      <Grid2 gap={10}>
+        <Inp label="Company / Trading Name" value={nb.name} onChange={v=>setNb(x=>({...x,name:v}))} placeholder="e.g. Apex Constructions"/>
+        <Inp label="Contact Name" value={nb.contact_name} onChange={v=>setNb(x=>({...x,contact_name:v}))} placeholder="Site manager or director"/>
+      </Grid2>
+      <Grid2 gap={10}>
+        <Inp label="Email" value={nb.email} onChange={v=>setNb(x=>({...x,email:v}))} placeholder="contact@builder.com.au"/>
+        <Inp label="Phone" value={nb.phone} onChange={v=>setNb(x=>({...x,phone:v}))} placeholder="07 000 0000"/>
+      </Grid2>
+      <Inp label="Address" value={nb.address} onChange={v=>setNb(x=>({...x,address:v}))} placeholder="Office or registered address"/>
+      <Inp label="ABN / ACN" value={nb.abn} onChange={v=>setNb(x=>({...x,abn:v}))} placeholder="xx xxx xxx xxx"/>
+      <Inp label="Notes" value={nb.notes} onChange={v=>setNb(x=>({...x,notes:v}))} rows={2}/>
+      <Row gap={8}><Btn v="pri" onClick={saveNew} disabled={busy}>{busy?"Saving…":"Add Builder"}</Btn><Btn onClick={()=>setShowNew(false)}>Cancel</Btn></Row>
+    </Card>}
+
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1.6fr",gap:14}}>
+      <div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search builders…"
+          style={{width:"100%",background:T.card,border:`1px solid ${T.border}`,borderRadius:5,
+            padding:"7px 11px",color:T.text,fontSize:13,outline:"none",fontFamily:T.font,marginBottom:10,boxSizing:"border-box"}}/>
+        {filtered.length===0
+          ? <Card><div style={{color:T.faint,fontSize:13,textAlign:"center",padding:20}}>{builders.length===0?"No builders yet. Add one above.":"No matches."}</div></Card>
+          : filtered.map(b=><div key={b.id} onClick={()=>{setSel(b.id);setEditing(false);}}
+              style={{padding:"11px 14px",borderRadius:7,marginBottom:6,cursor:"pointer",
+                background:sel===b.id?T.accentDim:T.card,border:`1px solid ${sel===b.id?T.accentBrd:T.border}`}}>
+              <div style={{fontWeight:700,fontSize:13,color:sel===b.id?T.accent:T.text}}>{b.name}</div>
+              {b.contact_name&&<div style={{color:T.muted,fontSize:11,marginTop:2}}>{b.contact_name}</div>}
+              {b.phone&&<div style={{color:T.faint,fontSize:11}}>{b.phone}</div>}
+            </div>)}
+      </div>
+
+      {builder&&<Card>
+        {!editing
+          ? <>
+              <Row gap={8} sx={{marginBottom:14}}>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:800,fontSize:16,color:T.text}}>{builder.name}</div>
+                  {builder.contact_name&&<div style={{color:T.muted,fontSize:13,marginTop:2}}>{builder.contact_name}</div>}
+                </div>
+                <Btn sm v="blu" onClick={()=>{setNb({name:builder.name,contact_name:builder.contact_name||"",email:builder.email||"",phone:builder.phone||"",address:builder.address||"",abn:builder.abn||"",notes:builder.notes||""});setEditing(true);}}>Edit</Btn>
+                <Btn sm v="red" onClick={()=>del(builder)}>Delete</Btn>
+              </Row>
+              {[["Email",builder.email],[" Phone",builder.phone],["Address",builder.address],["ABN",builder.abn],["Notes",builder.notes]].map(([l,v])=>v&&
+                <div key={l} style={{display:"flex",gap:10,padding:"5px 0",borderBottom:`1px solid ${T.border}`,fontSize:13}}>
+                  <span style={{color:T.faint,width:70,flexShrink:0}}>{l}</span>
+                  <span style={{color:T.text}}>{v}</span>
+                </div>)}
+              {builderProjs.length>0&&<div style={{marginTop:14}}>
+                <div style={{color:T.muted,fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:6}}>Projects</div>
+                {builderProjs.map(p=><div key={p.id} style={{fontSize:12,color:T.text,padding:"4px 0",borderBottom:`1px solid ${T.border}`}}>{p.name}<span style={{color:T.faint,marginLeft:8}}>{p.status}</span></div>)}
+              </div>}
+            </>
+          : <>
+              <div style={{fontWeight:700,marginBottom:12,color:T.accent}}>Edit Builder</div>
+              <Grid2 gap={10}>
+                <Inp label="Company / Trading Name" value={nb.name} onChange={v=>setNb(x=>({...x,name:v}))}/>
+                <Inp label="Contact Name" value={nb.contact_name} onChange={v=>setNb(x=>({...x,contact_name:v}))}/>
+              </Grid2>
+              <Grid2 gap={10}>
+                <Inp label="Email" value={nb.email} onChange={v=>setNb(x=>({...x,email:v}))}/>
+                <Inp label="Phone" value={nb.phone} onChange={v=>setNb(x=>({...x,phone:v}))}/>
+              </Grid2>
+              <Inp label="Address" value={nb.address} onChange={v=>setNb(x=>({...x,address:v}))} sx={{gridColumn:"1/-1"}}/>
+              <Inp label="ABN / ACN" value={nb.abn} onChange={v=>setNb(x=>({...x,abn:v}))}/>
+              <Inp label="Notes" value={nb.notes} onChange={v=>setNb(x=>({...x,notes:v}))} rows={2}/>
+              <Row gap={8}><Btn v="pri" onClick={saveEdit} disabled={busy}>{busy?"Saving…":"Save"}</Btn><Btn onClick={()=>setEditing(false)}>Cancel</Btn></Row>
+            </>
+        }
+      </Card>}
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUPPLIERS MODULE — board, hardware and fittings vendors.
+// ═══════════════════════════════════════════════════════════════════════════
+const SUPPLIER_CATS = ["Board & Sheet","Hardware","Fittings & Accessories","Adhesives & Finishes","Machinery","Other"];
+
+function SuppliersModule({pop}) {
+  const [suppliers, setSuppliers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sel,     setSel]     = useState(null);
+  const [showNew, setShowNew] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [ns, setNs] = useState({name:"",contact_name:"",email:"",phone:"",address:"",abn:"",category:"",account_no:"",notes:""});
+  const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function reload() {
+    setLoading(true);
+    const { data } = await dbListSuppliers();
+    setSuppliers(data||[]); setLoading(false);
+  }
+  useEffect(()=>{ reload(); },[]);
+
+  const supplier = suppliers.find(s=>s.id===sel);
+  const filtered = suppliers.filter(s=>!search||[s.name,s.contact_name,s.category,s.email].join(" ").toLowerCase().includes(search.toLowerCase()));
+
+  async function saveNew() {
+    if(!ns.name.trim()) return pop("Supplier name required.","error");
+    setBusy(true);
+    const { error } = await dbCreateSupplier(ns);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setNs({name:"",contact_name:"",email:"",phone:"",address:"",abn:"",category:"",account_no:"",notes:""});
+    setShowNew(false); await reload(); pop("Supplier added.");
+  }
+
+  async function saveEdit() {
+    setBusy(true);
+    const { error } = await dbUpdateSupplier(sel, ns);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setEditing(false); await reload(); pop("Supplier updated.");
+  }
+
+  async function del(s) {
+    if(!safeConfirm(`Delete "${s.name}"? This cannot be undone.`)) return;
+    const { error } = await dbDeleteSupplier(s.id, s.name);
+    if(error) return pop(error,"error");
+    if(sel===s.id) setSel(null);
+    await reload(); pop("Supplier deleted.");
+  }
+
+  const blankNs = {name:"",contact_name:"",email:"",phone:"",address:"",abn:"",category:"",account_no:"",notes:""};
+
+  if(loading) return <div><Hdr sub="Board, hardware and fittings vendors.">Suppliers</Hdr><Card><div style={{color:T.muted,fontSize:13}}>Loading suppliers…</div></Card></div>;
+
+  return <div>
+    <Hdr sub="Board, hardware and fittings vendors."
+      action={<Btn v="pri" onClick={()=>{setShowNew(true);setSel(null);}}>+ Add Supplier</Btn>}>Suppliers</Hdr>
+
+    {showNew&&<Card hi sx={{marginBottom:14}}>
+      <div style={{fontWeight:700,marginBottom:12,color:T.accent}}>New Supplier</div>
+      <Grid2 gap={10}>
+        <Inp label="Supplier Name" value={ns.name} onChange={v=>setNs(x=>({...x,name:v}))} placeholder="e.g. Laminex Australia"/>
+        <Inp label="Contact Name" value={ns.contact_name} onChange={v=>setNs(x=>({...x,contact_name:v}))} placeholder="Account manager"/>
+      </Grid2>
+      <Grid2 gap={10}>
+        <Inp label="Email" value={ns.email} onChange={v=>setNs(x=>({...x,email:v}))} placeholder="orders@supplier.com.au"/>
+        <Inp label="Phone" value={ns.phone} onChange={v=>setNs(x=>({...x,phone:v}))} placeholder="1300 000 000"/>
+      </Grid2>
+      <Grid2 gap={10}>
+        <div>
+          <div style={{fontSize:12,color:T.muted,marginBottom:4,fontWeight:600}}>Category</div>
+          <Sel value={ns.category} onChange={v=>setNs(x=>({...x,category:v}))}
+            options={[{value:"",label:"— select —"},...SUPPLIER_CATS.map(c=>({value:c,label:c}))]}/>
+        </div>
+        <Inp label="Account No." value={ns.account_no} onChange={v=>setNs(x=>({...x,account_no:v}))} placeholder="Your account number with them"/>
+      </Grid2>
+      <Inp label="Address" value={ns.address} onChange={v=>setNs(x=>({...x,address:v}))}/>
+      <Inp label="ABN / ACN" value={ns.abn} onChange={v=>setNs(x=>({...x,abn:v}))}/>
+      <Inp label="Notes" value={ns.notes} onChange={v=>setNs(x=>({...x,notes:v}))} rows={2}/>
+      <Row gap={8}><Btn v="pri" onClick={saveNew} disabled={busy}>{busy?"Saving…":"Add Supplier"}</Btn><Btn onClick={()=>setShowNew(false)}>Cancel</Btn></Row>
+    </Card>}
+
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1.6fr",gap:14}}>
+      <div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search suppliers…"
+          style={{width:"100%",background:T.card,border:`1px solid ${T.border}`,borderRadius:5,
+            padding:"7px 11px",color:T.text,fontSize:13,outline:"none",fontFamily:T.font,marginBottom:10,boxSizing:"border-box"}}/>
+        {filtered.length===0
+          ? <Card><div style={{color:T.faint,fontSize:13,textAlign:"center",padding:20}}>{suppliers.length===0?"No suppliers yet. Add one above.":"No matches."}</div></Card>
+          : filtered.map(s=><div key={s.id} onClick={()=>{setSel(s.id);setEditing(false);}}
+              style={{padding:"11px 14px",borderRadius:7,marginBottom:6,cursor:"pointer",
+                background:sel===s.id?T.accentDim:T.card,border:`1px solid ${sel===s.id?T.accentBrd:T.border}`}}>
+              <div style={{fontWeight:700,fontSize:13,color:sel===s.id?T.accent:T.text}}>{s.name}</div>
+              <div style={{display:"flex",gap:8,marginTop:2,flexWrap:"wrap"}}>
+                {s.category&&<Bdg color={T.blue} sm>{s.category}</Bdg>}
+                {s.contact_name&&<span style={{color:T.muted,fontSize:11}}>{s.contact_name}</span>}
+              </div>
+            </div>)}
+      </div>
+
+      {supplier&&<Card>
+        {!editing
+          ? <>
+              <Row gap={8} sx={{marginBottom:14}}>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:800,fontSize:16,color:T.text}}>{supplier.name}</div>
+                  <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
+                    {supplier.category&&<Bdg color={T.blue} sm>{supplier.category}</Bdg>}
+                    {supplier.account_no&&<span style={{color:T.muted,fontSize:11}}>Acct: {supplier.account_no}</span>}
+                  </div>
+                </div>
+                <Btn sm v="blu" onClick={()=>{setNs({name:supplier.name,contact_name:supplier.contact_name||"",email:supplier.email||"",phone:supplier.phone||"",address:supplier.address||"",abn:supplier.abn||"",category:supplier.category||"",account_no:supplier.account_no||"",notes:supplier.notes||""});setEditing(true);}}>Edit</Btn>
+                <Btn sm v="red" onClick={()=>del(supplier)}>Delete</Btn>
+              </Row>
+              {[["Contact",supplier.contact_name],["Email",supplier.email],["Phone",supplier.phone],["Address",supplier.address],["ABN",supplier.abn],["Notes",supplier.notes]].map(([l,v])=>v&&
+                <div key={l} style={{display:"flex",gap:10,padding:"5px 0",borderBottom:`1px solid ${T.border}`,fontSize:13}}>
+                  <span style={{color:T.faint,width:70,flexShrink:0}}>{l}</span>
+                  <span style={{color:T.text}}>{v}</span>
+                </div>)}
+            </>
+          : <>
+              <div style={{fontWeight:700,marginBottom:12,color:T.accent}}>Edit Supplier</div>
+              <Grid2 gap={10}>
+                <Inp label="Supplier Name" value={ns.name} onChange={v=>setNs(x=>({...x,name:v}))}/>
+                <Inp label="Contact Name" value={ns.contact_name} onChange={v=>setNs(x=>({...x,contact_name:v}))}/>
+              </Grid2>
+              <Grid2 gap={10}>
+                <Inp label="Email" value={ns.email} onChange={v=>setNs(x=>({...x,email:v}))}/>
+                <Inp label="Phone" value={ns.phone} onChange={v=>setNs(x=>({...x,phone:v}))}/>
+              </Grid2>
+              <Grid2 gap={10}>
+                <div>
+                  <div style={{fontSize:12,color:T.muted,marginBottom:4,fontWeight:600}}>Category</div>
+                  <Sel value={ns.category} onChange={v=>setNs(x=>({...x,category:v}))}
+                    options={[{value:"",label:"— select —"},...SUPPLIER_CATS.map(c=>({value:c,label:c}))]}/>
+                </div>
+                <Inp label="Account No." value={ns.account_no} onChange={v=>setNs(x=>({...x,account_no:v}))}/>
+              </Grid2>
+              <Inp label="Address" value={ns.address} onChange={v=>setNs(x=>({...x,address:v}))} sx={{gridColumn:"1/-1"}}/>
+              <Inp label="ABN / ACN" value={ns.abn} onChange={v=>setNs(x=>({...x,abn:v}))}/>
+              <Inp label="Notes" value={ns.notes} onChange={v=>setNs(x=>({...x,notes:v}))} rows={2}/>
               <Row gap={8}><Btn v="pri" onClick={saveEdit} disabled={busy}>{busy?"Saving…":"Save"}</Btn><Btn onClick={()=>setEditing(false)}>Cancel</Btn></Row>
             </>
         }
