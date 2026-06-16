@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, Component } from "react";
 import { supabase } from "../lib/supabase";
 import { listClients as dbListClients, createClient as dbCreateClient, updateClient as dbUpdateClient, deleteClient as dbDeleteClient } from "../lib/db/clients";
 import { getEstimate as dbGetEstimate, updateEstimate as dbUpdateEstimate, addItem as dbAddItem, addItems as dbAddItems, updateItem as dbUpdateItem, deleteItem as dbDeleteItem } from "../lib/db/estimates";
+import { updateProjectQuoteValue as dbUpdateProjectQuoteValue } from "../lib/db/projects";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -2015,7 +2016,25 @@ ${EXTRACT_SCHEMA}`;
         cab:ti.cab||undefined,
       };
     });
-    onMutate(p=>({...p,lineItems:[...(p.lineItems||[]),...toAdd]}));
+
+    // Persist to Supabase (source of truth), then update in-memory + roll up total.
+    let withIds=toAdd;
+    try{
+      const { data:est }=await dbGetEstimate(proj.id);
+      if(est?.estimate?.id){
+        const saved=await dbAddItems(est.estimate.id, toAdd.map((it,i)=>({
+          category:it.category, description:it.description, qty:it.qty, unit:it.unit,
+          rate:it.rate, margin_pct:it.margin??null, source:"takeoff", cab:it.cab||null, sort_order:i,
+        })));
+        if(saved.data) withIds=toAdd.map((li,i)=>saved.data[i]?{...li,id:saved.data[i].id}:li);
+      }
+    }catch{}
+
+    onMutate(p=>{
+      const np={...p,lineItems:[...(p.lineItems||[]),...withIds]};
+      try{ dbUpdateProjectQuoteValue(proj.id, calc(np).total); }catch{}
+      return np;
+    });
     const priced=toAdd.filter(x=>x.rate>0).length;
     if(!pricing?.ready)
       pop(`${toAdd.length} items pushed. Set the Cabinet Preset to auto-price cabinets.`,"info");
@@ -2420,6 +2439,71 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
   const [nli, setNli] = useState({category:CATS[0],description:"",qty:1,unit:"m²",rate:0,margin:proj.margin||20});
   const [templates,setTemplates]=useLS("qf_templates",[]);
   const [showTpl,setShowTpl]=useState(false);
+  const [estId,setEstId]=useState(null);
+  const [estLoading,setEstLoading]=useState(true);
+
+  // ── Supabase persistence ────────────────────────────────────────────────
+  // Source of truth for line items is the estimate_items table. On open we load
+  // items into proj.lineItems (so every existing reader/calc keeps working),
+  // and every mutation writes through to Supabase + rolls the total to the
+  // project's quote_value for the dashboard / quote / list views.
+  useEffect(()=>{
+    let on=true;
+    (async()=>{
+      setEstLoading(true);
+      const { data, error } = await dbGetEstimate(proj.id);
+      if(!on) return;
+      if(error){ setEstLoading(false); return; } // table missing etc. — fail soft
+      setEstId(data.estimate.id);
+      // hydrate margin/overhead from the estimate row if the project lacks them
+      const items=(data.items||[]).map(r=>({
+        id:r.id, category:r.category, description:r.description, qty:Number(r.qty)||0,
+        unit:r.unit, rate:Number(r.rate)||0, margin:r.margin_pct==null?undefined:Number(r.margin_pct),
+        source:r.source||"manual", cab:r.cab||undefined,
+      }));
+      onMutate(p=>({...p, lineItems:items,
+        margin:p.margin??data.estimate.margin_pct, overhead:p.overhead??data.estimate.overhead_pct}));
+      setEstLoading(false);
+    })();
+    return ()=>{on=false;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[proj.id]);
+
+  // roll the computed total onto the project record so dashboard/quote/list read it
+  async function rollupTotal(updatedProj){
+    try{
+      const total=calc(updatedProj).total;
+      await dbUpdateProjectQuoteValue(proj.id, total);
+    }catch{}
+  }
+
+  // mutate in-memory (keeps every reader working) AND persist the change
+  function persistAdd(item){
+    if(!estId) return;
+    dbAddItem(estId,{
+      category:item.category, description:item.description, qty:item.qty, unit:item.unit,
+      rate:item.rate, margin_pct:item.margin??null, source:item.source||"manual", cab:item.cab||null,
+      sort_order:0,
+    }).then(({data})=>{
+      if(data){ // swap the temp id for the db id
+        onMutate(p=>({...p,lineItems:p.lineItems.map(li=>li.id===item.id?{...li,id:data.id}:li)}));
+      }
+    });
+  }
+  function persistUpdate(id,patch){
+    if(!estId) return;
+    const map={qty:"qty",rate:"rate",margin:"margin_pct",description:"description",category:"category",unit:"unit"};
+    const dbPatch={}; Object.entries(patch).forEach(([k,v])=>{ if(map[k]) dbPatch[map[k]]=v; });
+    if(Object.keys(dbPatch).length) dbUpdateItem(id,dbPatch);
+  }
+  function persistDelete(id){ if(estId) dbDeleteItem(id); }
+  function persistBulk(items){
+    if(!estId) return Promise.resolve([]);
+    return dbAddItems(estId, items.map((it,i)=>({
+      category:it.category, description:it.description, qty:it.qty, unit:it.unit,
+      rate:it.rate, margin_pct:it.margin??null, source:it.source||"takeoff", cab:it.cab||null, sort_order:i,
+    }))).then(({data})=>data||[]);
+  }
 
   function saveTemplate(){
     const name=safePrompt("Template name:",proj.name+" template");
@@ -2429,9 +2513,12 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
       overhead:proj.overhead,margin:proj.margin}]);
     pop(`Template "${name}" saved — reuse it on any project.`);
   }
-  function applyTemplate(t){
-    onMutate(p=>({...p,lineItems:[...(p.lineItems||[]),
-      ...t.lineItems.map(li=>({...li,id:uid(),source:"template"}))]}));
+  async function applyTemplate(t){
+    const newItems=t.lineItems.map(li=>({...li,id:uid(),source:"template"}));
+    const saved=await persistBulk(newItems);
+    // use db ids where returned
+    const withIds=newItems.map((li,i)=>saved[i]?{...li,id:saved[i].id}:li);
+    onMutate(p=>{ const np={...p,lineItems:[...(p.lineItems||[]),...withIds]}; rollupTotal(np); return np; });
     setShowTpl(false);
     pop(`Template "${t.name}" applied — ${t.lineItems.length} items added.`);
   }
@@ -2461,24 +2548,39 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
 
   function repriceCabItems(){
     const cfg=proj.cabConfig||cabLib||SEED_CABLIB;
-    onMutate(p=>({...p,lineItems:p.lineItems.map(li=>{
-      if(!li.cab) return li;
-      const priced=priceCabLine(li.cab,cfg);
-      if(!priced) return li;
-      const rate=priced.installMode!=="ea"?priced.supply+priced.installCost:priced.unitCost;
-      return {...li,rate:parseFloat(rate.toFixed(2))};
-    })}));
+    onMutate(p=>{
+      const np={...p,lineItems:p.lineItems.map(li=>{
+        if(!li.cab) return li;
+        const priced=priceCabLine(li.cab,cfg);
+        if(!priced) return li;
+        const rate=priced.installMode!=="ea"?priced.supply+priced.installCost:priced.unitCost;
+        const r=parseFloat(rate.toFixed(2));
+        persistUpdate(li.id,{rate:r});
+        return {...li,rate:r};
+      })};
+      rollupTotal(np); return np;
+    });
     pop("Cabinetry items re-priced with current project config.");
   }
 
   function updLI(id,k,v) {
-    onMutate(p=>({...p,lineItems:p.lineItems.map(li=>
-      li.id===id?{...li,[k]:["qty","rate","margin"].includes(k)?parseFloat(v)||0:v}:li)}));
+    onMutate(p=>{
+      const np={...p,lineItems:p.lineItems.map(li=>
+        li.id===id?{...li,[k]:["qty","rate","margin"].includes(k)?parseFloat(v)||0:v}:li)};
+      persistUpdate(id,{[k]:["qty","rate","margin"].includes(k)?parseFloat(v)||0:v});
+      rollupTotal(np); return np;
+    });
   }
-  function delLI(id) { onMutate(p=>({...p,lineItems:p.lineItems.filter(li=>li.id!==id)})); pop("Removed."); }
+  function delLI(id) {
+    persistDelete(id);
+    onMutate(p=>{ const np={...p,lineItems:p.lineItems.filter(li=>li.id!==id)}; rollupTotal(np); return np; });
+    pop("Removed.");
+  }
   function addLI() {
     if(!nli.description) return pop("Description required.","error");
-    onMutate(p=>({...p,lineItems:[...(p.lineItems||[]),{...nli,id:Date.now(),source:"manual"}]}));
+    const item={...nli,id:uid(),source:"manual"};
+    persistAdd(item);
+    onMutate(p=>{ const np={...p,lineItems:[...(p.lineItems||[]),item]}; rollupTotal(np); return np; });
     setNli({category:CATS[0],description:"",qty:1,unit:"m²",rate:0,margin:proj.margin||20});
     setShowAdd(false); pop("Item added.");
   }
@@ -2495,7 +2597,7 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
         ? <Btn v="pur" onClick={()=>setShowCabSetup(!showCabSetup)}>🪵 Cabinetry Setup {showCabSetup?"▴":"▾"}</Btn>
         : <Btn v="pur" onClick={initCabConfig}>🪵 Set Up Cabinetry Pricing</Btn>)}
       {cc&&(proj.lineItems||[]).some(li=>li.cab)&&<Btn v="yel" onClick={repriceCabItems}>↻ Re-price Cabinetry</Btn>}
-      {(proj.takeoffItems||[]).length>0&&<Btn v="tel" onClick={()=>{
+      {(proj.takeoffItems||[]).length>0&&<Btn v="tel" onClick={async()=>{
         const cfg=proj.cabConfig||cabLib||SEED_CABLIB;
         const add=(proj.takeoffItems||[]).map(ti=>{
           let rate=0;
@@ -2507,7 +2609,9 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
             category:ti.cab?(["Benchtop","Splashback"].includes(ti.cab.type)?"Benchtops":"Cabinetry"):(ti.type==="count"?"Windows & Doors":ti.type==="area"?"Foundations":"Framing"),
             description:ti.label,qty:ti.qty,unit:ti.unit,rate,margin:proj.margin||20,source:"takeoff",cab:ti.cab||undefined};
         });
-        onMutate(p=>({...p,lineItems:[...(p.lineItems||[]),...add]}));
+        const saved=await persistBulk(add);
+        const withIds=add.map((li,i)=>saved[i]?{...li,id:saved[i].id}:li);
+        onMutate(p=>{ const np={...p,lineItems:[...(p.lineItems||[]),...withIds]}; rollupTotal(np); return np; });
         pop(`${add.length} takeoff items imported.`);
       }}>⬡ Import from Takeoff</Btn>}
     </Row>
@@ -2607,9 +2711,9 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
           <Row gap={10}>
             <span style={{fontFamily:T.mono,color:T.accent,fontSize:12}}>${r.rate}/{r.unit}</span>
             <Btn sm v="blu" onClick={()=>{
-              onMutate(p=>({...p,lineItems:[...(p.lineItems||[]),{id:Date.now(),
-                category:r.category,description:r.description,qty:1,unit:r.unit,
-                rate:r.rate,margin:proj.margin||20,source:"rate"}]}));
+              const item={id:uid(),category:r.category,description:r.description,qty:1,unit:r.unit,rate:r.rate,margin:proj.margin||20,source:"rate"};
+              persistAdd(item);
+              onMutate(p=>{ const np={...p,lineItems:[...(p.lineItems||[]),item]}; rollupTotal(np); return np; });
               setShowRates(false); pop("Rate added.");
             }}>Add</Btn>
           </Row>

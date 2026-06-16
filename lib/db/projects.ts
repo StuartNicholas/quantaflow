@@ -49,6 +49,20 @@ export async function updateProject(id: string, patch: any): Promise<DbResult<an
   }
 }
 
+/** Roll a computed estimate total onto the project so dashboard/quote/list read it. */
+export async function updateProjectQuoteValue(id: string, total: number): Promise<DbResult<true>> {
+  try {
+    const { error } = await supabase
+      .from("projects")
+      .update({ quote_value: total, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) return { data: null, error: errMsg(error) };
+    return { data: true, error: null };
+  } catch (e) {
+    return { data: null, error: errMsg(e) };
+  }
+}
+
 export async function deleteProject(id: string, name?: string): Promise<DbResult<true>> {
   try {
     const { error } = await supabase.from("projects").delete().eq("id", id);
