@@ -57,11 +57,6 @@ export default function AuthGate({ children }: AuthGateProps) {
     }
   }
 
-  async function signOut() {
-    await supabase.auth.signOut();
-    setUser(null);
-  }
-
   if (loading) {
     return (
       <main style={styles.page}>
@@ -99,15 +94,9 @@ export default function AuthGate({ children }: AuthGateProps) {
     );
   }
 
-  return (
-    <>
-      {children}
-      <div style={styles.userBar}>
-        <span>{user.email}</span>
-        <button onClick={signOut} style={styles.logout}>Logout</button>
-      </div>
-    </>
-  );
+  // The user bar / logout now lives inside the app (top bar shows the name,
+  // Settings holds the Logout button) so it no longer floats over content.
+  return <>{children}</>;
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -125,6 +114,4 @@ const styles: Record<string, React.CSSProperties> = {
   submit: { marginTop: 16, background: "#f59e0b", color: "#111827", border: 0, borderRadius: 10, padding: 14, fontSize: 16, fontWeight: 900, cursor: "pointer" },
   message: { color: "#fbbf24", marginTop: 18, fontSize: 14 },
   muted: { color: "#94a3b8" },
-  userBar: { position: "fixed", bottom: 16, right: 16, zIndex: 50, background: "#101820", border: "1px solid #243241", borderRadius: 12, padding: "10px 12px", color: "white", display: "flex", gap: 12, alignItems: "center", fontFamily: "Arial, sans-serif", fontSize: 14, boxShadow: "0 12px 30px rgba(0,0,0,0.35)" },
-  logout: { background: "#dc2626", color: "white", border: 0, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontWeight: 700 },
 };

@@ -671,6 +671,36 @@ export default function App() {
   const [trash,     setTrash]     = useLS("qf_trash", []);
   const [storageErr,setStorageErr]= useState(null);
   const [clientImport, setClientImport] = useState(null); // {legacy:[...]} when a one-time import is offered
+  const [profileName, setProfileName] = useState(null);   // editable display name from profiles.full_name
+
+  // Friendly display name: saved profile name → auth metadata → email prefix.
+  const displayName = profileName
+    || user?.user_metadata?.full_name
+    || user?.user_metadata?.name
+    || (user?.email ? user.email.split("@")[0] : "User");
+
+  // Load the saved display name once we know the user.
+  useEffect(()=>{
+    if(!user?.id) return;
+    let on=true;
+    supabase.from("profiles").select("full_name").eq("id",user.id).maybeSingle()
+      .then(({data})=>{ if(on && data?.full_name) setProfileName(data.full_name); });
+    return ()=>{on=false;};
+  },[user?.id]);
+
+  async function saveProfileName(name){
+    const clean=(name||"").trim();
+    setProfileName(clean||null);
+    if(!user?.id) return {error:"Not signed in."};
+    const { error }=await supabase.from("profiles").update({full_name:clean||null}).eq("id",user.id);
+    return { error: error?.message||null };
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    setUser(null);
+    // onAuthStateChange in AuthGate will flip back to the login screen.
+  }
 
   // Load clients from Supabase; offer a one-time, non-destructive import of any
   // legacy localStorage clients (qf_clients) the first time the table is empty.
@@ -829,6 +859,19 @@ export default function App() {
   function openProj(id, tab="takeoff") { setProjId(id); setProjTab(tab); }
   function closeProj() { setProjId(null); }
 
+  // "Jump to Rate Library, keep my place" — used by the takeoff library picker
+  // when an item needs adding. Remembers the project+tab so the user returns
+  // exactly where they were. Takeoff already auto-persists, so nothing is lost.
+  const [returnTo, setReturnTo] = useState(null); // {projId, tab}
+  function gotoLibrary(){
+    if(projId){ setReturnTo({projId, tab:projTab}); }
+    setProjId(null);
+    setNav("rates");
+  }
+  function returnToProject(){
+    if(returnTo){ setProjId(returnTo.projId); setProjTab(returnTo.tab||"takeoff"); setReturnTo(null); }
+  }
+
   function pushXero(proj) {
     const c = calc(proj);
     const ref = "INV-"+String(Math.floor(1000+Math.random()*9000));
@@ -904,6 +947,22 @@ export default function App() {
       <main style={{flex:1,overflowY:"auto",padding:26,minWidth:0}}>
         {toast && <Toast msg={toast.msg} type={toast.type} onDone={()=>setToast(null)}/>}
 
+        {/* Top account bar — user name, always visible, right-aligned so it
+            never clashes with the project total shown below it. */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",
+          gap:10,marginBottom:18,paddingBottom:14,borderBottom:`1px solid ${T.border}`}}>
+          <div style={{textAlign:"right",lineHeight:1.2}}>
+            <div style={{fontSize:13,fontWeight:700,color:T.text}}>{displayName}</div>
+            <div style={{fontSize:11,color:T.faint}}>{company?.name||"Your company"}</div>
+          </div>
+          <div onClick={()=>setNav("settings")} title="Account & settings"
+            style={{width:34,height:34,borderRadius:"50%",background:T.accentDim,
+              border:`1px solid ${T.accentBrd}`,color:T.accent,display:"flex",
+              alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:14,cursor:"pointer"}}>
+            {(displayName||"U").slice(0,1).toUpperCase()}
+          </div>
+        </div>
+
         {clientImport&&<div style={{background:T.blueDim,border:`1px solid ${T.blue}55`,borderRadius:7,
           padding:"10px 16px",marginBottom:14,fontSize:13,color:T.blue,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
           <span>📥 Found {clientImport.legacy.length} client{clientImport.legacy.length!==1?"s":""} saved in this browser from before. Import them into your company account?</span>
@@ -927,15 +986,20 @@ export default function App() {
               proj={curProj} tab={projTab} setTab={setProjTab}
               clients={clients} rates={rates} cabLib={cabLib} company={company}
               onMutate={fn=>mutProj(curProj.id,fn)}
-              onBack={closeProj} onPushXero={pushXero} pop={pop}
+              onBack={closeProj} onPushXero={pushXero} onGotoLibrary={gotoLibrary} pop={pop}
             />
           : <>
+              {returnTo && nav==="rates" && <div style={{background:T.accentDim,border:`1px solid ${T.accentBrd}`,borderRadius:7,
+                padding:"10px 16px",marginBottom:14,fontSize:13,color:T.accent,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                <span>📝 Add the item you need to your library, then head back to your takeoff — your progress is saved.</span>
+                <span style={{marginLeft:"auto"}}><Btn sm v="pri" onClick={returnToProject}>← Back to takeoff</Btn></span>
+              </div>}
               {nav==="dashboard" && <Dashboard projects={projects} xero={xero} onOpen={openProj} setNav={setNav}/>}
               {nav==="projects"  && <ProjectsModule projects={projects} loading={projectsLoading} error={projectsError} company={company} onOpen={openProj} onTrash={trashProject} pop={pop} createProject={createProject}/>}
               {nav==="clients"   && <ClientsModule clients={clients} reloadClients={reloadClients} clientsLoading={clientsLoading} projects={projects} pop={pop}/>}
               {nav==="rates"     && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
               {nav==="xero"      && <XeroModule projects={projects} xero={xero} setXero={setXero} mutProj={mutProj} pop={pop}/>}
-              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} trash={trash} setTrash={setTrash} onRestore={restoreProject} pop={pop}/>}
+              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} pop={pop}/>}
             </>
         }
         </ErrorBoundary>
@@ -1145,7 +1209,7 @@ function ProjectsModule({projects,loading,error,company,onOpen,onTrash,pop,creat
 // ═══════════════════════════════════════════════════════════════════════════
 // PROJECT WORKSPACE
 // ═══════════════════════════════════════════════════════════════════════════
-function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate,onBack,onPushXero,pop}) {
+function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate,onBack,onPushXero,onGotoLibrary,pop}) {
   const c = calc(proj);
   const sm = STATUS[proj.status]||STATUS.draft;
 
@@ -1154,6 +1218,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {id:"preset",   label:"② Cabinet Preset"},
     {id:"estimate", label:"③ Estimate"},
     {id:"quote",    label:"④ Quote"},
+    {id:"orderlist",label:"🧾 Order List"},
     {id:"jobcost",  label:"Job Costs"},
     {id:"claims",   label:"Claims"},
     {id:"info",     label:"Project Info"},
@@ -1182,10 +1247,11 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
       </div>
     </Row>
     <Tabs tabs={TABS} active={tab} onChange={setTab}/>
-    {tab==="takeoff"  && <TakeoffModule proj={proj} cabLib={cabLib} onMutate={onMutate} pop={pop}/>}
+    {tab==="takeoff"  && <TakeoffModule proj={proj} cabLib={cabLib} onMutate={onMutate} onGotoLibrary={onGotoLibrary} pop={pop}/>}
     {tab==="preset"   && <CabinetPreset proj={proj} pop={pop}/>}
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
     {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} onMutate={onMutate} pop={pop}/>}
+    {tab==="orderlist"&& <OrderListModule proj={proj} pop={pop}/>}
     {tab==="jobcost"  && <Parked name="Job Costs" desc="Actual-cost tracking and estimate-vs-actual reporting arrives in a later version. Version 1 focuses on estimating and commercial control."/>}
     {tab==="claims"   && <Parked name="Progress Claims" desc="Progress claim scheduling and invoicing will be added in a later version, integrating with Xero rather than rebuilding accounting."/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
@@ -1397,10 +1463,161 @@ function CabinetPreset({proj, pop}) {
   </div>;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// ORDER LIST MODULE — rolls up every cabinet in the project into a procurement
+// list: board SHEETS to order (guillotine-row estimate per board, with editable
+// contingency), hardware counts, and other catalogue items. An ordering estimate.
+// ════════════════════════════════════════════════════════════════════════════
+function OrderListModule({proj, pop}) {
+  const [companyId,setCompanyId]=useState(null);
+  const [rules,setRules]=useState(null);
+  const [preset,setPreset]=useState(null);
+  const [items,setItems]=useState([]);          // catalogue items (for sheet sizes + names)
+  const [contingency,setContingency]=useState(proj.sheet_contingency_pct??15);
+  const [loading,setLoading]=useState(true);
+  const [err,setErr]=useState(null);
+
+  useEffect(()=>{(async()=>{
+    setLoading(true); setErr(null);
+    try{
+      const { data:u }=await supabase.auth.getUser();
+      const uid=u?.user?.id; if(!uid) throw new Error("Not signed in.");
+      const { data:prof }=await supabase.from("profiles").select("company_id").eq("id",uid).single();
+      const cid=prof?.company_id; setCompanyId(cid);
+      const [{data:r},{data:pr},{data:its}]=await Promise.all([
+        supabase.from("cabinet_formula").select("*").eq("company_id",cid).maybeSingle(),
+        supabase.from("project_cabinet_preset").select("*").eq("project_id",proj.id).maybeSingle(),
+        supabase.from("catalogue_items").select("*").eq("company_id",cid),
+      ]);
+      setRules(r); setPreset(pr); setItems(its||[]);
+    }catch(e){ setErr(e?.message||String(e)); }
+    finally{ setLoading(false); }
+  })();},[proj.id]);
+
+  async function saveContingency(v){
+    setContingency(v);
+    try{ await supabase.from("projects").update({sheet_contingency_pct:v}).eq("id",proj.id); }catch{}
+  }
+
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Building order list…</div></Card>;
+  if(err) return <Card><div style={{color:T.red,fontSize:13}}>Couldn't load: {err}</div>
+    <div style={{color:T.faint,fontSize:12,marginTop:6}}>If this mentions a missing column/table, run the ORDER-LIST Layer 7 SQL in Supabase.</div></Card>;
+
+  // gather all real cabinets in the project (takeoff items + estimate line items with a cab tag)
+  const cabs=[];
+  (proj.takeoffItems||[]).forEach(ti=>{ if(ti.cab&&ti.cab.type!=="Benchtop"&&ti.cab.type!=="Splashback") for(let i=0;i<(ti.qty||1);i++) cabs.push(ti.cab); });
+  (proj.lineItems||[]).forEach(li=>{ if(li.cab&&li.source!=="takeoff"&&li.cab.type!=="Benchtop"&&li.cab.type!=="Splashback") for(let i=0;i<(li.qty||1);i++) cabs.push(li.cab); });
+
+  const itemById=id=>items.find(x=>x.id===id);
+  const carcassItem=itemById(preset?.carcass_item_id);
+  const frontItem  =itemById(preset?.front_item_id);
+  const sheetFor=(it)=>({
+    length: it?.sheet_length_mm||3600, width: it?.sheet_width_mm||1800,
+    kerf: it?.kerf_mm??4, trim: it?.trim_mm??10,
+  });
+
+  // collect parts per board pool
+  const carcassParts=[], frontParts=[];
+  let hinges=0,handles=0,feet=0,drawerRunners=0;
+  cabs.forEach(cab=>{
+    const parts=cabinetParts(cab, rules);
+    carcassParts.push(...parts.carcass);
+    frontParts.push(...parts.fronts);
+    const {doors,drawers}=parseCabConfig(cab.config||"");
+    hinges += doors*(rules?.hinges_per_door??2);
+    handles+= doors*(rules?.handles_per_door??1)+drawers*(rules?.handles_per_drawer??1);
+    feet   += /base/i.test(cab.type||"")?(rules?.feet_per_base??4):0;
+    drawerRunners += drawers; // 1 runner set per drawer
+  });
+
+  const cont=1+(parseFloat(contingency)||0)/100;
+  const carcassSheet=sheetFor(carcassItem);
+  const frontSheet=sheetFor(frontItem);
+  const carcassEst=estimateSheets(carcassParts, carcassSheet);
+  const frontEst=estimateSheets(frontParts, frontSheet);
+  const carcassOrder=Math.ceil(carcassEst.sheets*cont);
+  const frontOrder=Math.ceil(frontEst.sheets*cont);
+
+  if(cabs.length===0) return <div>
+    <Hdr sub="Board sheets, hardware and items to order for this project.">Order List</Hdr>
+    <Card><div style={{color:T.muted,fontSize:13}}>No cabinets in this project yet. Add cabinets in the Takeoff tab, then come back for your order list.</div></Card>
+  </div>;
+
+  const boardRows=[
+    {label:"Carcass board", item:carcassItem, est:carcassEst, order:carcassOrder, sheet:carcassSheet, parts:carcassParts.length},
+    {label:"Front / finish board", item:frontItem, est:frontEst, order:frontOrder, sheet:frontSheet, parts:frontParts.length},
+  ];
+  const hardwareRows=[
+    {name:"Hinges", qty:hinges, item:itemById(preset?.hinge_item_id)},
+    {name:"Handles", qty:handles, item:itemById(preset?.handle_item_id)},
+    {name:"Legs / feet", qty:feet, item:itemById(preset?.foot_item_id)},
+    {name:"Drawer runner sets", qty:drawerRunners, item:null},
+  ].filter(r=>r.qty>0);
+
+  return <div>
+    <Hdr sub={`${cabs.length} cabinets · board sheets, hardware and items to order.`}>Order List</Hdr>
+
+    <Card hi sx={{marginBottom:14}}>
+      <Row gap={12} sx={{alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:240}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:2}}>Sheet ordering estimate</div>
+          <div style={{color:T.faint,fontSize:11,lineHeight:1.6}}>
+            Sheets are estimated by laying each part onto your board in rows (allowing for saw kerf and edge trim) — closer to reality than area ÷ sheet. It's an <b>ordering estimate, not a cut list</b>; tune the contingency below to match what your nesting software actually uses over a few jobs.
+          </div>
+        </div>
+        <Inp label="Contingency %" value={contingency} onChange={v=>saveContingency(+v||0)} type="number" mono sx={{width:120,marginBottom:0}}/>
+      </Row>
+    </Card>
+
+    {/* BOARD SHEETS */}
+    <Card sx={{marginBottom:14,padding:0,overflow:"hidden"}}>
+      <div style={{padding:"9px 14px",background:T.bg,borderBottom:`1px solid ${T.border}`,fontWeight:700,fontSize:12,color:T.accent,textTransform:"uppercase",letterSpacing:"0.05em"}}>Board to order</div>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+        <thead><tr style={{color:T.faint,fontSize:11,textAlign:"left"}}>
+          {["Board","Sheet size","Parts","Est. sheets","Utilisation","Order qty"].map((h,i)=><th key={i} style={{padding:"7px 12px",fontWeight:600,textAlign:i>1?"right":"left"}}>{h}</th>)}
+        </tr></thead>
+        <tbody>
+          {boardRows.map((b,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+            <td style={{padding:"8px 12px"}}>
+              <div style={{fontWeight:700,color:T.text}}>{b.label}</div>
+              <div style={{color:T.faint,fontSize:11}}>{b.item?.name||<span style={{color:T.yellow}}>not set in preset — using 3600×1800 default</span>}</div>
+            </td>
+            <td style={{padding:"8px 12px",color:T.muted,fontFamily:T.mono}}>{b.sheet.length}×{b.sheet.width}</td>
+            <td style={{padding:"8px 12px",textAlign:"right",color:T.muted,fontFamily:T.mono}}>{b.parts}</td>
+            <td style={{padding:"8px 12px",textAlign:"right",color:T.muted,fontFamily:T.mono}}>{b.est.sheets}{b.est.oversize>0&&<span style={{color:T.red}} title="parts too big for this sheet"> · {b.est.oversize}⚠</span>}</td>
+            <td style={{padding:"8px 12px",textAlign:"right",color:T.muted,fontFamily:T.mono}}>{(b.est.util*100).toFixed(0)}%</td>
+            <td style={{padding:"8px 12px",textAlign:"right",fontFamily:T.mono,fontWeight:800,color:T.accent,fontSize:14}}>{b.order} sheets</td>
+          </tr>)}
+        </tbody>
+      </table>
+      <div style={{padding:"8px 14px",color:T.faint,fontSize:11,borderTop:`1px solid ${T.border}`}}>
+        Order qty includes your {contingency}% contingency. ⚠ marks parts larger than the sheet — check those cabinets.
+      </div>
+    </Card>
+
+    {/* HARDWARE */}
+    <Card sx={{marginBottom:14,padding:0,overflow:"hidden"}}>
+      <div style={{padding:"9px 14px",background:T.bg,borderBottom:`1px solid ${T.border}`,fontWeight:700,fontSize:12,color:T.accent,textTransform:"uppercase",letterSpacing:"0.05em"}}>Hardware to order</div>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+        <tbody>
+          {hardwareRows.map((h,i)=><tr key={i} style={{borderTop:i?`1px solid ${T.border}`:"none"}}>
+            <td style={{padding:"8px 12px",fontWeight:600,color:T.text}}>{h.name}<span style={{color:T.faint,fontWeight:400}}>{h.item?` · ${h.item.name}`:""}</span></td>
+            <td style={{padding:"8px 12px",textAlign:"right",fontFamily:T.mono,fontWeight:800,color:T.accent}}>{h.qty}</td>
+          </tr>)}
+        </tbody>
+      </table>
+    </Card>
+
+    <div style={{color:T.faint,fontSize:11}}>
+      Counts roll up every cabinet in this project. Benchtops and splashbacks are excluded (ordered by lineal metre/area separately).
+    </div>
+  </div>;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // TAKEOFF MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function TakeoffModule({proj, cabLib, onMutate, pop}) {
+function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
   const [activeTool, setActiveTool] = useState("select");
   const [activeLayer, setActiveLayer] = useState(null);
   const [pdfMeta, setPdfMeta] = useState(null); // {name, numPages, thumbs}
@@ -1409,6 +1626,12 @@ function TakeoffModule({proj, cabLib, onMutate, pop}) {
   const [aLog, setALog] = useState([]);
   const [progress, setProgress] = useState({done:0,total:0});
   const [showAddItem, setShowAddItem] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);   // library item picker
+  const [pickSearch, setPickSearch] = useState("");
+  const [pickRoom, setPickRoom] = useState("");
+  const [pickQty, setPickQty] = useState(1);
+  const [libRules, setLibRules] = useState(null);        // cabinet_formula for generating the library
+  const [libLoading, setLibLoading] = useState(false);
   const [newItem, setNewItem] = useState({type:"area",label:"",qty:0,unit:"m²",layerId:null});
   // ── On-plan measurement (scale calibration + linear/area/count tools)
   const [measure, setMeasure] = useState(null); // {pageIdx, img, w, h, tool, pts:[{x,y}], counts:[{x,y}]}
@@ -1873,6 +2096,59 @@ ${EXTRACT_SCHEMA}`;
     setShowAddItem(false); pop("Item added.");
   }
 
+  // ── Library-first item entry ──────────────────────────────────────────────
+  // "+ Add Item" opens a picker that ONLY lets you choose from the company
+  // library for the selected trade. No free-text — this enforces company
+  // standards by design. Trade scope must be chosen first.
+  const selectedTradesForPick = proj.trades||[];
+  const cabinetryInScope = selectedTradesForPick.includes("cabinetry") || selectedTradesForPick.includes("joinery");
+
+  async function openPicker(){
+    if((proj.trades||[]).length===0){
+      pop("Select a trade scope first (e.g. Cabinetry / Joinery Fit-out), then add items.","error");
+      return;
+    }
+    setShowPicker(true);
+    if(!libRules){
+      setLibLoading(true);
+      try{
+        const { data:u }=await supabase.auth.getUser();
+        const { data:prof }=await supabase.from("profiles").select("company_id").eq("id",u?.user?.id).single();
+        if(prof?.company_id){
+          let { data:f }=await supabase.from("cabinet_formula").select("*").eq("company_id",prof.company_id).maybeSingle();
+          setLibRules(f||{});
+        }
+      }catch{}
+      setLibLoading(false);
+    }
+  }
+
+  // The library list (generated). Rates here are nominal — pricing happens at
+  // push-to-estimate against the project preset, so we pass 0s; we only need
+  // the type/config/width entries and their labels for selection.
+  const cabinetLibrary = libRules ? generateCabinetLibrary(libRules, {carcass:0,front:0}) : [];
+
+  // word-order-independent live filter: every typed token must appear somewhere
+  function pickMatches(){
+    const tokens=pickSearch.toLowerCase().split(/\s+/).filter(Boolean);
+    return cabinetLibrary.filter(c=>{
+      const hay=`${c.type} ${c.config} ${c.width}`.toLowerCase();
+      return tokens.every(t=>hay.includes(t));
+    });
+  }
+
+  function pickCabinet(c){
+    if(!pickRoom.trim()){ pop("Enter a room first (e.g. Kitchen) — it drives room pricing.","error"); return; }
+    const qty=Math.max(1, parseInt(pickQty)||1);
+    const cabLayer=(proj.takeoffLayers||[]).find(l=>/cabinet/i.test(l.name))?.id||activeLayer||null;
+    const label=`${pickRoom.trim()} — ${c.type} ${c.config} ${c.width}mm`;
+    onMutate(p=>({...p,takeoffItems:[...(p.takeoffItems||[]),{
+      id:uid(), layerId:cabLayer, type:"count", label, qty, unit:"ea", source:"library",
+      cab:{unit:"", room:pickRoom.trim(), type:c.type, config:c.config, width:c.width},
+    }]}));
+    pop(`Added ${qty}× ${c.type} ${c.config} ${c.width}mm to ${pickRoom.trim()}.`);
+  }
+
   // ── On-plan measurement ─────────────────────────────────────────────────
   async function openMeasure(pageIdx) {
     if(!rawFile.current) return pop("Upload a PDF first.","error");
@@ -2096,7 +2372,7 @@ ${EXTRACT_SCHEMA}`;
       {items.length>0&&<Btn v="grn" onClick={pushToEstimate}>→ Push {items.length} items to Estimate</Btn>}
       {pdfMeta&&<Btn v="blu" onClick={()=>openMeasure(currentPage)}>📐 Measure p{currentPage+1}</Btn>}
       <Btn v="gho" onClick={addLayer}>+ Layer</Btn>
-      <Btn v="gho" onClick={()=>setShowAddItem(!showAddItem)}>+ Manual Item</Btn>
+      <Btn v="pri" onClick={openPicker}>+ Add Item</Btn>
     </Row>
 
     {/* ── MEASURE PANEL — scale-calibrated on-plan measurement */}
@@ -2330,7 +2606,60 @@ ${EXTRACT_SCHEMA}`;
           })()}
         </Card>}
 
-        {/* ── Add manual item form */}
+        {/* ── Library item picker (library-only, searchable) ── */}
+        {showPicker&&<Card hi sx={{marginBottom:12}}>
+          <Row gap={8} sx={{alignItems:"center",marginBottom:10}}>
+            <div style={{fontWeight:700,fontSize:13}}>Add from your library</div>
+            <Bdg color={T.accent}>{tradeScope}</Bdg>
+            <div style={{marginLeft:"auto"}}><Btn sm v="gho" onClick={()=>setShowPicker(false)}>Done</Btn></div>
+          </Row>
+
+          {!cabinetryInScope
+            ? <div style={{color:T.muted,fontSize:13,padding:"8px 0"}}>
+                The selected trade doesn't have a library yet. Cabinetry / Joinery is available now — others are coming. Switch the trade scope to Cabinetry / Joinery Fit-out to pick items.
+              </div>
+            : libLoading
+              ? <div style={{color:T.muted,fontSize:13}}>Loading your library…</div>
+              : <>
+                <div style={{color:T.faint,fontSize:11,marginBottom:10}}>
+                  Every item comes from your library — this keeps quotes to company standard. Type any words in any order (e.g. “base 900”, “3 drawer”). Can't find it? Add it to your library first.
+                </div>
+                <Row gap={8} sx={{marginBottom:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+                  <Inp label="Room" value={pickRoom} onChange={setPickRoom} placeholder="e.g. Kitchen" sx={{width:160,marginBottom:0}}/>
+                  <Inp label="Qty" value={pickQty} onChange={setPickQty} type="number" mono sx={{width:80,marginBottom:0}}/>
+                  <div style={{flex:1,minWidth:200}}>
+                    <div style={{fontSize:11,color:T.faint,marginBottom:4}}>Search library</div>
+                    <input value={pickSearch} onChange={e=>setPickSearch(e.target.value)} placeholder="Type to filter… e.g. base 2 door 900" autoFocus
+                      style={{width:"100%",background:T.card,border:`1px solid ${T.border}`,borderRadius:5,padding:"8px 11px",color:T.text,fontSize:13,outline:"none",fontFamily:T.font}}/>
+                  </div>
+                </Row>
+
+                {/* contained, scrollable results list (NOT full screen) */}
+                <div style={{maxHeight:280,overflowY:"auto",border:`1px solid ${T.border}`,borderRadius:7,background:T.bg}}>
+                  {(()=>{ const m=pickMatches(); if(cabinetLibrary.length===0) return <div style={{padding:14,color:T.faint,fontSize:12}}>No cabinet library found. Set up your Cabinet Formula in Rate Library.</div>;
+                    if(m.length===0) return <div style={{padding:14,color:T.faint,fontSize:12}}>No matches for “{pickSearch}”.</div>;
+                    return m.slice(0,400).map(c=>(
+                      <div key={c.key} onClick={()=>pickCabinet(c)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                        padding:"8px 12px",borderBottom:`1px solid ${T.border}`,cursor:"pointer"}}
+                        onMouseEnter={e=>e.currentTarget.style.background=T.card}
+                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                        <span style={{fontSize:13,color:T.text}}>{c.type} <b>{c.config}</b> · {c.width}mm</span>
+                        <span style={{fontSize:11,color:T.accent,fontWeight:700}}>+ add</span>
+                      </div>));
+                  })()}
+                </div>
+                <div style={{marginTop:8,fontSize:11,color:T.faint}}>
+                  {pickMatches().length} of {cabinetLibrary.length} library items shown.
+                </div>
+              </>}
+
+          <Row gap={8} sx={{marginTop:12,paddingTop:10,borderTop:`1px solid ${T.border}`}}>
+            <span style={{fontSize:12,color:T.muted,alignSelf:"center"}}>Item not in your library?</span>
+            <Btn sm v="pur" onClick={()=>onGotoLibrary&&onGotoLibrary()}>+ Add it in Rate Library →</Btn>
+          </Row>
+        </Card>}
+
+        {/* ── Add manual item form (kept hidden; library-first is the path) */}
         {showAddItem&&<Card hi sx={{marginBottom:12}}>
           <div style={{fontWeight:700,marginBottom:10,fontSize:13}}>Add Takeoff Item</div>
           <Grid3 gap={10}>
@@ -3692,6 +4021,79 @@ function parseCabConfig(config){
   return {doors,drawers};
 }
 
+// ── ORDER LIST ENGINE ───────────────────────────────────────────────────────
+// Break a cabinet into individual rectangular PARTS (mm), split into 'carcass'
+// and 'front' board pools so they can be nested on their own sheet types.
+function cabinetParts(cab, rules){
+  const R=rules||{};
+  const type=cab.type||"Base";
+  let W=+cab.width||600, H=+cab.height||0, D=+cab.depth||0;
+  if(!H||!D){
+    if(/over|wall|upper/i.test(type)){ H=H||R.default_over_h||720; D=D||R.default_over_d||320; }
+    else if(/tall|pantry|broom/i.test(type)){ H=H||R.tall_height_default||R.default_tall_h||2400; D=D||R.default_tall_d||560; }
+    else { H=H||R.default_base_h||720; D=D||R.default_base_d||560; }
+  }
+  const {doors,drawers}=parseCabConfig(cab.config||"");
+  const carcass=[];
+  if(R.include_sides!==false){ carcass.push({name:"Side",l:H,w:D}); carcass.push({name:"Side",l:H,w:D}); }
+  if(R.include_topbottom!==false){ carcass.push({name:"Top",l:W,w:D}); carcass.push({name:"Bottom",l:W,w:D}); }
+  if(R.include_back!==false){ carcass.push({name:"Back",l:W,w:H}); }
+  const shelves=R.shelves_per_cab??0;
+  for(let i=0;i<shelves;i++) carcass.push({name:"Shelf",l:W,w:D});
+  // fronts: doors split the face vertically; drawers split horizontally
+  const fronts=[];
+  if(doors>0){ const dw=W/doors; for(let i=0;i<doors;i++) fronts.push({name:"Door",l:H,w:dw}); }
+  if(drawers>0){ const dh=H/drawers; for(let i=0;i<drawers;i++) fronts.push({name:"Drawer front",l:dh,w:W}); }
+  return {carcass, fronts};
+}
+
+// Guillotine-row sheet estimate: lay parts onto sheets in rows across the sheet
+// width, accounting for kerf between cuts and trim off the sheet edges. Returns
+// the sheet count + utilisation. An ORDER ESTIMATE, not a cut-ready nest.
+function estimateSheets(parts, sheet){
+  const SL=(sheet.length||3600)-(sheet.trim||10)*2;   // usable length
+  const SW=(sheet.width||1800)-(sheet.trim||10)*2;     // usable width
+  const kerf=sheet.kerf??4;
+  if(SL<=0||SW<=0) return {sheets:0, usedArea:0, sheetArea:0, util:0, oversize:parts.length};
+  // normalise each part so its longer side runs along the sheet length
+  const ps=parts.map(p=>{ let a=Math.max(p.l,p.w), b=Math.min(p.l,p.w); return {a,b,name:p.name}; })
+    // parts that can't fit even rotated are flagged oversize
+    ;
+  let oversize=0;
+  const fit=ps.filter(p=>{ const ok=(p.a<=SL&&p.b<=SW)||(p.b<=SL&&p.a<=SW); if(!ok)oversize++; return ok; });
+  // sort tall-first for tighter rows
+  fit.sort((x,y)=>y.b-x.b);
+  let sheets= fit.length?1:0;
+  let rowWidthUsed=0;      // accumulated across sheet width (the b dimension)
+  let rowLenCursor=0;      // position along the row length
+  let rowHeight=0;
+  let usedArea=0;
+  function newSheet(){ sheets++; rowWidthUsed=0; rowLenCursor=0; rowHeight=0; }
+  fit.forEach(p=>{
+    usedArea += p.a*p.b;
+    // place along current row length
+    if(rowLenCursor + p.a + kerf <= SL){
+      rowLenCursor += p.a + kerf;
+      rowHeight=Math.max(rowHeight, p.b);
+    } else {
+      // start a new row down the sheet width
+      rowWidthUsed += rowHeight + kerf;
+      if(rowWidthUsed + p.b <= SW){
+        rowLenCursor = p.a + kerf;
+        rowHeight = p.b;
+      } else {
+        // sheet full → new sheet
+        newSheet();
+        rowLenCursor = p.a + kerf;
+        rowHeight = p.b;
+      }
+    }
+  });
+  const sheetArea=(sheet.length||3600)*(sheet.width||1800);
+  const util = sheets>0 ? usedArea/(sheets*sheetArea) : 0;
+  return {sheets, usedArea:Math.round(usedArea), sheetArea, util:+util.toFixed(3), oversize};
+}
+
 // Resolve a project's cabinet pricing context once (formula rules + chosen rates),
 // then price any AI cabinet line. Returns {ctx, price(cabLine)} or null if unset.
 async function loadCabinetPricing(companyId, projectId){
@@ -4633,9 +5035,11 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // SETTINGS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function SettingsModule({company, setCompany, trash, setTrash, onRestore, pop}) {
+function SettingsModule({company, setCompany, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, pop}) {
   const [local, setLocal] = useState(company);
   const [ai, setAi] = useLS("qf_ai", {mode:"proxy",endpoint:"/api/ai",apiKey:""});
+  const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?"":displayName)||"");
+  const [savingName, setSavingName] = useState(false);
   const set = (k,v) => setLocal(x=>({...x,[k]:v}));
 
   // storage usage meter (localStorage ~5MB budget in most browsers)
@@ -4649,6 +5053,31 @@ function SettingsModule({company, setCompany, trash, setTrash, onRestore, pop}) 
 
   return <div>
     <Hdr sub="Company profile, branding, quote defaults and financial settings.">Settings</Hdr>
+
+    {/* ── Account ── */}
+    <Card sx={{marginBottom:16}}>
+      <div style={{fontWeight:700,fontSize:13,color:T.accent,marginBottom:12,textTransform:"uppercase",letterSpacing:"0.05em"}}>Account</div>
+      <Row gap={12} sx={{alignItems:"flex-start",flexWrap:"wrap"}}>
+        <div style={{width:44,height:44,borderRadius:"50%",background:T.accentDim,border:`1px solid ${T.accentBrd}`,
+          color:T.accent,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:18,flexShrink:0,marginTop:2}}>
+          {(displayName||"U").slice(0,1).toUpperCase()}
+        </div>
+        <div style={{flex:1,minWidth:220}}>
+          <Inp label="Your name" value={nameDraft} onChange={setNameDraft} placeholder="e.g. Stuart Nicholas" sx={{marginBottom:6}}/>
+          <Row gap={8} sx={{alignItems:"center"}}>
+            <Btn sm v="pri" disabled={savingName||nameDraft.trim()===(profileName||"").trim()} onClick={async()=>{
+              setSavingName(true);
+              const { error }=await onSaveName(nameDraft);
+              setSavingName(false);
+              pop(error?error:"Name saved.", error?"error":"success");
+            }}>{savingName?"Saving…":"Save name"}</Btn>
+            <span style={{fontSize:12,color:T.muted}}>{user?.email||""}</span>
+          </Row>
+          <div style={{fontSize:11,color:T.faint,marginTop:4}}>This name shows at the top of the app and on your activity.</div>
+        </div>
+        <Btn v="red" onClick={()=>{ if(safeConfirm("Log out of QuantaFlow?")) onSignOut?.(); }}>Log out</Btn>
+      </Row>
+    </Card>
 
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
       {/* Company details */}
