@@ -11,6 +11,7 @@ import { listQuoteVersions as dbListQuoteVersions, getQuoteVersionItems as dbGet
 import { listVariations as dbListVariations, createVariation as dbCreateVariation, updateVariation as dbUpdateVariation, deleteVariation as dbDeleteVariation } from "../lib/db/variations";
 import { getTakeoff as dbGetTakeoff, saveTakeoff as dbSaveTakeoff, addTakeoffItem as dbAddTakeoffItem, deleteTakeoffItem as dbDeleteTakeoffItem, ensureTakeoff as dbEnsureTakeoff, patchTakeoffMeta as dbPatchTakeoffMeta } from "../lib/db/takeoffs";
 import { listPurchaseOrders as dbListPurchaseOrders, createPurchaseOrder as dbCreatePurchaseOrder, updatePurchaseOrder as dbUpdatePurchaseOrder, deletePurchaseOrder as dbDeletePurchaseOrder, addPurchaseOrderItem as dbAddPurchaseOrderItem, addPurchaseOrderItems as dbAddPurchaseOrderItems, deletePurchaseOrderItem as dbDeletePurchaseOrderItem, getPOCommittedTotal as dbGetPOCommittedTotal } from "../lib/db/purchase_orders";
+import { listDefects as dbListDefects, createDefect as dbCreateDefect, updateDefect as dbUpdateDefect, deleteDefect as dbDeleteDefect, listHandoverItems as dbListHandoverItems, seedHandoverItems as dbSeedHandoverItems, createHandoverItem as dbCreateHandoverItem, toggleHandoverItem as dbToggleHandoverItem, deleteHandoverItem as dbDeleteHandoverItem } from "../lib/db/handover";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -1257,7 +1258,8 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {id:"orderlist",    label:"🧾 Order List"},
     {id:"procurement",  label:"Procurement"},
     {id:"jobcost",      label:"Job Costs"},
-    {id:"claims",   label:"Claims"},
+    {id:"handover",     label:"Handover"},
+    {id:"claims",       label:"Claims"},
     {id:"info",     label:"Project Info"},
   ];
 
@@ -1290,7 +1292,8 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="orderlist"    && <OrderListModule proj={proj} pop={pop}/>}
     {tab==="procurement"  && <ProcurementModule proj={proj} pop={pop}/>}
     {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} onMutate={onMutate} pop={pop}/>}
-    {tab==="claims"   && <Parked name="Progress Claims" desc="Progress claim scheduling and invoicing will be added in a later version, integrating with Xero rather than rebuilding accounting."/>}
+    {tab==="handover"  && <HandoverModule proj={proj} onMutate={onMutate} pop={pop}/>}
+    {tab==="claims"    && <Parked name="Progress Claims" desc="Progress claim scheduling and invoicing will be added in a later version, integrating with Xero rather than rebuilding accounting."/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
   </div>;
 }
@@ -4122,6 +4125,251 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, onM
           <span style={{color:T.faint,fontSize:11}}>{approvedVars.length} approved</span>
           <span style={{fontFamily:T.mono,fontWeight:700,color:T.yellow,fontSize:14}}>{$$(varTotal)}</span>
         </div>}
+      </div>
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HANDOVER MODULE — defects punch list + completion checklist
+// ═══════════════════════════════════════════════════════════════════════════
+function HandoverModule({proj, onMutate, pop}) {
+  const [defects,  setDefects]  = useState([]);
+  const [items,    setItems]    = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [showNew,  setShowNew]  = useState(false);
+  const [newItem,  setNewItem]  = useState("");
+  const [busy,     setBusy]     = useState(false);
+  const [nd, setNd] = useState({ref:"",description:"",location:"",assignee:"",priority:"medium",due_date:"",notes:""});
+
+  async function reload(){
+    const [{ data:d }, { data:h }] = await Promise.all([
+      dbListDefects(proj.id),
+      dbListHandoverItems(proj.id),
+    ]);
+    setDefects(d||[]);
+    setItems(h||[]);
+  }
+
+  useEffect(()=>{
+    let on=true;
+    (async()=>{
+      setLoading(true);
+      const [{ data:d }, { data:h }] = await Promise.all([
+        dbListDefects(proj.id),
+        dbListHandoverItems(proj.id),
+      ]);
+      if(!on) return;
+      setDefects(d||[]);
+      // Seed default checklist on first open
+      if(!h||h.length===0){
+        const { data:seeded } = await dbSeedHandoverItems(proj.id);
+        setItems(seeded||[]);
+      } else {
+        setItems(h);
+      }
+      setLoading(false);
+    })();
+    return ()=>{on=false;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[proj.id]);
+
+  function nextRef(){ return `D-${String(defects.length+1).padStart(3,"0")}`; }
+
+  function openNew(){
+    setNd({ref:nextRef(),description:"",location:"",assignee:"",priority:"medium",due_date:"",notes:""});
+    setShowNew(true);
+  }
+
+  async function createDefect(){
+    if(!nd.description.trim()) return pop("Description required.","error");
+    setBusy(true);
+    const { error } = await dbCreateDefect(proj.id, {...nd});
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setShowNew(false); await reload(); pop(`${nd.ref} logged.`);
+  }
+
+  async function setStatus(id, status){
+    const { error } = await dbUpdateDefect(id,{status});
+    if(error) return pop(error,"error");
+    await reload();
+  }
+
+  async function delDefect(id,ref){
+    if(!safeConfirm(`Delete defect ${ref}?`)) return;
+    await dbDeleteDefect(id); await reload(); pop("Defect deleted.","info");
+  }
+
+  async function toggleItem(item){
+    const { error } = await dbToggleHandoverItem(item.id, !item.checked);
+    if(error) return pop(error,"error");
+    setItems(prev=>prev.map(x=>x.id===item.id?{...x,checked:!item.checked}:x));
+  }
+
+  async function addItem(){
+    if(!newItem.trim()) return;
+    const { data, error } = await dbCreateHandoverItem(proj.id, newItem.trim(), items.length);
+    if(error) return pop(error,"error");
+    if(data) setItems(prev=>[...prev,data]);
+    setNewItem("");
+  }
+
+  async function delItem(id){
+    await dbDeleteHandoverItem(id);
+    setItems(prev=>prev.filter(x=>x.id!==id));
+  }
+
+  async function markComplete(){
+    const openDefects = defects.filter(d=>d.status!=="closed").length;
+    const unchecked   = items.filter(i=>!i.checked).length;
+    if(openDefects>0) return pop(`${openDefects} defect${openDefects>1?"s":""} still open — close them before marking complete.`,"error");
+    if(unchecked>0)   return pop(`${unchecked} checklist item${unchecked>1?"s":""} not ticked — complete them first.`,"error");
+    onMutate(p=>({...p,status:"complete"}));
+    pop("Project marked complete. Well done!");
+  }
+
+  const openCount    = defects.filter(d=>d.status==="open").length;
+  const inProgCount  = defects.filter(d=>d.status==="in_progress").length;
+  const closedCount  = defects.filter(d=>d.status==="closed").length;
+  const checkedCount = items.filter(i=>i.checked).length;
+  const pct          = items.length>0 ? Math.round(checkedCount/items.length*100) : 0;
+  const canComplete  = openCount===0 && inProgCount===0 && pct===100;
+
+  const PRIORITY = {low:{c:T.faint,l:"Low"},medium:{c:T.yellow,l:"Med"},high:{c:T.red,l:"High"}};
+  const DSTATUS  = {open:{c:T.red,l:"Open"},in_progress:{c:T.blue,l:"In Progress"},closed:{c:T.green,l:"Closed"}};
+
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading handover…</div></Card>;
+
+  return <div>
+    {/* ── KPIs */}
+    <Row gap={12} wrap sx={{marginBottom:18}}>
+      <KPI label="Open Defects"    value={openCount}   sub="need attention" color={openCount>0?T.red:T.green}/>
+      <KPI label="In Progress"     value={inProgCount} sub="being fixed"    color={T.blue}/>
+      <KPI label="Closed"          value={closedCount} sub="resolved"       color={T.green}/>
+      <KPI label="Checklist"       value={`${pct}%`}   sub={`${checkedCount}/${items.length} ticked`}
+        color={pct===100?T.green:T.yellow}/>
+    </Row>
+
+    {/* ── Checklist progress bar */}
+    <Card sx={{marginBottom:16}}>
+      <Row gap={10} sx={{marginBottom:8,alignItems:"center"}}>
+        <div style={{fontWeight:700,fontSize:13}}>Handover Progress</div>
+        <div style={{marginLeft:"auto",fontFamily:T.mono,fontSize:13,fontWeight:700,
+          color:pct===100?T.green:T.accent}}>{pct}%</div>
+      </Row>
+      <div style={{background:T.bg,borderRadius:4,height:8,overflow:"hidden",marginBottom:14}}>
+        <div style={{height:"100%",borderRadius:4,transition:"width 0.4s",
+          background:pct===100?`linear-gradient(90deg,${T.green},${T.teal})`:`linear-gradient(90deg,${T.accent},${T.yellow})`,
+          width:`${pct}%`}}/>
+      </div>
+      <Btn v={canComplete?"grn":"gho"} onClick={markComplete}
+        style={{opacity:canComplete?1:0.5,cursor:canComplete?"pointer":"not-allowed"}}>
+        {proj.status==="complete"?"✓ Project Complete":"Mark Project Complete"}
+      </Btn>
+      {!canComplete&&<div style={{color:T.faint,fontSize:11,marginTop:6}}>
+        Requires all defects closed and all checklist items ticked.
+      </div>}
+    </Card>
+
+    <div style={{display:"grid",gridTemplateColumns:"1fr 340px",gap:14,alignItems:"start"}}>
+
+      {/* ── Defects / Punch List ── */}
+      <div>
+        <Row gap={8} sx={{marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:13}}>Defects / Punch List</div>
+          <Btn sm v="red" onClick={openNew}>+ Log Defect</Btn>
+        </Row>
+
+        {showNew&&<Card hi sx={{marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:12,marginBottom:8}}>New Defect</div>
+          <div style={{display:"grid",gridTemplateColumns:"90px 1fr",gap:8,marginBottom:8}}>
+            <Inp label="Ref"      value={nd.ref}         onChange={v=>setNd(x=>({...x,ref:v}))}/>
+            <Inp label="Description" value={nd.description} onChange={v=>setNd(x=>({...x,description:v}))}
+              placeholder="What needs fixing?"/>
+            <Inp label="Location" value={nd.location}    onChange={v=>setNd(x=>({...x,location:v}))}
+              placeholder="e.g. Kitchen — base cabinet"/>
+            <Inp label="Assignee" value={nd.assignee}    onChange={v=>setNd(x=>({...x,assignee:v}))}
+              placeholder="Who is responsible?"/>
+            <Sel label="Priority" value={nd.priority}    onChange={v=>setNd(x=>({...x,priority:v}))}
+              options={[{value:"low",label:"Low"},{value:"medium",label:"Medium"},{value:"high",label:"High"}]}/>
+            <Inp label="Due Date" value={nd.due_date}    onChange={v=>setNd(x=>({...x,due_date:v}))} type="date"/>
+          </div>
+          <Inp label="Notes" value={nd.notes} onChange={v=>setNd(x=>({...x,notes:v}))}
+            placeholder="Additional notes" sx={{marginBottom:8}}/>
+          <Row gap={8}>
+            <Btn v="pri" sm onClick={createDefect} disabled={busy}>{busy?"Saving…":"Log Defect"}</Btn>
+            <Btn sm onClick={()=>setShowNew(false)}>Cancel</Btn>
+          </Row>
+        </Card>}
+
+        {defects.length===0&&!showNew&&<Card>
+          <div style={{color:T.faint,fontSize:13,padding:"8px 0"}}>
+            No defects logged. Use this register to track punch list items before handover.
+          </div>
+        </Card>}
+
+        {defects.map(d=>{
+          const st=DSTATUS[d.status]||DSTATUS.open;
+          const pr=PRIORITY[d.priority]||PRIORITY.medium;
+          return <Card key={d.id} sx={{marginBottom:8,padding:"10px 14px",
+            borderLeft:`3px solid ${st.c}`}}>
+            <Row gap={8} sx={{marginBottom:4,flexWrap:"wrap"}}>
+              <span style={{fontFamily:T.mono,color:T.purple,fontWeight:800,fontSize:12}}>{d.ref}</span>
+              <Bdg color={st.c} sm>{st.l}</Bdg>
+              <Bdg color={pr.c} sm>{pr.l}</Bdg>
+              {d.due_date&&<span style={{fontSize:11,color:T.faint}}> Due {d.due_date}</span>}
+              <div style={{marginLeft:"auto"}}>
+                <span style={{cursor:"pointer",color:T.red,fontSize:12}}
+                  onClick={()=>delDefect(d.id,d.ref)}>✕</span>
+              </div>
+            </Row>
+            <div style={{fontSize:13,color:T.text,fontWeight:600,marginBottom:2}}>{d.description}</div>
+            {d.location&&<div style={{fontSize:11,color:T.muted,marginBottom:4}}>📍 {d.location}</div>}
+            {d.assignee&&<div style={{fontSize:11,color:T.muted,marginBottom:6}}>👤 {d.assignee}</div>}
+            {d.notes&&<div style={{fontSize:11,color:T.faint,marginBottom:8,fontStyle:"italic"}}>{d.notes}</div>}
+            <Row gap={5}>
+              {d.status==="open"&&<Btn sm v="blu" onClick={()=>setStatus(d.id,"in_progress")}>Start</Btn>}
+              {d.status==="in_progress"&&<Btn sm v="grn" onClick={()=>setStatus(d.id,"closed")}>Close</Btn>}
+              {d.status==="closed"&&<Btn sm v="gho" onClick={()=>setStatus(d.id,"open")}>Reopen</Btn>}
+              {d.status!=="closed"&&<Btn sm v="gho" onClick={()=>setStatus(d.id,d.status==="open"?"in_progress":"open")}>
+                {d.status==="open"?"→ In Progress":"← Back to Open"}
+              </Btn>}
+            </Row>
+          </Card>;
+        })}
+      </div>
+
+      {/* ── Handover Checklist ── */}
+      <div>
+        <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Handover Checklist</div>
+        <Card sx={{padding:0,overflow:"hidden"}}>
+          {items.map((item,i)=><div key={item.id} style={{
+            display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
+            borderBottom:i<items.length-1?`1px solid ${T.border}`:"none",
+            background:item.checked?`${T.green}08`:"transparent",
+          }}>
+            <input type="checkbox" checked={item.checked} onChange={()=>toggleItem(item)}
+              style={{width:16,height:16,accentColor:T.green,cursor:"pointer",flexShrink:0}}/>
+            <span style={{fontSize:13,color:item.checked?T.muted:T.text,
+              textDecoration:item.checked?"line-through":"none",flex:1,lineHeight:1.4}}>
+              {item.description}
+            </span>
+            <span style={{cursor:"pointer",color:T.faint,fontSize:11,flexShrink:0}}
+              onClick={()=>delItem(item.id)}>✕</span>
+          </div>)}
+
+          {/* Add custom item */}
+          <div style={{padding:"10px 14px",borderTop:items.length>0?`1px solid ${T.border}`:"none",
+            display:"flex",gap:8}}>
+            <input value={newItem} onChange={e=>setNewItem(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&addItem()}
+              placeholder="Add a checklist item…"
+              style={{flex:1,background:"transparent",border:"none",outline:"none",
+                color:T.text,fontSize:13,fontFamily:T.font}}/>
+            {newItem.trim()&&<Btn sm v="gho" onClick={addItem}>Add</Btn>}
+          </div>
+        </Card>
       </div>
     </div>
   </div>;
