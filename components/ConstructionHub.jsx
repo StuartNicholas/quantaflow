@@ -1537,10 +1537,11 @@ function OrderListModule({proj, pop}) {
   if(err) return <Card><div style={{color:T.red,fontSize:13}}>Couldn't load: {err}</div>
     <div style={{color:T.faint,fontSize:12,marginTop:6}}>If this mentions a missing column/table, run the ORDER-LIST Layer 7 SQL in Supabase.</div></Card>;
 
-  // gather all real cabinets in the project (takeoff items + estimate line items with a cab tag)
+  // Estimate is the single source of truth — order list always reflects the current estimate.
+  // Estimate items carry the cab field when pushed from takeoff, preserving type/config/width/room.
+  // Reading from lineItems means any qty edit in the Estimate is immediately reflected here.
   const cabs=[];
-  (proj.takeoffItems||[]).forEach(ti=>{ if(ti.cab&&ti.cab.type!=="Benchtop"&&ti.cab.type!=="Splashback") for(let i=0;i<(ti.qty||1);i++) cabs.push(ti.cab); });
-  (proj.lineItems||[]).forEach(li=>{ if(li.cab&&li.source!=="takeoff"&&li.cab.type!=="Benchtop"&&li.cab.type!=="Splashback") for(let i=0;i<(li.qty||1);i++) cabs.push(li.cab); });
+  (proj.lineItems||[]).forEach(li=>{ if(li.cab&&li.cab.type!=="Benchtop"&&li.cab.type!=="Splashback") for(let i=0;i<(li.qty||1);i++) cabs.push(li.cab); });
 
   const itemById=id=>items.find(x=>x.id===id);
   const carcassItem=itemById(preset?.carcass_item_id);
@@ -1574,7 +1575,7 @@ function OrderListModule({proj, pop}) {
 
   if(cabs.length===0) return <div>
     <Hdr sub="Board sheets, hardware and items to order for this project.">Order List</Hdr>
-    <Card><div style={{color:T.muted,fontSize:13}}>No cabinets in this project yet. Add cabinets in the Takeoff tab, then come back for your order list.</div></Card>
+    <Card><div style={{color:T.muted,fontSize:13}}>No cabinet line items in the Estimate yet. Run AI Extract in the Takeoff tab, push items to the Estimate, then return here — the order list always reflects your current estimate.</div></Card>
   </div>;
 
   const boardRows=[
@@ -2976,7 +2977,7 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
   // Per-project cabinetry config — initialised from the global Cabinet Library,
   // then fully editable for this project (dims, board rates, hardware, install, logistics)
   const cc = proj.cabConfig;
-  const hasCab = (proj.lineItems||[]).some(li=>li.cab)||(proj.takeoffItems||[]).some(ti=>ti.cab)||(proj.trades||[]).includes("cabinetry");
+  const hasCab = (proj.lineItems||[]).some(li=>li.cab)||(proj.trades||[]).includes("cabinetry");
   function initCabConfig(){
     const b=cabLib||SEED_CABLIB;
     onMutate(p=>({...p,cabConfig:JSON.parse(JSON.stringify({
