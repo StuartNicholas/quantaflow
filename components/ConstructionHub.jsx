@@ -8,6 +8,8 @@ import { listSuppliers as dbListSuppliers, createSupplier as dbCreateSupplier, u
 import { getEstimate as dbGetEstimate, updateEstimate as dbUpdateEstimate, addItem as dbAddItem, addItems as dbAddItems, updateItem as dbUpdateItem, deleteItem as dbDeleteItem } from "../lib/db/estimates";
 import { updateProjectQuoteValue as dbUpdateProjectQuoteValue } from "../lib/db/projects";
 import { listQuoteVersions as dbListQuoteVersions, getQuoteVersionItems as dbGetQuoteVersionItems, issueQuote as dbIssueQuote, updateQuoteStatus as dbUpdateQuoteStatus } from "../lib/db/quotes";
+import { listVariations as dbListVariations, createVariation as dbCreateVariation, updateVariation as dbUpdateVariation, deleteVariation as dbDeleteVariation } from "../lib/db/variations";
+import { getTakeoff as dbGetTakeoff, saveTakeoff as dbSaveTakeoff, addTakeoffItem as dbAddTakeoffItem, deleteTakeoffItem as dbDeleteTakeoffItem, ensureTakeoff as dbEnsureTakeoff, patchTakeoffMeta as dbPatchTakeoffMeta } from "../lib/db/takeoffs";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -1232,7 +1234,18 @@ function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,
 // PROJECT WORKSPACE
 // ═══════════════════════════════════════════════════════════════════════════
 function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate,onBack,onPushXero,onGotoLibrary,pop}) {
-  const c = calc(proj);
+  const [variations,    setVariations]    = useState([]);
+  const [varsLoading,   setVarsLoading]   = useState(true);
+
+  async function reloadVariations() {
+    setVarsLoading(true);
+    const { data } = await dbListVariations(proj.id);
+    setVariations(data||[]);
+    setVarsLoading(false);
+  }
+  useEffect(()=>{ reloadVariations(); },[proj.id]);
+
+  const c = calc({...proj, variations});
   const sm = STATUS[proj.status]||STATUS.draft;
 
   const TABS = [
@@ -1246,7 +1259,6 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {id:"info",     label:"Project Info"},
   ];
 
-  // Placeholder for modules parked for a future version (per V1 scope)
   const Parked = ({name,desc}) => <Card sx={{textAlign:"center",padding:48}}>
     <div style={{fontSize:30,marginBottom:10,opacity:0.5}}>🔒</div>
     <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>{name}</div>
@@ -1272,9 +1284,9 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="takeoff"  && <TakeoffModule proj={proj} cabLib={cabLib} onMutate={onMutate} onGotoLibrary={onGotoLibrary} pop={pop}/>}
     {tab==="preset"   && <CabinetPreset proj={proj} pop={pop}/>}
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
-    {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} onMutate={onMutate} pop={pop}/>}
+    {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} variations={variations} onMutate={onMutate} pop={pop}/>}
     {tab==="orderlist"&& <OrderListModule proj={proj} pop={pop}/>}
-    {tab==="jobcost"  && <Parked name="Job Costs" desc="Actual-cost tracking and estimate-vs-actual reporting arrives in a later version. Version 1 focuses on estimating and commercial control."/>}
+    {tab==="jobcost"  && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} onMutate={onMutate} pop={pop}/>}
     {tab==="claims"   && <Parked name="Progress Claims" desc="Progress claim scheduling and invoicing will be added in a later version, integrating with Xero rather than rebuilding accounting."/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
   </div>;
@@ -1662,12 +1674,42 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
   const fileInput = useRef(null);
   const logRef = useRef(null);
 
-  const layers = proj.takeoffLayers||[];
-  const items  = proj.takeoffItems||[];
+  // ── Supabase-backed takeoff state ──────────────────────────────────────────
+  const [layers, setLayers] = useState([]);
+  const [items, setItems]   = useState([]);
+  const [aiSummary, setAiSummary] = useState(null);
+  const [takeoffId, setTakeoffId] = useState(null);
+  const [loadingTakeoff, setLoadingTakeoff] = useState(true);
 
   const log = (msg, type="info") => setALog(l=>[...l,{msg,type,ts:new Date().toLocaleTimeString()}]);
 
   useEffect(()=>{ if(logRef.current) logRef.current.scrollTop=logRef.current.scrollHeight; },[aLog]);
+
+  // ── Restore persisted takeoff from Supabase on mount ──────────────────────
+  useEffect(()=>{
+    let on=true;
+    (async()=>{
+      setLoadingTakeoff(true);
+      const { data } = await dbGetTakeoff(proj.id);
+      if(!on) return;
+      if(data){
+        setTakeoffId(data.takeoff.id);
+        setLayers(data.takeoff.layers||[]);
+        // Normalise layer_id (text) back to the numeric type used in layer objects
+        const norm = (data.items||[]).map(r=>({
+          ...r, layerId: r.layer_id!=null ? (isNaN(Number(r.layer_id))?r.layer_id:Number(r.layer_id)) : null,
+        }));
+        setItems(norm);
+        setAiSummary(data.takeoff.ai_summary||null);
+        // Sync into proj so OrderListModule / EstimateModule can still read these fields
+        onMutate(p=>({...p, takeoffLayers:data.takeoff.layers||[], takeoffItems:norm, aiSummary:data.takeoff.ai_summary||null}));
+        if(data.takeoff.pdf_name) log(`Resuming previous takeoff: ${data.takeoff.pdf_name}`,"success");
+      }
+      setLoadingTakeoff(false);
+    })();
+    return ()=>{on=false;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[proj.id]);
 
   // ── PDF.js loader
   async function pdfjs() {
@@ -2082,19 +2124,46 @@ ${EXTRACT_SCHEMA}`;
       (merged.rooms||[]).filter(r=>r.name&&r.area>0).forEach((r,i)=>
         newItems.push({id:now+20000+i,layerId:now+6,type:"area",label:r.name,qty:r.area,unit:"m²",source:"ai"}));
 
-      onMutate(p=>({...p,
-        takeoffLayers:newLayers, takeoffItems:newItems,
-        aiSummary:{
-          buildingType:merged.buildingType||"", confidence:merged.confidence||"low",
-          scale:merged.scale||"", storeys:merged.storeys||0,
-          notes:merged.notes||"", dims:merged.dims||[],
-          windowSchedule:merged.windowSchedule||[],
-          doorSchedule:merged.doorSchedule||[],
-          slidingDoorSchedule:merged.slidingDoorSchedule||[],
-          cabinetryUnits:cabUnits,
-          tradesUsed:tradeKeys,
-        },
-      }));
+      const newAiSummary={
+        buildingType:merged.buildingType||"", confidence:merged.confidence||"low",
+        scale:merged.scale||"", storeys:merged.storeys||0,
+        notes:merged.notes||"", dims:merged.dims||[],
+        windowSchedule:merged.windowSchedule||[],
+        doorSchedule:merged.doorSchedule||[],
+        slidingDoorSchedule:merged.slidingDoorSchedule||[],
+        cabinetryUnits:cabUnits,
+        tradesUsed:tradeKeys,
+      };
+
+      // Persist to Supabase (full replace) — sets local state from returned UUIDs
+      const {data:savedTakeoff}=await dbSaveTakeoff(proj.id,{
+        pdfName:pdfMeta?.name,
+        aiSummary:newAiSummary,
+        layers:newLayers,
+        items:newItems,
+      });
+      let syncItems=newItems;
+      if(savedTakeoff){
+        setTakeoffId(savedTakeoff.id);
+        // Re-fetch items so we have the real UUIDs from the DB
+        const {data:restored}=await dbGetTakeoff(proj.id);
+        if(restored){
+          const norm=(restored.items||[]).map(r=>({
+            ...r, layerId:r.layer_id!=null?(isNaN(Number(r.layer_id))?r.layer_id:Number(r.layer_id)):null,
+          }));
+          setItems(norm);
+          syncItems=norm;
+        } else {
+          setItems(newItems);
+        }
+      } else {
+        // DB save failed — keep in local state only (graceful fallback)
+        setItems(newItems);
+      }
+      setLayers(newLayers);
+      setAiSummary(newAiSummary);
+      // Sync into proj so OrderListModule / EstimateModule can still read these fields
+      onMutate(p=>({...p, takeoffLayers:newLayers, takeoffItems:syncItems, aiSummary:newAiSummary}));
       log(`✓ ${newItems.length} takeoff items created (${totalCabLines} cabinetry lines). Push to Estimate when ready.`,"success");
 
     } catch(e) {
@@ -2103,17 +2172,29 @@ ${EXTRACT_SCHEMA}`;
     } finally { setAnalyzing(false); }
   }
 
-  function addLayer() {
+  async function addLayer() {
     const COLS=["#f59e0b","#3b82f6","#22c55e","#ef4444","#a78bfa","#14b8a6","#f97316","#ec4899"];
     const id=Date.now();
-    onMutate(p=>({...p,takeoffLayers:[...(p.takeoffLayers||[]),
-      {id,name:`Layer ${(p.takeoffLayers||[]).length+1}`,
-       color:COLS[(p.takeoffLayers||[]).length%COLS.length],visible:true}]}));
+    const newLayer={id,name:`Layer ${layers.length+1}`,color:COLS[layers.length%COLS.length],visible:true};
+    const newLayers=[...layers,newLayer];
+    setLayers(newLayers);
+    // Persist to Supabase (create takeoff record first if none exists)
+    let tid=takeoffId;
+    if(!tid){ const {data:t}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} }
+    if(tid) dbPatchTakeoffMeta(proj.id,{layers:newLayers});
   }
 
-  function addManual() {
+  async function addManual() {
     if(!newItem.label||!newItem.qty) return pop("Label and quantity required.","error");
-    onMutate(p=>({...p,takeoffItems:[...(p.takeoffItems||[]),{...newItem,id:Date.now(),source:"manual"}]}));
+    let tid=takeoffId;
+    if(!tid){ const {data:t}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} }
+    if(!tid) return pop("Could not save item — try again.","error");
+    const {data:saved}=await dbAddTakeoffItem(tid,{
+      layer_id:newItem.layerId!=null?String(newItem.layerId):null,
+      type:newItem.type, label:newItem.label, qty:parseFloat(newItem.qty)||0,
+      unit:newItem.unit, source:"manual",
+    });
+    if(saved) setItems(prev=>[...prev,{...saved,layerId:newItem.layerId}]);
     setNewItem({type:"area",label:"",qty:0,unit:"m²",layerId:activeLayer});
     setShowAddItem(false); pop("Item added.");
   }
@@ -2159,15 +2240,20 @@ ${EXTRACT_SCHEMA}`;
     });
   }
 
-  function pickCabinet(c){
+  async function pickCabinet(c){
     if(!pickRoom.trim()){ pop("Enter a room first (e.g. Kitchen) — it drives room pricing.","error"); return; }
     const qty=Math.max(1, parseInt(pickQty)||1);
-    const cabLayer=(proj.takeoffLayers||[]).find(l=>/cabinet/i.test(l.name))?.id||activeLayer||null;
+    const cabLayer=layers.find(l=>/cabinet/i.test(l.name))?.id||activeLayer||null;
     const label=`${pickRoom.trim()} — ${c.type} ${c.config} ${c.width}mm`;
-    onMutate(p=>({...p,takeoffItems:[...(p.takeoffItems||[]),{
-      id:uid(), layerId:cabLayer, type:"count", label, qty, unit:"ea", source:"library",
-      cab:{unit:"", room:pickRoom.trim(), type:c.type, config:c.config, width:c.width},
-    }]}));
+    const cab={unit:"",room:pickRoom.trim(),type:c.type,config:c.config,width:c.width};
+    let tid=takeoffId;
+    if(!tid){ const {data:t}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} }
+    if(!tid) return pop("Could not save item — try again.","error");
+    const {data:saved}=await dbAddTakeoffItem(tid,{
+      layer_id:cabLayer!=null?String(cabLayer):null,
+      type:"count", label, qty, unit:"ea", source:"library", cab,
+    });
+    if(saved) setItems(prev=>[...prev,{...saved,layerId:cabLayer,cab}]);
     pop(`Added ${qty}× ${c.type} ${c.config} ${c.width}mm to ${pickRoom.trim()}.`);
   }
 
@@ -2199,7 +2285,7 @@ ${EXTRACT_SCHEMA}`;
     else setMeasure(m=>({...m,pts:[...m.pts,{x,y}]}));
   }
 
-  function finishMeasure() {
+  async function finishMeasure() {
     const m=measure; if(!m) return;
     const mmPerPx=calibRef.current[m.pageIdx];
     const targetLayer=activeLayer||layers[0]?.id||null;
@@ -2217,14 +2303,25 @@ ${EXTRACT_SCHEMA}`;
     }
     if(!mmPerPx) return pop("Calibrate the page scale first.","error");
 
+    // Shared helper: ensure takeoff exists, add item, update local state
+    async function persistMeasured(newItem){
+      let tid=takeoffId;
+      if(!tid){ const {data:t}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} }
+      if(!tid) return pop("Could not save item — try again.","error");
+      const {data:saved}=await dbAddTakeoffItem(tid,{
+        layer_id:targetLayer!=null?String(targetLayer):null,
+        type:newItem.type, label:newItem.label, qty:newItem.qty, unit:newItem.unit, source:"measured",
+      });
+      if(saved) setItems(prev=>[...prev,{...saved,layerId:targetLayer}]);
+    }
+
     if(m.tool==="linear") {
       if(m.pts.length<2) return pop("Click at least two points.","error");
       let px=0; for(let i=1;i<m.pts.length;i++) px+=Math.hypot(m.pts[i].x-m.pts[i-1].x,m.pts[i].y-m.pts[i-1].y);
       const lm=parseFloat((px*mmPerPx/1000).toFixed(2));
       const label=safePrompt("Label for this length:",`Measured length p${m.pageIdx+1}`);
       if(label===null) return;
-      onMutate(p=>({...p,takeoffItems:[...(p.takeoffItems||[]),
-        {id:Date.now(),layerId:targetLayer,type:"length",label:label||"Measured length",qty:lm,unit:"lm",source:"measured"}]}));
+      await persistMeasured({type:"length",label:label||"Measured length",qty:lm,unit:"lm"});
       setMeasure(x=>({...x,pts:[]}));
       pop(`${lm} lm added to takeoff.`);
     } else if(m.tool==="area") {
@@ -2235,16 +2332,14 @@ ${EXTRACT_SCHEMA}`;
       const m2=parseFloat((Math.abs(s/2)*mmPerPx*mmPerPx/1e6).toFixed(2));
       const label=safePrompt("Label for this area:",`Measured area p${m.pageIdx+1}`);
       if(label===null) return;
-      onMutate(p=>({...p,takeoffItems:[...(p.takeoffItems||[]),
-        {id:Date.now(),layerId:targetLayer,type:"area",label:label||"Measured area",qty:m2,unit:"m²",source:"measured"}]}));
+      await persistMeasured({type:"area",label:label||"Measured area",qty:m2,unit:"m²"});
       setMeasure(x=>({...x,pts:[]}));
       pop(`${m2} m² added to takeoff.`);
     } else if(m.tool==="count") {
       if(!m.counts.length) return pop("Click each item to count first.","error");
       const label=safePrompt("Label for this count:",`Counted items p${m.pageIdx+1}`);
       if(label===null) return;
-      onMutate(p=>({...p,takeoffItems:[...(p.takeoffItems||[]),
-        {id:Date.now(),layerId:targetLayer,type:"count",label:label||"Counted items",qty:m.counts.length,unit:"ea",source:"measured"}]}));
+      await persistMeasured({type:"count",label:label||"Counted items",qty:m.counts.length,unit:"ea"});
       setMeasure(x=>({...x,counts:[]}));
       pop(`${m.counts.length} ea added to takeoff.`);
     }
@@ -2265,7 +2360,7 @@ ${EXTRACT_SCHEMA}`;
   // Fix: map takeoff items to correct estimate categories using layer name + label content
   async function pushToEstimate() {
     const layerMap={};
-    (proj.takeoffLayers||[]).forEach(l=>{ layerMap[l.id]=l.name.toLowerCase(); });
+    layers.forEach(l=>{ layerMap[l.id]=l.name.toLowerCase(); });
     function guessCategory(item) {
       const ln=layerMap[item.layerId]||"";
       const lb=(item.label||"").toLowerCase();
@@ -2297,7 +2392,7 @@ ${EXTRACT_SCHEMA}`;
       if(prof?.company_id) pricing=await loadCabinetPricing(prof.company_id, proj.id);
     }catch{}
 
-    const toAdd=(proj.takeoffItems||[]).map(ti=>{
+    const toAdd=items.map(ti=>{
       let rate=0;
       // Price real cabinet lines (not benchtop/splashback) via the parametric formula
       if(ti.cab && pricing?.ready && pricing.rules &&
@@ -2341,7 +2436,7 @@ ${EXTRACT_SCHEMA}`;
       pop(`${toAdd.length} items pushed — ${priced} cabinets auto-priced from your catalogue.`);
   }
 
-  const ai = proj.aiSummary;
+  const ai = aiSummary;
 
   const selectedTrades = proj.trades||[];
   const tradeScope = selectedTrades.length===0 ? "All trades" : selectedTrades.map(k=>TRADES[k]?.label||k).join(", ");
@@ -2754,7 +2849,10 @@ ${EXTRACT_SCHEMA}`;
                       </td>
                       <td style={{padding:"8px 10px"}}>
                         <span style={{cursor:"pointer",color:T.red,fontSize:13}}
-                          onClick={()=>onMutate(p=>({...p,takeoffItems:p.takeoffItems.filter(x=>x.id!==item.id)}))}>✕</span>
+                          onClick={async()=>{
+                            await dbDeleteTakeoffItem(item.id);
+                            setItems(prev=>prev.filter(x=>x.id!==item.id));
+                          }}>✕</span>
                       </td>
                     </tr>;
                   })}
@@ -3186,10 +3284,12 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
 
 // Shared print-ready quote document. Accepts either a locked version snapshot
 // or a computed draft preview — caller normalises the data shape.
-function QuoteDocument({items, marginPct, overheadPct, gstPct, depositPct, versionNum, issuedAt, proj, company}) {
+function QuoteDocument({items, marginPct, overheadPct, gstPct, depositPct, versionNum, issuedAt, proj, company, variations}) {
+  const approvedVars = (variations||[]).filter(v=>v.status==="approved");
+  const varTotal = approvedVars.reduce((s,v)=>s+(v.amount||0),0);
   const sub = (items||[]).reduce((s,item)=> s+(item.qty||0)*(item.rate||0)*(1+((item.margin_pct??marginPct??0)/100)), 0);
   const ovhd = sub*(overheadPct||0)/100;
-  const exGst = sub+ovhd;
+  const exGst = sub+ovhd+varTotal;
   const gstAmt = exGst*(gstPct||10)/100;
   const total = exGst+gstAmt;
   const depositAmt = total*(depositPct||0)/100;
@@ -3241,7 +3341,7 @@ function QuoteDocument({items, marginPct, overheadPct, gstPct, depositPct, versi
       {(proj.description||proj.notes)&&<div style={{color:"#6b7280",fontSize:12}}>{proj.description||proj.notes}</div>}
     </div>
 
-    {cats.length===0&&<div style={{color:"#9ca3af",fontSize:12,padding:"16px 0",textAlign:"center"}}>No line items.</div>}
+    {cats.length===0&&!approvedVars.length&&<div style={{color:"#9ca3af",fontSize:12,padding:"16px 0",textAlign:"center"}}>No line items.</div>}
     {cats.map(cat=>{
       const catItems=(items||[]).filter(li=>li.category===cat);
       return <div key={cat} style={{marginBottom:18}}>
@@ -3267,13 +3367,25 @@ function QuoteDocument({items, marginPct, overheadPct, gstPct, depositPct, versi
       </div>;
     })}
 
+    {approvedVars.length>0&&<div style={{marginBottom:18}}>
+      <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+        textTransform:"uppercase",letterSpacing:"0.05em",color:"#b45309",
+        marginBottom:5,paddingBottom:3,borderBottom:"1px solid #e8d8b0"}}>Approved Variations</div>
+      {approvedVars.map(v=><div key={v.id} style={{display:"flex",justifyContent:"space-between",
+        padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0e8d8"}}>
+        <span>{v.ref}: {v.description}</span>
+        <span style={{fontFamily:"monospace",fontWeight:600}}>{$$(v.amount)}</span>
+      </div>)}
+    </div>}
+
     <div style={{marginTop:22,borderTop:"2px solid #b45309",paddingTop:16,maxWidth:310,marginLeft:"auto"}}>
       {[
         {l:"Subtotal",v:$$(sub)},
         {l:`Overhead & Margin (${overheadPct||0}%)`,v:$$(ovhd)},
+        varTotal!==0&&{l:"Approved Variations",v:$$(varTotal)},
         {l:"Total ex. GST",v:$$(exGst),bold:true},
         {l:`GST (${gstPct||10}%)`,v:$$(gstAmt)},
-      ].map(r=><div key={r.l} style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+      ].filter(Boolean).map(r=><div key={r.l} style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
         <span style={{color:"#6b7280",fontFamily:"system-ui,sans-serif",fontSize:12}}>{r.l}</span>
         <span style={{fontFamily:"monospace",fontWeight:r.bold?700:400}}>{r.v}</span>
       </div>)}
@@ -3316,7 +3428,7 @@ const QV_STATUS = {
   superseded: {color:"#6b7280", label:"Superseded"},
 };
 
-function QuoteModule({proj, company, c, onMutate, pop}) {
+function QuoteModule({proj, company, c, variations, onMutate, pop}) {
   const [versions,     setVersions]     = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [selId,        setSelId]        = useState(null);
@@ -3479,7 +3591,8 @@ function QuoteModule({proj, company, c, onMutate, pop}) {
             versionNum={isDraft?null:selVersion?.version_number}
             issuedAt={isDraft?null:selVersion?.issued_at}
             proj={proj}
-            company={company}/>
+            company={company}
+            variations={variations}/>
     }
   </div>;
 }
@@ -3566,25 +3679,63 @@ function ScheduleModule({proj, onMutate, pop}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// JOB COST MODULE
+// JOB COSTS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function JobCostModule({proj, onMutate, c, pop}) {
+function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, onMutate, pop}) {
   const [showAct, setShowAct] = useState(false);
   const [showVar, setShowVar] = useState(false);
   const [showPO,  setShowPO]  = useState(false);
+  const [busy,    setBusy]    = useState(false);
   const [na, setNa] = useState({category:CATS[0],description:"",amount:0,date:new Date().toISOString().slice(0,10),supplier:""});
-  const [nv, setNv] = useState({ref:`VAR-${String((proj.variations||[]).length+1).padStart(3,"0")}`,description:"",amount:0,status:"pending",date:new Date().toISOString().slice(0,10)});
+  const [nv, setNv] = useState({ref:"",description:"",amount:0,status:"pending",date:new Date().toISOString().slice(0,10),notes:""});
   const [npo,setNpo]= useState({ref:`PO-${String((proj.purchaseOrders||[]).length+1).padStart(3,"0")}`,supplier:"",category:CATS[0],description:"",amount:0,status:"draft",date:new Date().toISOString().slice(0,10)});
 
-  const pos=proj.purchaseOrders||[];
-  const poCommitted=pos.filter(po=>po.status!=="draft").reduce((s,po)=>s+(po.amount||0),0);
+  const pos = proj.purchaseOrders||[];
+  const poCommitted = pos.filter(po=>po.status!=="draft").reduce((s,po)=>s+(po.amount||0),0);
+  const approvedVars = variations.filter(v=>v.status==="approved");
+  const varTotal = approvedVars.reduce((s,v)=>s+(v.amount||0),0);
 
-  function receivePO(po){
-    // Mark received and book the cost as an actual in one step
+  function nextVarRef() {
+    return `VAR-${String(variations.length+1).padStart(3,"0")}`;
+  }
+
+  function openNewVar() {
+    setNv({ref:nextVarRef(),description:"",amount:0,status:"pending",date:new Date().toISOString().slice(0,10),notes:""});
+    setShowVar(true);
+  }
+
+  async function saveVar() {
+    if(!nv.description.trim()) return pop("Description required.","error");
+    setBusy(true);
+    const { error } = await dbCreateVariation(proj.id, {...nv, amount:parseFloat(nv.amount)||0});
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setShowVar(false);
+    await reloadVariations();
+    pop("Variation added.");
+  }
+
+  async function setVarStatus(id, status) {
+    const { error } = await dbUpdateVariation(id, {status});
+    if(error) return pop(error,"error");
+    await reloadVariations();
+    pop(`Variation ${status}.`,"info");
+  }
+
+  async function delVar(id) {
+    if(!safeConfirm("Delete this variation? This cannot be undone.")) return;
+    const { error } = await dbDeleteVariation(id);
+    if(error) return pop(error,"error");
+    await reloadVariations();
+    pop("Variation deleted.","info");
+  }
+
+  function receivePO(po) {
     onMutate(p=>({...p,
       purchaseOrders:p.purchaseOrders.map(x=>x.id===po.id?{...x,status:"received"}:x),
       actualCosts:[...(p.actualCosts||[]),{id:Date.now(),category:po.category,
-        description:`${po.ref}: ${po.description}`,amount:po.amount,date:new Date().toISOString().slice(0,10),supplier:po.supplier}],
+        description:`${po.ref}: ${po.description}`,amount:po.amount,
+        date:new Date().toISOString().slice(0,10),supplier:po.supplier}],
     }));
     pop(`${po.ref} received — cost booked to actuals.`);
   }
@@ -3600,16 +3751,16 @@ function JobCostModule({proj, onMutate, c, pop}) {
       <KPI label="Variance" value={$$(Math.abs(variance),true)}
         sub={`${vPct>=0?"Under":"OVER"} budget ${Math.abs(vPct).toFixed(1)}%`}
         color={vPct>=0?T.green:T.red}/>
-      <KPI label="Variations" value={$$(c.varTotal,true)}
-        sub={`${(proj.variations||[]).filter(v=>v.status==="approved").length} approved`} color={T.yellow}/>
+      <KPI label="Variations" value={$$(varTotal,true)}
+        sub={`${approvedVars.length} approved`} color={T.yellow}/>
     </Row>
 
-    {/* ── PURCHASE ORDERS */}
+    {/* ── PURCHASE ORDERS ── */}
     <Card sx={{marginBottom:16}}>
       <Row gap={8} sx={{marginBottom:10}}>
         <div style={{fontWeight:700,fontSize:13}}>Purchase Orders</div>
         <Btn sm v="pur" onClick={()=>setShowPO(!showPO)}>+ New PO</Btn>
-        <div style={{color:T.faint,fontSize:11,marginLeft:"auto"}}>draft → sent → received (books to actuals) → billed</div>
+        <div style={{color:T.faint,fontSize:11,marginLeft:"auto"}}>draft → sent → received → billed</div>
       </Row>
       {showPO&&<Card hi sx={{marginBottom:10}}>
         <div style={{display:"grid",gridTemplateColumns:"100px 1fr 1fr",gap:8}}>
@@ -3651,7 +3802,7 @@ function JobCostModule({proj, onMutate, c, pop}) {
               </td>
             </tr>)}</tbody>
           </table>
-        : <div style={{color:T.faint,fontSize:12}}>No purchase orders. Raise POs to suppliers and track committed costs before invoices land.</div>}
+        : <div style={{color:T.faint,fontSize:12}}>No purchase orders yet.</div>}
     </Card>
 
     {c.exGst>0&&<Card sx={{marginBottom:16}}>
@@ -3669,7 +3820,7 @@ function JobCostModule({proj, onMutate, c, pop}) {
     </Card>}
 
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-      {/* Actual costs */}
+      {/* ── Actual costs ── */}
       <div>
         <Row gap={8} sx={{marginBottom:10}}>
           <div style={{fontWeight:700,fontSize:13}}>Actual Costs</div>
@@ -3708,29 +3859,27 @@ function JobCostModule({proj, onMutate, c, pop}) {
         </div>}
       </div>
 
-      {/* Variations */}
+      {/* ── Variations / Change Orders ── */}
       <div>
         <Row gap={8} sx={{marginBottom:10}}>
           <div style={{fontWeight:700,fontSize:13}}>Variations / Change Orders</div>
-          <Btn sm v="yel" onClick={()=>setShowVar(!showVar)}>+ Add Variation</Btn>
+          <Btn sm v="yel" onClick={openNewVar}>+ Add Variation</Btn>
         </Row>
         {showVar&&<Card hi sx={{marginBottom:10}}>
           <Grid2 gap={8}>
             <Inp label="Ref" value={nv.ref} onChange={v=>setNv(x=>({...x,ref:v}))}/>
             <Inp label="Date" value={nv.date} onChange={v=>setNv(x=>({...x,date:v}))} type="date"/>
             <Inp label="Description" value={nv.description} onChange={v=>setNv(x=>({...x,description:v}))}
-              sx={{gridColumn:"1/-1"}}/>
+              sx={{gridColumn:"1/-1"}} placeholder="Scope of work for this variation"/>
             <Inp label="Amount ($)" value={nv.amount} onChange={v=>setNv(x=>({...x,amount:v}))} type="number" mono/>
             <Sel label="Status" value={nv.status} onChange={v=>setNv(x=>({...x,status:v}))}
               options={["pending","approved","rejected"]}/>
           </Grid2>
-          <Row gap={8}><Btn v="pri" sm onClick={()=>{
-            onMutate(p=>({...p,variations:[...(p.variations||[]),{...nv,id:Date.now(),amount:parseFloat(nv.amount)||0}]}));
-            setNv({ref:`VAR-${String((proj.variations||[]).length+2).padStart(3,"0")}`,description:"",amount:0,status:"pending",date:new Date().toISOString().slice(0,10)});
-            setShowVar(false); pop("Variation added.");
-          }}>Save</Btn><Btn sm onClick={()=>setShowVar(false)}>Cancel</Btn></Row>
+          <Row gap={8}><Btn v="pri" sm onClick={saveVar} disabled={busy}>{busy?"Saving…":"Save"}</Btn>
+            <Btn sm onClick={()=>setShowVar(false)}>Cancel</Btn></Row>
         </Card>}
-        {(proj.variations||[]).map(v=><div key={v.id} style={{display:"flex",justifyContent:"space-between",
+        {varsLoading&&<div style={{color:T.muted,fontSize:12}}>Loading…</div>}
+        {!varsLoading&&variations.map(v=><div key={v.id} style={{display:"flex",justifyContent:"space-between",
           padding:"9px 0",borderBottom:`1px solid ${T.border}`,alignItems:"flex-start"}}>
           <div>
             <div style={{fontSize:13,color:T.text,fontWeight:600}}>{v.ref}: {v.description}</div>
@@ -3740,15 +3889,20 @@ function JobCostModule({proj, onMutate, c, pop}) {
             <Bdg color={v.status==="approved"?T.green:v.status==="rejected"?T.red:T.yellow} sm>{v.status}</Bdg>
             <span style={{fontFamily:T.mono,color:v.status==="approved"?T.green:T.muted,fontWeight:700}}>{$$(v.amount)}</span>
             <select value={v.status}
-              onChange={e=>onMutate(p=>({...p,variations:p.variations.map(x=>x.id===v.id?{...x,status:e.target.value}:x)}))}
+              onChange={e=>setVarStatus(v.id,e.target.value)}
               style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:4,padding:"2px 5px",color:T.text,fontSize:11}}>
-              <option>pending</option><option>approved</option><option>rejected</option>
+              <option value="pending">pending</option>
+              <option value="approved">approved</option>
+              <option value="rejected">rejected</option>
             </select>
-            <span style={{cursor:"pointer",color:T.red,fontSize:12}}
-              onClick={()=>onMutate(p=>({...p,variations:p.variations.filter(x=>x.id!==v.id)}))}>✕</span>
+            <span style={{cursor:"pointer",color:T.red,fontSize:12}} onClick={()=>delVar(v.id)}>✕</span>
           </Row>
         </div>)}
-        {!(proj.variations||[]).length&&<div style={{color:T.faint,fontSize:12}}>No variations yet.</div>}
+        {!varsLoading&&!variations.length&&<div style={{color:T.faint,fontSize:12}}>No variations yet.</div>}
+        {!varsLoading&&variations.length>0&&varTotal>0&&<div style={{marginTop:10,display:"flex",justifyContent:"flex-end",gap:8,alignItems:"center"}}>
+          <span style={{color:T.faint,fontSize:11}}>{approvedVars.length} approved</span>
+          <span style={{fontFamily:T.mono,fontWeight:700,color:T.yellow,fontSize:14}}>{$$(varTotal)}</span>
+        </div>}
       </div>
     </div>
   </div>;
