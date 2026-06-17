@@ -10,6 +10,7 @@ import { updateProjectQuoteValue as dbUpdateProjectQuoteValue } from "../lib/db/
 import { listQuoteVersions as dbListQuoteVersions, getQuoteVersionItems as dbGetQuoteVersionItems, issueQuote as dbIssueQuote, updateQuoteStatus as dbUpdateQuoteStatus } from "../lib/db/quotes";
 import { listVariations as dbListVariations, createVariation as dbCreateVariation, updateVariation as dbUpdateVariation, deleteVariation as dbDeleteVariation } from "../lib/db/variations";
 import { getTakeoff as dbGetTakeoff, saveTakeoff as dbSaveTakeoff, addTakeoffItem as dbAddTakeoffItem, deleteTakeoffItem as dbDeleteTakeoffItem, ensureTakeoff as dbEnsureTakeoff, patchTakeoffMeta as dbPatchTakeoffMeta } from "../lib/db/takeoffs";
+import { listPurchaseOrders as dbListPurchaseOrders, createPurchaseOrder as dbCreatePurchaseOrder, updatePurchaseOrder as dbUpdatePurchaseOrder, deletePurchaseOrder as dbDeletePurchaseOrder, addPurchaseOrderItem as dbAddPurchaseOrderItem, addPurchaseOrderItems as dbAddPurchaseOrderItems, deletePurchaseOrderItem as dbDeletePurchaseOrderItem, getPOCommittedTotal as dbGetPOCommittedTotal } from "../lib/db/purchase_orders";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -1253,8 +1254,9 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {id:"preset",   label:"② Cabinet Preset"},
     {id:"estimate", label:"③ Estimate"},
     {id:"quote",    label:"④ Quote"},
-    {id:"orderlist",label:"🧾 Order List"},
-    {id:"jobcost",  label:"Job Costs"},
+    {id:"orderlist",    label:"🧾 Order List"},
+    {id:"procurement",  label:"Procurement"},
+    {id:"jobcost",      label:"Job Costs"},
     {id:"claims",   label:"Claims"},
     {id:"info",     label:"Project Info"},
   ];
@@ -1285,8 +1287,9 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="preset"   && <CabinetPreset proj={proj} pop={pop}/>}
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
     {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} variations={variations} onMutate={onMutate} pop={pop}/>}
-    {tab==="orderlist"&& <OrderListModule proj={proj} pop={pop}/>}
-    {tab==="jobcost"  && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} onMutate={onMutate} pop={pop}/>}
+    {tab==="orderlist"    && <OrderListModule proj={proj} pop={pop}/>}
+    {tab==="procurement"  && <ProcurementModule proj={proj} pop={pop}/>}
+    {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} onMutate={onMutate} pop={pop}/>}
     {tab==="claims"   && <Parked name="Progress Claims" desc="Progress claim scheduling and invoicing will be added in a later version, integrating with Xero rather than rebuilding accounting."/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
   </div>;
@@ -3680,19 +3683,283 @@ function ScheduleModule({proj, onMutate, pop}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// PROCUREMENT MODULE — Supabase-backed purchase orders per project
+// ═══════════════════════════════════════════════════════════════════════════
+function ProcurementModule({proj, pop}) {
+  const [pos,       setPos]       = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [selId,     setSelId]     = useState(null);   // expanded PO
+  const [showNew,   setShowNew]   = useState(false);
+  const [busy,      setBusy]      = useState(false);
+  const [showAddItem, setShowAddItem] = useState(null); // po.id or null
+  const [newPO,  setNewPO]  = useState({ref:"",supplier_id:"",supplier_name:"",notes:""});
+  const [newItem,setNewItem]= useState({description:"",qty:1,unit:"ea",unit_cost:0});
+
+  const poTotal = po => (po.purchase_order_items||[]).reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
+
+  async function reload(){
+    const { data } = await dbListPurchaseOrders(proj.id);
+    setPos(data||[]);
+  }
+
+  useEffect(()=>{
+    let on=true;
+    (async()=>{
+      setLoading(true);
+      const [{ data:poData }, { data:supData }] = await Promise.all([
+        dbListPurchaseOrders(proj.id),
+        supabase.from("suppliers").select("id,name,category").order("name"),
+      ]);
+      if(!on) return;
+      setPos(poData||[]);
+      setSuppliers(supData||[]);
+      setLoading(false);
+    })();
+    return ()=>{on=false;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[proj.id]);
+
+  function openNew(){
+    setNewPO({ref:`PO-${String(pos.length+1).padStart(3,"0")}`,supplier_id:"",supplier_name:"",notes:""});
+    setShowNew(true);
+  }
+
+  async function createPO(){
+    if(!newPO.ref.trim()) return pop("PO reference required.","error");
+    setBusy(true);
+    const sup=suppliers.find(s=>s.id===newPO.supplier_id);
+    const { data,error } = await dbCreatePurchaseOrder(proj.id,{
+      ref:newPO.ref, supplier_id:newPO.supplier_id||null,
+      supplier_name:sup?.name||newPO.supplier_name||"",
+      notes:newPO.notes||null,
+    });
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setShowNew(false); setSelId(data.id); await reload();
+    pop(`${newPO.ref} created.`);
+  }
+
+  async function updateStatus(id,status){
+    const { error } = await dbUpdatePurchaseOrder(id,{status});
+    if(error) return pop(error,"error");
+    await reload(); pop(`PO marked ${status}.`,"info");
+  }
+
+  async function deletePO(id,ref){
+    if(!safeConfirm(`Delete ${ref}? This cannot be undone.`)) return;
+    const { error } = await dbDeletePurchaseOrder(id);
+    if(error) return pop(error,"error");
+    if(selId===id) setSelId(null);
+    await reload(); pop("PO deleted.","info");
+  }
+
+  async function addItem(po){
+    if(!newItem.description.trim()) return pop("Description required.","error");
+    const { error } = await dbAddPurchaseOrderItem(po.id,{
+      ...newItem, qty:parseFloat(newItem.qty)||0, unit_cost:parseFloat(newItem.unit_cost)||0,
+      sort_order:(po.purchase_order_items||[]).length,
+    });
+    if(error) return pop(error,"error");
+    setNewItem({description:"",qty:1,unit:"ea",unit_cost:0});
+    setShowAddItem(null); await reload();
+  }
+
+  async function deleteItem(id){ await dbDeletePurchaseOrderItem(id); await reload(); }
+
+  async function importFromEstimate(po){
+    const src=(proj.lineItems||[]).filter(li=>li.cab||li.category);
+    if(!src.length) return pop("No estimate items to import.","error");
+    const rows=src.map(li=>({description:li.description,qty:li.qty||1,unit:li.unit||"ea",unit_cost:0}));
+    const { error } = await dbAddPurchaseOrderItems(po.id,rows);
+    if(error) return pop(error,"error");
+    await reload(); pop(`${rows.length} items imported from estimate.`);
+  }
+
+  const PO_STATUS = {
+    draft:     {color:T.faint,  label:"Draft"},
+    sent:      {color:T.blue,   label:"Sent"},
+    received:  {color:T.green,  label:"Received"},
+    cancelled: {color:T.red,    label:"Cancelled"},
+  };
+
+  const committed = pos.filter(p=>["sent","received"].includes(p.status)).reduce((s,p)=>s+poTotal(p),0);
+  const received  = pos.filter(p=>p.status==="received").reduce((s,p)=>s+poTotal(p),0);
+
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading purchase orders…</div></Card>;
+
+  return <div>
+    <Row gap={12} wrap sx={{marginBottom:18}}>
+      <KPI label="Total POs" value={pos.length}
+        sub={`${pos.filter(p=>p.status==="sent").length} sent · ${pos.filter(p=>p.status==="received").length} received`}/>
+      <KPI label="Committed" value={$$(committed,true)} sub="sent + received" color={T.purple}/>
+      <KPI label="Goods Received" value={$$(received,true)} sub="in the door" color={T.green}/>
+      <KPI label="Outstanding" value={$$(committed-received,true)} sub="sent, not yet received" color={T.yellow}/>
+    </Row>
+
+    <Row gap={8} sx={{marginBottom:14}}>
+      <div style={{fontWeight:700,fontSize:14}}>Purchase Orders</div>
+      <Btn sm v="pur" onClick={openNew}>+ New PO</Btn>
+    </Row>
+
+    {/* ── New PO form ── */}
+    {showNew&&<Card hi sx={{marginBottom:14}}>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>New Purchase Order</div>
+      <div style={{display:"grid",gridTemplateColumns:"120px 1fr 1fr",gap:8,marginBottom:10}}>
+        <Inp label="PO Ref" value={newPO.ref} onChange={v=>setNewPO(x=>({...x,ref:v}))}/>
+        <div>
+          <div style={{fontSize:11,color:T.faint,marginBottom:4}}>Supplier</div>
+          <select value={newPO.supplier_id} onChange={e=>{
+            const sup=suppliers.find(s=>s.id===e.target.value);
+            setNewPO(x=>({...x,supplier_id:e.target.value,supplier_name:sup?.name||""}));
+          }} style={{width:"100%",background:T.card,border:`1px solid ${T.border}`,
+            borderRadius:5,padding:"7px 10px",color:newPO.supplier_id?T.text:T.faint,fontSize:13,outline:"none"}}>
+            <option value="">— Select supplier —</option>
+            {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}{s.category?` (${s.category})`:""}</option>)}
+          </select>
+        </div>
+        <Inp label="Notes" value={newPO.notes} onChange={v=>setNewPO(x=>({...x,notes:v}))} placeholder="Optional"/>
+      </div>
+      <Row gap={8}>
+        <Btn v="pri" sm onClick={createPO} disabled={busy}>{busy?"Creating…":"Create PO"}</Btn>
+        <Btn sm onClick={()=>setShowNew(false)}>Cancel</Btn>
+      </Row>
+    </Card>}
+
+    {pos.length===0&&!showNew&&<Card><div style={{color:T.faint,fontSize:13,padding:"8px 0"}}>
+      No purchase orders yet. Create a PO to track materials and supplier orders for this project.
+    </div></Card>}
+
+    {/* ── PO list ── */}
+    {pos.map(po=>{
+      const total=poTotal(po);
+      const st=PO_STATUS[po.status]||PO_STATUS.draft;
+      const isOpen=selId===po.id;
+      return <Card key={po.id} sx={{marginBottom:10,padding:0,overflow:"hidden"}}>
+        {/* Header row — click to expand */}
+        <div onClick={()=>setSelId(isOpen?null:po.id)}
+          style={{padding:"12px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer",flexWrap:"wrap"}}>
+          <div style={{fontFamily:T.mono,fontWeight:800,color:T.purple,fontSize:13,minWidth:80}}>{po.ref}</div>
+          <Bdg color={st.color}>{st.label}</Bdg>
+          <div style={{color:T.text,fontSize:13,flex:1}}>
+            {po.supplier_name||<span style={{color:T.faint,fontStyle:"italic"}}>No supplier</span>}
+          </div>
+          <span style={{fontFamily:T.mono,color:T.accent,fontWeight:700}}>{$$(total)}</span>
+          <span style={{color:T.faint,fontSize:11}}>{(po.purchase_order_items||[]).length} items</span>
+          <span style={{color:T.faint,fontSize:12}}>{isOpen?"▴":"▾"}</span>
+        </div>
+
+        {/* Expanded detail */}
+        {isOpen&&<div style={{borderTop:`1px solid ${T.border}`,padding:"12px 16px"}}>
+          {/* Status actions */}
+          <Row gap={6} sx={{marginBottom:12,flexWrap:"wrap"}}>
+            {po.status==="draft"&&<>
+              <Btn sm v="blu" onClick={()=>updateStatus(po.id,"sent")}>Mark Sent</Btn>
+              <Btn sm v="red" onClick={()=>updateStatus(po.id,"cancelled")}>Cancel PO</Btn>
+            </>}
+            {po.status==="sent"&&<>
+              <Btn sm v="grn" onClick={()=>updateStatus(po.id,"received")}>Mark Received</Btn>
+              <Btn sm v="red" onClick={()=>updateStatus(po.id,"cancelled")}>Cancel PO</Btn>
+            </>}
+            {po.status==="received"&&<Bdg color={T.green}>Goods received ✓</Bdg>}
+            {po.status==="cancelled"&&<Btn sm v="gho" onClick={()=>updateStatus(po.id,"draft")}>Reopen as Draft</Btn>}
+            <div style={{marginLeft:"auto"}}>
+              <span style={{cursor:"pointer",color:T.red,fontSize:12}} onClick={()=>deletePO(po.id,po.ref)}>Delete PO</span>
+            </div>
+          </Row>
+          {po.notes&&<div style={{color:T.muted,fontSize:12,marginBottom:10,fontStyle:"italic"}}>{po.notes}</div>}
+
+          {/* Line items table */}
+          {(po.purchase_order_items||[]).length>0&&<div style={{marginBottom:10,overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{color:T.faint,fontSize:11,textAlign:"left",background:T.bg}}>
+                {["Description","Qty","Unit","Unit Cost","Line Total",""].map(h=>
+                  <th key={h} style={{padding:"5px 10px",fontWeight:600}}>{h}</th>)}
+              </tr></thead>
+              <tbody>{(po.purchase_order_items||[]).map(item=>{
+                const lineTotal=(item.qty||0)*(item.unit_cost||0);
+                return <tr key={item.id} style={{borderTop:`1px solid ${T.border}`}}>
+                  <td style={{padding:"8px 10px",color:T.text}}>{item.description}</td>
+                  <td style={{padding:"8px 10px",fontFamily:T.mono,color:T.text}}>{item.qty}</td>
+                  <td style={{padding:"8px 10px",color:T.muted}}>{item.unit||"—"}</td>
+                  <td style={{padding:"8px 10px",fontFamily:T.mono,color:T.muted}}>{item.unit_cost>0?$$(item.unit_cost):"—"}</td>
+                  <td style={{padding:"8px 10px",fontFamily:T.mono,
+                    color:lineTotal>0?T.accent:T.faint,fontWeight:700}}>
+                    {lineTotal>0?$$(lineTotal):"—"}
+                  </td>
+                  <td style={{padding:"8px 10px"}}>
+                    <span style={{cursor:"pointer",color:T.red,fontSize:12}}
+                      onClick={()=>deleteItem(item.id)}>✕</span>
+                  </td>
+                </tr>;
+              })}</tbody>
+              <tfoot><tr style={{borderTop:`2px solid ${T.border}`}}>
+                <td colSpan={4} style={{padding:"7px 10px",textAlign:"right",
+                  color:T.muted,fontSize:11,fontWeight:600}}>PO Total</td>
+                <td style={{padding:"7px 10px",fontFamily:T.mono,
+                  color:T.accent,fontWeight:800,fontSize:13}}>{$$(total)}</td>
+                <td/>
+              </tfoot>
+            </table>
+          </div>}
+
+          {/* Add item / import */}
+          {po.status!=="cancelled"&&<>
+            {showAddItem===po.id
+              ? <Card hi sx={{marginTop:8}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 72px 72px 120px",gap:8,marginBottom:8}}>
+                    <Inp label="Description" value={newItem.description}
+                      onChange={v=>setNewItem(x=>({...x,description:v}))}
+                      placeholder="e.g. Polytec White 3600×1800mm"/>
+                    <Inp label="Qty" value={newItem.qty}
+                      onChange={v=>setNewItem(x=>({...x,qty:v}))} type="number" mono/>
+                    <Inp label="Unit" value={newItem.unit}
+                      onChange={v=>setNewItem(x=>({...x,unit:v}))} placeholder="ea"/>
+                    <Inp label="Unit Cost $" value={newItem.unit_cost}
+                      onChange={v=>setNewItem(x=>({...x,unit_cost:v}))} type="number" mono/>
+                  </div>
+                  <Row gap={6}>
+                    <Btn sm v="pri" onClick={()=>addItem(po)}>Add</Btn>
+                    <Btn sm onClick={()=>setShowAddItem(null)}>Cancel</Btn>
+                  </Row>
+                </Card>
+              : <Row gap={6} sx={{marginTop:8}}>
+                  <Btn sm v="gho" onClick={()=>{
+                    setShowAddItem(po.id);
+                    setNewItem({description:"",qty:1,unit:"ea",unit_cost:0});
+                  }}>+ Add Line Item</Btn>
+                  {(proj.lineItems||[]).length>0&&
+                    <Btn sm v="tel" onClick={()=>importFromEstimate(po)}>⬇ Import from Estimate</Btn>}
+                </Row>
+            }
+          </>}
+        </div>}
+      </Card>;
+    })}
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // JOB COSTS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
 function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, onMutate, pop}) {
   const [showAct, setShowAct] = useState(false);
   const [showVar, setShowVar] = useState(false);
-  const [showPO,  setShowPO]  = useState(false);
   const [busy,    setBusy]    = useState(false);
   const [na, setNa] = useState({category:CATS[0],description:"",amount:0,date:new Date().toISOString().slice(0,10),supplier:""});
   const [nv, setNv] = useState({ref:"",description:"",amount:0,status:"pending",date:new Date().toISOString().slice(0,10),notes:""});
-  const [npo,setNpo]= useState({ref:`PO-${String((proj.purchaseOrders||[]).length+1).padStart(3,"0")}`,supplier:"",category:CATS[0],description:"",amount:0,status:"draft",date:new Date().toISOString().slice(0,10)});
+  const [poCommitted, setPoCommitted] = useState(0);
+  const [poCount,     setPoCount]     = useState(0);
 
-  const pos = proj.purchaseOrders||[];
-  const poCommitted = pos.filter(po=>po.status!=="draft").reduce((s,po)=>s+(po.amount||0),0);
+  useEffect(()=>{
+    (async()=>{
+      const { data } = await dbGetPOCommittedTotal(proj.id);
+      if(data!=null) setPoCommitted(data);
+      const { data:allPos } = await dbListPurchaseOrders(proj.id);
+      if(allPos) setPoCount(allPos.filter(p=>["sent","received"].includes(p.status)).length);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[proj.id]);
   const approvedVars = variations.filter(v=>v.status==="approved");
   const varTotal = approvedVars.reduce((s,v)=>s+(v.amount||0),0);
 
@@ -3731,16 +3998,6 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, onM
     pop("Variation deleted.","info");
   }
 
-  function receivePO(po) {
-    onMutate(p=>({...p,
-      purchaseOrders:p.purchaseOrders.map(x=>x.id===po.id?{...x,status:"received"}:x),
-      actualCosts:[...(p.actualCosts||[]),{id:Date.now(),category:po.category,
-        description:`${po.ref}: ${po.description}`,amount:po.amount,
-        date:new Date().toISOString().slice(0,10),supplier:po.supplier}],
-    }));
-    pop(`${po.ref} received — cost booked to actuals.`);
-  }
-
   const variance = c.exGst - c.actTotal;
   const vPct = c.exGst>0 ? variance/c.exGst*100 : 0;
 
@@ -3748,7 +4005,7 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, onM
     <Row gap={12} wrap sx={{marginBottom:18}}>
       <KPI label="Budget ex. GST" value={$$(c.exGst,true)} sub="quoted"/>
       <KPI label="Actual Costs" value={$$(c.actTotal,true)} sub={`${(proj.actualCosts||[]).length} entries`} color={T.blue}/>
-      <KPI label="Committed (POs)" value={$$(poCommitted,true)} sub={`${pos.filter(p2=>p2.status!=="draft").length} live orders`} color={T.purple}/>
+      <KPI label="Committed (POs)" value={$$(poCommitted,true)} sub={`${poCount} live orders`} color={T.purple}/>
       <KPI label="Variance" value={$$(Math.abs(variance),true)}
         sub={`${vPct>=0?"Under":"OVER"} budget ${Math.abs(vPct).toFixed(1)}%`}
         color={vPct>=0?T.green:T.red}/>
@@ -3758,52 +4015,13 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, onM
 
     {/* ── PURCHASE ORDERS ── */}
     <Card sx={{marginBottom:16}}>
-      <Row gap={8} sx={{marginBottom:10}}>
+      <Row gap={8} sx={{alignItems:"center"}}>
         <div style={{fontWeight:700,fontSize:13}}>Purchase Orders</div>
-        <Btn sm v="pur" onClick={()=>setShowPO(!showPO)}>+ New PO</Btn>
-        <div style={{color:T.faint,fontSize:11,marginLeft:"auto"}}>draft → sent → received → billed</div>
-      </Row>
-      {showPO&&<Card hi sx={{marginBottom:10}}>
-        <div style={{display:"grid",gridTemplateColumns:"100px 1fr 1fr",gap:8}}>
-          <Inp label="PO Ref" value={npo.ref} onChange={v=>setNpo(x=>({...x,ref:v}))}/>
-          <Inp label="Supplier" value={npo.supplier} onChange={v=>setNpo(x=>({...x,supplier:v}))} placeholder="Supplier name"/>
-          <Sel label="Category" value={npo.category} onChange={v=>setNpo(x=>({...x,category:v}))} options={CATS}/>
-          <Inp label="Amount ex. GST" value={npo.amount} onChange={v=>setNpo(x=>({...x,amount:v}))} type="number" mono/>
-          <Inp label="Description" value={npo.description} onChange={v=>setNpo(x=>({...x,description:v}))} sx={{gridColumn:"2/-1"}}/>
+        <Bdg color={T.purple}>{$$(poCommitted,true)} committed</Bdg>
+        <div style={{color:T.faint,fontSize:12,marginLeft:"auto"}}>
+          Manage POs in the <strong>Procurement</strong> tab →
         </div>
-        <Row gap={8}><Btn v="pri" sm onClick={()=>{
-          if(!npo.supplier||!npo.amount) return pop("Supplier and amount required.","error");
-          onMutate(p=>({...p,purchaseOrders:[...(p.purchaseOrders||[]),{...npo,id:Date.now(),amount:parseFloat(npo.amount)||0}]}));
-          setNpo({ref:`PO-${String(pos.length+2).padStart(3,"0")}`,supplier:"",category:CATS[0],description:"",amount:0,status:"draft",date:new Date().toISOString().slice(0,10)});
-          setShowPO(false); pop("PO created.");
-        }}>Create PO</Btn><Btn sm onClick={()=>setShowPO(false)}>Cancel</Btn></Row>
-      </Card>}
-      {pos.length>0
-        ? <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-            <thead><tr style={{color:T.faint,fontSize:11,textAlign:"left"}}>
-              {["Ref","Supplier","Category","Description","Amount","Status",""].map(h=><th key={h} style={{padding:"5px 8px",fontWeight:600}}>{h}</th>)}
-            </tr></thead>
-            <tbody>{pos.map(po=><tr key={po.id} style={{borderTop:`1px solid ${T.border}`}}>
-              <td style={{padding:"8px 8px",fontFamily:T.mono,color:T.purple,fontWeight:700}}>{po.ref}</td>
-              <td style={{padding:"8px 8px",color:T.text}}>{po.supplier}</td>
-              <td style={{padding:"8px 8px"}}><Bdg color={T.blue} sm>{po.category}</Bdg></td>
-              <td style={{padding:"8px 8px",color:T.muted}}>{po.description}</td>
-              <td style={{padding:"8px 8px",fontFamily:T.mono,color:T.accent,fontWeight:700}}>{$$(po.amount)}</td>
-              <td style={{padding:"8px 8px"}}>
-                <Bdg color={po.status==="received"?T.green:po.status==="billed"?T.teal:po.status==="sent"?T.blue:T.faint} sm>{po.status}</Bdg>
-              </td>
-              <td style={{padding:"8px 8px"}}>
-                <Row gap={5}>
-                  {po.status==="draft"&&<Btn sm v="blu" onClick={()=>{onMutate(p=>({...p,purchaseOrders:p.purchaseOrders.map(x=>x.id===po.id?{...x,status:"sent"}:x)}));pop(`${po.ref} marked sent.`);}}>Send</Btn>}
-                  {po.status==="sent"&&<Btn sm v="grn" onClick={()=>receivePO(po)}>Receive</Btn>}
-                  {po.status==="received"&&<Btn sm v="tel" onClick={()=>{onMutate(p=>({...p,purchaseOrders:p.purchaseOrders.map(x=>x.id===po.id?{...x,status:"billed"}:x)}));pop(`${po.ref} billed.`);}}>Billed</Btn>}
-                  <span style={{cursor:"pointer",color:T.red,fontSize:12}}
-                    onClick={()=>onMutate(p=>({...p,purchaseOrders:p.purchaseOrders.filter(x=>x.id!==po.id)}))}>✕</span>
-                </Row>
-              </td>
-            </tr>)}</tbody>
-          </table>
-        : <div style={{color:T.faint,fontSize:12}}>No purchase orders yet.</div>}
+      </Row>
     </Card>
 
     {c.exGst>0&&<Card sx={{marginBottom:16}}>
