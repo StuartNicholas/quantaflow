@@ -3899,7 +3899,7 @@ function ProcurementModule({proj, pop}) {
                 <td style={{padding:"7px 10px",fontFamily:T.mono,
                   color:T.accent,fontWeight:800,fontSize:13}}>{$$(total)}</td>
                 <td/>
-              </tfoot>
+              </tr></tfoot>
             </table>
           </div>}
 
