@@ -13,6 +13,7 @@ import { getTakeoff as dbGetTakeoff, saveTakeoff as dbSaveTakeoff, addTakeoffIte
 import { listPurchaseOrders as dbListPurchaseOrders, createPurchaseOrder as dbCreatePurchaseOrder, updatePurchaseOrder as dbUpdatePurchaseOrder, deletePurchaseOrder as dbDeletePurchaseOrder, addPurchaseOrderItem as dbAddPurchaseOrderItem, addPurchaseOrderItems as dbAddPurchaseOrderItems, deletePurchaseOrderItem as dbDeletePurchaseOrderItem, getPOCommittedTotal as dbGetPOCommittedTotal } from "../lib/db/purchase_orders";
 import { listDefects as dbListDefects, createDefect as dbCreateDefect, updateDefect as dbUpdateDefect, deleteDefect as dbDeleteDefect, listHandoverItems as dbListHandoverItems, seedHandoverItems as dbSeedHandoverItems, createHandoverItem as dbCreateHandoverItem, toggleHandoverItem as dbToggleHandoverItem, deleteHandoverItem as dbDeleteHandoverItem } from "../lib/db/handover";
 import { getActivityFeed as dbGetActivityFeed, getQuoteVersionStats as dbGetQuoteVersionStats } from "../lib/db/reporting";
+import { listClaims as dbListClaims, createClaim as dbCreateClaim, updateClaim as dbUpdateClaim, deleteClaim as dbDeleteClaim, addClaimItem as dbAddClaimItem, addClaimItems as dbAddClaimItems, deleteClaimItem as dbDeleteClaimItem } from "../lib/db/claims";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -1523,7 +1524,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="procurement"  && <ProcurementModule proj={proj} pop={pop}/>}
     {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} onMutate={onMutate} pop={pop}/>}
     {tab==="handover"  && <HandoverModule proj={proj} onMutate={onMutate} pop={pop}/>}
-    {tab==="claims"    && <Parked name="Progress Claims" desc="Progress claim scheduling and invoicing will be added in a later version, integrating with Xero rather than rebuilding accounting."/>}
+    {tab==="claims"    && <ClaimsModule proj={proj} c={c} pop={pop}/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
   </div>;
 }
@@ -4608,95 +4609,247 @@ function HandoverModule({proj, onMutate, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // CLAIMS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function ClaimsModule({proj, onMutate, c, onPushXero, pop}) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [nc, setNc] = useState({
-    ref:`PC-${String((proj.claims||[]).length+1).padStart(2,"0")}`,
-    description:"",pct:0,amount:0,status:"pending",
-    date:new Date().toISOString().slice(0,10)
-  });
+function ClaimsModule({proj, c, pop}) {
+  const [claims,      setClaims]      = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [expanded,    setExpanded]    = useState(null);
+  const [showNew,     setShowNew]     = useState(false);
+  const [busy,        setBusy]        = useState(false);
+  const [nc,          setNc]          = useState({claim_number:1, description:"", period_end:""});
+  const [showAddItem, setShowAddItem] = useState(null);
+  const [newItem,     setNewItem]     = useState({description:"", qty:1, unit:"", unit_cost:0});
 
-  const totalClaimed = (proj.claims||[]).reduce((s,cl)=>s+(cl.amount||0),0);
-  const outstanding  = c.total - totalClaimed;
+  async function reload() {
+    const { data } = await dbListClaims(proj.id);
+    setClaims(data||[]);
+  }
+
+  useEffect(()=>{
+    let on=true;
+    (async()=>{
+      setLoading(true);
+      const { data } = await dbListClaims(proj.id);
+      if(!on) return;
+      setClaims(data||[]);
+      setLoading(false);
+    })();
+    return ()=>{on=false;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[proj.id]);
+
+  function openNew(){
+    const next = claims.length>0 ? Math.max(...claims.map(cl=>cl.claim_number))+1 : 1;
+    setNc({claim_number:next, description:"", period_end:""});
+    setShowNew(true);
+  }
+
+  async function createClaim(){
+    if(!nc.description.trim()) return pop("Description required.","error");
+    setBusy(true);
+    const { error } = await dbCreateClaim(proj.id, nc);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setShowNew(false);
+    await reload();
+    pop(`Claim #${nc.claim_number} created.`);
+  }
+
+  async function advance(cl){
+    const next = {draft:"submitted",submitted:"approved",approved:"paid"}[cl.status];
+    if(!next) return;
+    const label = {submitted:"Submit",approved:"Approve",paid:"Mark Paid"}[next];
+    if(!safeConfirm(`${label} Claim #${cl.claim_number}?`)) return;
+    const { error } = await dbUpdateClaim(cl.id,{status:next});
+    if(error) return pop(error,"error");
+    await reload();
+  }
+
+  async function removeClaim(cl){
+    if(!safeConfirm(`Delete Claim #${cl.claim_number}? This cannot be undone.`)) return;
+    const { error } = await dbDeleteClaim(cl.id);
+    if(error) return pop(error,"error");
+    await reload();
+    pop("Claim deleted.","info");
+  }
+
+  async function importFromEstimate(cl){
+    const rows = (proj.lineItems||[])
+      .filter(li=>(li.label||li.desc||"").trim())
+      .map(li=>({
+        description: li.label||li.desc||"",
+        qty: li.qty||1,
+        unit: li.unit||"",
+        unit_cost: li.unitCost||li.unit_cost||0,
+      }));
+    if(!rows.length) return pop("No estimate items to import.","error");
+    const { error } = await dbAddClaimItems(cl.id, rows);
+    if(error) return pop(error,"error");
+    await reload();
+    pop(`Imported ${rows.length} items from Estimate.`);
+  }
+
+  async function addItem(claimId){
+    if(!newItem.description.trim()) return pop("Description required.","error");
+    const { error } = await dbAddClaimItem(claimId,{...newItem,sort_order:0});
+    if(error) return pop(error,"error");
+    setNewItem({description:"",qty:1,unit:"",unit_cost:0});
+    setShowAddItem(null);
+    await reload();
+  }
+
+  async function removeItem(id){
+    const { error } = await dbDeleteClaimItem(id);
+    if(error) return pop(error,"error");
+    await reload();
+  }
+
+  const claimTotal   = cl => (cl.claim_items||[]).reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
+  const totalClaimed  = claims.reduce((s,cl)=>s+claimTotal(cl),0);
+  const totalApproved = claims.filter(cl=>["approved","paid"].includes(cl.status)).reduce((s,cl)=>s+claimTotal(cl),0);
+  const totalPaid     = claims.filter(cl=>cl.status==="paid").reduce((s,cl)=>s+claimTotal(cl),0);
+  const contractVal   = c.total||0;
+
+  const STATUS = {
+    draft:     {c:T.faint,  l:"Draft"},
+    submitted: {c:T.blue,   l:"Submitted"},
+    approved:  {c:T.yellow, l:"Approved"},
+    paid:      {c:T.green,  l:"Paid"},
+  };
+
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading claims…</div></Card>;
 
   return <div>
     <Row gap={12} wrap sx={{marginBottom:18}}>
-      <KPI label="Contract Value" value={$$(c.total,true)} sub="inc. GST"/>
-      <KPI label="Total Claimed"  value={$$(totalClaimed,true)} sub={`${(proj.claims||[]).length} claims`} color={T.green}/>
-      <KPI label="Outstanding"    value={$$(outstanding,true)} sub="remaining" color={T.yellow}/>
-      <KPI label="Paid"           value={$$(proj.paid||0,true)} sub="received" color={T.teal}/>
+      <KPI label="Contract Value" value={$$(contractVal,true)} sub="inc. GST"/>
+      <KPI label="Claimed"        value={$$(totalClaimed,true)} sub={`${claims.length} claim${claims.length!==1?"s":""}`} color={T.accent}/>
+      <KPI label="Approved"       value={$$(totalApproved,true)} sub="approved + paid" color={T.yellow}/>
+      <KPI label="Paid"           value={$$(totalPaid,true)}     sub="received"        color={T.green}/>
     </Row>
 
-    {c.total>0&&<Card sx={{marginBottom:16}}>
-      <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>Claim Progress</div>
-      <div style={{background:T.bg,borderRadius:5,height:20,overflow:"hidden",position:"relative"}}>
+    {contractVal>0&&<Card sx={{marginBottom:16}}>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Claim Progress</div>
+      <div style={{background:T.bg,borderRadius:5,height:16,overflow:"hidden",position:"relative",marginBottom:4}}>
         <div style={{position:"absolute",left:0,top:0,height:"100%",borderRadius:5,
-          background:`linear-gradient(90deg,${T.green},${T.teal})`,
-          width:`${Math.min(100,c.total>0?totalClaimed/c.total*100:0)}%`,transition:"width 0.5s"}}/>
-        <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",padding:"0 10px"}}>
-          <span style={{fontFamily:T.mono,fontSize:11,fontWeight:700,color:"#fff",textShadow:"0 1px 3px rgba(0,0,0,0.8)"}}>
-            {(totalClaimed/c.total*100).toFixed(1)}% · {$$(totalClaimed,true)} of {$$(c.total,true)}
-          </span>
-        </div>
+          background:`linear-gradient(90deg,${T.yellow},${T.green})`,
+          width:`${Math.min(100,contractVal>0?totalApproved/contractVal*100:0)}%`}}/>
+        <div style={{position:"absolute",left:0,top:0,height:"100%",borderRadius:5,
+          background:`linear-gradient(90deg,${T.accent}77,${T.blue}77)`,
+          width:`${Math.min(100,contractVal>0?totalClaimed/contractVal*100:0)}%`}}/>
+      </div>
+      <div style={{fontSize:11,color:T.faint}}>
+        {$$(totalClaimed,true)} claimed · {$$(totalApproved,true)} approved · {$$(totalPaid,true)} paid of {$$(contractVal,true)}
       </div>
     </Card>}
 
     <Row gap={8} sx={{marginBottom:14}}>
-      <Btn v="pri" onClick={()=>setShowAdd(!showAdd)}>+ New Claim</Btn>
-      <Btn v="grn" onClick={()=>onPushXero(proj)}>⟳ Push Invoice to Xero</Btn>
-      {proj.xeroRef&&<Bdg color={T.green}>{proj.xeroRef} · {$$(proj.invoiced,true)}</Bdg>}
+      <Btn v="pri" onClick={openNew}>+ New Claim</Btn>
     </Row>
 
-    {showAdd&&<Card hi sx={{marginBottom:14}}>
+    {showNew&&<Card hi sx={{marginBottom:14}}>
       <div style={{fontWeight:700,marginBottom:10,fontSize:13}}>New Progress Claim</div>
-      <Grid2 gap={10}>
-        <Inp label="Claim Ref" value={nc.ref} onChange={v=>setNc(x=>({...x,ref:v}))}/>
-        <Inp label="Date" value={nc.date} onChange={v=>setNc(x=>({...x,date:v}))} type="date"/>
-        <Inp label="Description" value={nc.description} onChange={v=>setNc(x=>({...x,description:v}))}
-          sx={{gridColumn:"1/-1"}}/>
-        <Inp label="% of Contract" value={nc.pct} type="number" mono
-          onChange={v=>{ const p=parseFloat(v)||0; setNc(x=>({...x,pct:p,amount:parseFloat((c.total*p/100).toFixed(2))})); }}/>
-        <Inp label="Amount ($)" value={nc.amount} onChange={v=>setNc(x=>({...x,amount:parseFloat(v)||0}))} type="number" mono/>
-      </Grid2>
-      <div style={{color:T.muted,fontSize:12,marginBottom:10}}>
-        Claim: <span style={{color:T.accent,fontFamily:T.mono,fontWeight:700}}>{$$(nc.amount)}</span>
-        {" "}({nc.pct}% of {$$(c.total,true)})
+      <div style={{display:"grid",gridTemplateColumns:"100px 1fr 160px",gap:10,marginBottom:10}}>
+        <Inp label="Claim #" value={nc.claim_number} type="number"
+          onChange={v=>setNc(x=>({...x,claim_number:parseInt(v)||1}))}/>
+        <Inp label="Description" value={nc.description}
+          onChange={v=>setNc(x=>({...x,description:v}))} placeholder="e.g. Practical Completion"/>
+        <Inp label="Period End" value={nc.period_end} type="date"
+          onChange={v=>setNc(x=>({...x,period_end:v}))}/>
       </div>
-      <Row gap={8}><Btn v="pri" onClick={()=>{
-        onMutate(p=>({...p,claims:[...(p.claims||[]),{...nc,id:Date.now()}]}));
-        setNc({ref:`PC-${String((proj.claims||[]).length+2).padStart(2,"0")}`,description:"",pct:0,amount:0,status:"pending",date:new Date().toISOString().slice(0,10)});
-        setShowAdd(false); pop("Claim added.");
-      }}>Save Claim</Btn><Btn onClick={()=>setShowAdd(false)}>Cancel</Btn></Row>
+      <Row gap={8}>
+        <Btn v="pri" sm onClick={createClaim} disabled={busy}>{busy?"Saving…":"Create Claim"}</Btn>
+        <Btn sm onClick={()=>setShowNew(false)}>Cancel</Btn>
+      </Row>
     </Card>}
 
-    {(proj.claims||[]).length>0
-      ? <Card sx={{padding:0,overflow:"hidden"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-            <thead><tr style={{background:T.bg,color:T.faint,fontSize:11,textAlign:"left"}}>
-              {["Ref","Description","Date","Amount","Status",""].map(h=>
-                <th key={h} style={{padding:"7px 10px",fontWeight:600}}>{h}</th>)}
+    {claims.length===0&&!showNew&&<Card>
+      <div style={{color:T.faint,fontSize:13,padding:"8px 0"}}>
+        No progress claims yet. Create your first claim to start tracking payments against this project.
+      </div>
+    </Card>}
+
+    {claims.map(cl=>{
+      const st     = STATUS[cl.status]||STATUS.draft;
+      const total  = claimTotal(cl);
+      const isOpen = expanded===cl.id;
+      const items  = cl.claim_items||[];
+      const nextBtn = {draft:"Submit Claim",submitted:"Approve",approved:"Mark Paid"}[cl.status];
+      const nextV   = {draft:"blu",submitted:"grn",approved:"grn"}[cl.status];
+
+      return <Card key={cl.id} sx={{marginBottom:10,padding:"12px 14px",borderLeft:`3px solid ${st.c}`}}>
+        <Row gap={10} sx={{alignItems:"center",cursor:"pointer"}} onClick={()=>setExpanded(isOpen?null:cl.id)}>
+          <span style={{fontFamily:T.mono,color:T.purple,fontWeight:800,fontSize:13}}>#{cl.claim_number}</span>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:600,fontSize:13,color:T.text}}>{cl.description||"—"}</div>
+            {cl.period_end&&<div style={{fontSize:11,color:T.faint}}>Period ending {cl.period_end}</div>}
+          </div>
+          <Bdg color={st.c}>{st.l}</Bdg>
+          <div style={{fontFamily:T.mono,fontWeight:700,fontSize:14,color:T.accent,minWidth:80,textAlign:"right"}}>{$$(total)}</div>
+          <span style={{color:T.faint,fontSize:11}}>{isOpen?"▲":"▼"}</span>
+        </Row>
+
+        {isOpen&&<div style={{marginTop:12,borderTop:`1px solid ${T.border}`,paddingTop:12}}>
+
+          {items.length>0&&<table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:10}}>
+            <thead><tr style={{color:T.faint,textAlign:"left"}}>
+              <th style={{padding:"4px 8px",fontWeight:600}}>Description</th>
+              <th style={{padding:"4px 8px",fontWeight:600,textAlign:"right",width:55}}>Qty</th>
+              <th style={{padding:"4px 8px",fontWeight:600,width:55}}>Unit</th>
+              <th style={{padding:"4px 8px",fontWeight:600,textAlign:"right",width:90}}>Unit Cost</th>
+              <th style={{padding:"4px 8px",fontWeight:600,textAlign:"right",width:90}}>Total</th>
+              <th style={{width:24}}></th>
             </tr></thead>
-            <tbody>{(proj.claims||[]).map(cl=><tr key={cl.id} style={{borderTop:`1px solid ${T.border}`}}>
-              <td style={{padding:"9px 10px",fontFamily:T.mono,color:T.blue,fontWeight:700}}>{cl.ref}</td>
-              <td style={{padding:"9px 10px",color:T.text}}>{cl.description}</td>
-              <td style={{padding:"9px 10px",color:T.muted,fontSize:12}}>{cl.date}</td>
-              <td style={{padding:"9px 10px",fontFamily:T.mono,fontWeight:700,color:T.accent}}>{$$(cl.amount)}</td>
-              <td style={{padding:"9px 10px"}}>
-                <select value={cl.status}
-                  onChange={e=>onMutate(p=>({...p,claims:p.claims.map(x=>x.id===cl.id?{...x,status:e.target.value}:x)}))}
-                  style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:4,padding:"3px 7px",color:T.text,fontSize:12}}>
-                  <option>pending</option><option>submitted</option><option>paid</option>
-                </select>
-              </td>
-              <td style={{padding:"9px 10px"}}>
-                <span style={{cursor:"pointer",color:T.red,fontSize:12}}
-                  onClick={()=>onMutate(p=>({...p,claims:p.claims.filter(x=>x.id!==cl.id)}))}>✕</span>
+            <tbody>{items.map(item=><tr key={item.id} style={{borderTop:`1px solid ${T.border}55`}}>
+              <td style={{padding:"6px 8px",color:T.text}}>{item.description}</td>
+              <td style={{padding:"6px 8px",fontFamily:T.mono,textAlign:"right"}}>{item.qty}</td>
+              <td style={{padding:"6px 8px",color:T.faint}}>{item.unit||"—"}</td>
+              <td style={{padding:"6px 8px",fontFamily:T.mono,textAlign:"right"}}>{$$(item.unit_cost)}</td>
+              <td style={{padding:"6px 8px",fontFamily:T.mono,textAlign:"right",fontWeight:700,color:T.accent}}>{$$((item.qty||0)*(item.unit_cost||0))}</td>
+              <td style={{padding:"6px 8px",textAlign:"center"}}>
+                {cl.status==="draft"&&<span style={{cursor:"pointer",color:T.red,fontSize:11}}
+                  onClick={()=>removeItem(item.id)}>✕</span>}
               </td>
             </tr>)}</tbody>
-          </table>
-        </Card>
-      : <div style={{color:T.faint,fontSize:13}}>No progress claims yet.</div>
-    }
+            <tfoot><tr style={{borderTop:`2px solid ${T.border}`}}>
+              <td colSpan={4} style={{padding:"6px 8px",fontWeight:700,color:T.faint,fontSize:11,textAlign:"right"}}>Total</td>
+              <td style={{padding:"6px 8px",fontFamily:T.mono,fontWeight:700,color:T.accent}}>{$$(total)}</td>
+              <td></td>
+            </tr></tfoot>
+          </table>}
+
+          {items.length===0&&cl.status==="draft"&&<div style={{color:T.faint,fontSize:12,marginBottom:10}}>
+            No line items yet — add manually or import from the Estimate.
+          </div>}
+
+          {showAddItem===cl.id&&<Card hi sx={{marginBottom:10,padding:"10px 12px"}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 65px 65px 100px",gap:8,marginBottom:8}}>
+              <Inp label="Description" value={newItem.description}
+                onChange={v=>setNewItem(x=>({...x,description:v}))} placeholder="Item description"/>
+              <Inp label="Qty" value={newItem.qty} type="number"
+                onChange={v=>setNewItem(x=>({...x,qty:parseFloat(v)||0}))}/>
+              <Inp label="Unit" value={newItem.unit}
+                onChange={v=>setNewItem(x=>({...x,unit:v}))}/>
+              <Inp label="Unit Cost" value={newItem.unit_cost} type="number" mono
+                onChange={v=>setNewItem(x=>({...x,unit_cost:parseFloat(v)||0}))}/>
+            </div>
+            <Row gap={8}>
+              <Btn sm v="pri" onClick={()=>addItem(cl.id)}>Add Item</Btn>
+              <Btn sm onClick={()=>setShowAddItem(null)}>Cancel</Btn>
+            </Row>
+          </Card>}
+
+          <Row gap={8} sx={{flexWrap:"wrap"}}>
+            {cl.status==="draft"&&<>
+              <Btn sm v="gho" onClick={()=>{ setShowAddItem(showAddItem===cl.id?null:cl.id); setNewItem({description:"",qty:1,unit:"",unit_cost:0}); }}>
+                + Add Item
+              </Btn>
+              <Btn sm v="gho" onClick={()=>importFromEstimate(cl)}>↓ Import from Estimate</Btn>
+            </>}
+            {nextBtn&&<Btn sm v={nextV} onClick={()=>advance(cl)}>{nextBtn}</Btn>}
+            {cl.status==="draft"&&<Btn sm v="red" onClick={()=>removeClaim(cl)}>Delete</Btn>}
+          </Row>
+        </div>}
+      </Card>;
+    })}
   </div>;
 }
 
