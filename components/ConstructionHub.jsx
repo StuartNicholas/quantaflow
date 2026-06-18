@@ -681,8 +681,9 @@ export default function App() {
   const [xero,      setXero]      = useLS("qf_xero", {connected:false,autoSync:true,twoWay:false,syncPO:false,taxCode:"GST",accountCode:"200",log:[]});
   const [trash,     setTrash]     = useLS("qf_trash", []);
   const [storageErr,setStorageErr]= useState(null);
-  const [clientImport, setClientImport] = useState(null); // {legacy:[...]} when a one-time import is offered
-  const [profileName, setProfileName] = useState(null);   // editable display name from profiles.full_name
+  const [clientImport, setClientImport] = useState(null);
+  const [profileName, setProfileName] = useState(null);
+  const [setupComplete, setSetupComplete] = useState(null); // null=loading, false=show wizard, true=done
 
   // Friendly display name: saved profile name → auth metadata → email prefix.
   const displayName = profileName
@@ -784,10 +785,18 @@ export default function App() {
           .order("created", { ascending: false });
         if (projectError) throw projectError;
 
+        const { data: companyRow } = await supabase
+          .from("companies")
+          .select("name, setup_complete")
+          .eq("id", profile.company_id)
+          .single();
+
         if (mounted) {
           setUser(currentUser);
           setCompanyId(profile.company_id);
           setProjects((projectData || []).map(normalizeProject));
+          setSetupComplete(companyRow?.setup_complete ?? true);
+          if (companyRow?.name) setCompany(c => ({...c, name: companyRow.name}));
         }
       } catch (err) {
         if (mounted) setProjectsError(err?.message || String(err));
@@ -921,6 +930,21 @@ export default function App() {
   return (
     <div style={{minHeight:"100vh",background:T.bg,color:T.text,fontFamily:T.font,display:"flex"}}>
 
+      {setupComplete===false&&companyId&&<SetupWizard
+        companyId={companyId}
+        companyName={company?.name||""}
+        displayName={displayName}
+        onComplete={({name})=>{
+          setSetupComplete(true);
+          if(name) setCompany(c=>({...c,name}));
+          pop("Setup complete — welcome to Construction Hub!");
+        }}
+        onCreateProject={()=>{
+          setSetupComplete(true);
+          setNav("projects");
+        }}
+      />}
+
       {/* ── SIDEBAR ─────────────────────────────────────────────────── */}
       <aside style={{width:196,background:T.panel,borderRight:`1px solid ${T.border}`,
         display:"flex",flexDirection:"column",flexShrink:0,position:"sticky",top:0,height:"100vh"}}>
@@ -1031,6 +1055,212 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SETUP WIZARD — shown once on first login for new companies
+// ═══════════════════════════════════════════════════════════════════════════
+function SetupWizard({companyId, companyName, displayName, onComplete, onCreateProject}) {
+  const [step,           setStep]           = useState(1);
+  const [busy,           setBusy]           = useState(false);
+  const [name,           setName]           = useState(companyName||"");
+  const [formulaLoading, setFormulaLoading] = useState(true);
+  const [formula,        setFormula]        = useState({
+    default_base_h:720, default_base_d:560,
+    default_over_h:720, default_over_d:320,
+    default_tall_h:2100,default_tall_d:560,
+    assembly_per_cab:0, default_finish_rate:165,
+  });
+
+  useEffect(()=>{
+    supabase.from("cabinet_formula").select("*").eq("company_id",companyId).maybeSingle()
+      .then(({data})=>{
+        if(data) setFormula(f=>({...f,...data}));
+        setFormulaLoading(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[companyId]);
+
+  function setF(k,v){ setFormula(f=>({...f,[k]:parseFloat(v)||0})); }
+
+  async function finish(createProject){
+    setBusy(true);
+    await supabase.from("companies")
+      .update({name:(name||companyName).trim(), setup_complete:true})
+      .eq("id",companyId);
+    await supabase.from("cabinet_formula").upsert({
+      company_id: companyId,
+      default_base_h: formula.default_base_h,
+      default_base_d: formula.default_base_d,
+      default_over_h: formula.default_over_h,
+      default_over_d: formula.default_over_d,
+      default_tall_h: formula.default_tall_h,
+      default_tall_d: formula.default_tall_d,
+      assembly_per_cab: formula.assembly_per_cab,
+      default_finish_rate: formula.default_finish_rate,
+    },{onConflict:"company_id"});
+    setBusy(false);
+    if(createProject) onCreateProject();
+    else onComplete({name:(name||companyName).trim()});
+  }
+
+  async function skip(){
+    await supabase.from("companies").update({setup_complete:true}).eq("id",companyId);
+    onComplete({name:companyName});
+  }
+
+  const STEPS = ["Welcome","Cabinet Defaults","Ready"];
+
+  return <div style={{position:"fixed",inset:0,zIndex:9999,background:T.bg,
+    display:"flex",alignItems:"center",justifyContent:"center",padding:24,overflowY:"auto"}}>
+    <div style={{width:"100%",maxWidth:560}}>
+
+      {/* Logo + wordmark */}
+      <div style={{textAlign:"center",marginBottom:32}}>
+        <div style={{width:52,height:52,borderRadius:12,background:T.accent,color:"#000",
+          display:"flex",alignItems:"center",justifyContent:"center",
+          fontWeight:900,fontSize:22,margin:"0 auto 12px"}}>Q</div>
+        <div style={{fontSize:11,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Construction Hub</div>
+      </div>
+
+      {/* Step indicators */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,marginBottom:28}}>
+        {STEPS.map((s,i)=>{
+          const n=i+1;
+          const done=step>n; const active=step===n;
+          return <React.Fragment key={s}>
+            {i>0&&<div style={{width:28,height:1,background:done?T.accent:T.border}}/>}
+            <div style={{display:"flex",alignItems:"center",gap:5}}>
+              <div style={{width:22,height:22,borderRadius:"50%",fontSize:11,fontWeight:700,
+                display:"flex",alignItems:"center",justifyContent:"center",
+                background:done?T.accent:active?T.accentDim:"transparent",
+                border:`1.5px solid ${done||active?T.accent:T.border}`,
+                color:done?"#000":active?T.accent:T.faint}}>
+                {done?"✓":n}
+              </div>
+              <span style={{fontSize:11,color:active?T.accent:T.faint,fontWeight:active?700:400}}>{s}</span>
+            </div>
+          </React.Fragment>;
+        })}
+      </div>
+
+      {/* ── Step 1: Welcome ── */}
+      {step===1&&<Card hi>
+        <div style={{textAlign:"center",marginBottom:24}}>
+          <div style={{fontSize:22,fontWeight:800,color:T.text,marginBottom:8}}>
+            Welcome{displayName?`, ${displayName.split(" ")[0]}`:""}!
+          </div>
+          <div style={{fontSize:13,color:T.muted,lineHeight:1.6,maxWidth:420,margin:"0 auto"}}>
+            Let's get your account set up in 2 quick steps so your first quote is accurate from the start.
+          </div>
+        </div>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:12,color:T.faint,fontWeight:600,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.06em"}}>Company Name</div>
+          <input value={name} onChange={e=>setName(e.target.value)}
+            placeholder="Your company name"
+            style={{width:"100%",background:T.bg,border:`1px solid ${T.border}`,borderRadius:6,
+              padding:"10px 12px",color:T.text,fontSize:14,fontFamily:T.font,
+              outline:"none",boxSizing:"border-box"}}/>
+          <div style={{fontSize:11,color:T.faint,marginTop:5}}>This appears on all your quotes and documents.</div>
+        </div>
+        <Row gap={10} sx={{justifyContent:"flex-end",alignItems:"center"}}>
+          <span style={{fontSize:12,color:T.faint,cursor:"pointer",textDecoration:"underline"}}
+            onClick={skip}>Skip setup</span>
+          <Btn v="pri" onClick={()=>setStep(2)} disabled={!name.trim()}>Next →</Btn>
+        </Row>
+      </Card>}
+
+      {/* ── Step 2: Cabinet Defaults ── */}
+      {step===2&&<Card hi>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:18,fontWeight:800,color:T.text,marginBottom:6}}>Cabinet Defaults</div>
+          <div style={{fontSize:12,color:T.muted,lineHeight:1.5}}>
+            These are your factory starting dimensions and rates. You can override them on any individual project.
+          </div>
+        </div>
+
+        {formulaLoading
+          ? <div style={{color:T.faint,fontSize:13,textAlign:"center",padding:24}}>Loading…</div>
+          : <>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16}}>
+              {[
+                {k:"default_base_h",  label:"Base Height (mm)"},
+                {k:"default_base_d",  label:"Base Depth (mm)"},
+                {k:"default_over_h",  label:"Overhead Height (mm)"},
+                {k:"default_over_d",  label:"Overhead Depth (mm)"},
+                {k:"default_tall_h",  label:"Tall Height (mm)"},
+                {k:"default_tall_d",  label:"Tall Depth (mm)"},
+              ].map(({k,label})=><div key={k}>
+                <div style={{fontSize:11,color:T.faint,marginBottom:4,fontWeight:600}}>{label}</div>
+                <input type="number" value={formula[k]} onChange={e=>setF(k,e.target.value)}
+                  style={{width:"100%",background:T.bg,border:`1px solid ${T.border}`,borderRadius:6,
+                    padding:"8px 10px",color:T.text,fontSize:13,fontFamily:T.mono,
+                    outline:"none",boxSizing:"border-box"}}/>
+              </div>)}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
+              <div>
+                <div style={{fontSize:11,color:T.faint,marginBottom:4,fontWeight:600}}>Assembly Rate ($/cabinet)</div>
+                <input type="number" value={formula.assembly_per_cab} onChange={e=>setF("assembly_per_cab",e.target.value)}
+                  style={{width:"100%",background:T.bg,border:`1px solid ${T.border}`,borderRadius:6,
+                    padding:"8px 10px",color:T.text,fontSize:13,fontFamily:T.mono,
+                    outline:"none",boxSizing:"border-box"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:11,color:T.faint,marginBottom:4,fontWeight:600}}>Default Finish Rate ($/m²)</div>
+                <input type="number" value={formula.default_finish_rate} onChange={e=>setF("default_finish_rate",e.target.value)}
+                  style={{width:"100%",background:T.bg,border:`1px solid ${T.border}`,borderRadius:6,
+                    padding:"8px 10px",color:T.text,fontSize:13,fontFamily:T.mono,
+                    outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            </div>
+          </>
+        }
+
+        <Row gap={10} sx={{justifyContent:"space-between",alignItems:"center"}}>
+          <Btn v="gho" onClick={()=>setStep(1)}>← Back</Btn>
+          <Row gap={10} sx={{alignItems:"center"}}>
+            <span style={{fontSize:12,color:T.faint,cursor:"pointer",textDecoration:"underline"}}
+              onClick={skip}>Skip setup</span>
+            <Btn v="pri" onClick={()=>setStep(3)} disabled={formulaLoading}>Next →</Btn>
+          </Row>
+        </Row>
+      </Card>}
+
+      {/* ── Step 3: Ready ── */}
+      {step===3&&<Card hi>
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{fontSize:44,marginBottom:12}}>✓</div>
+          <div style={{fontSize:22,fontWeight:800,color:T.text,marginBottom:8}}>You're all set!</div>
+          <div style={{fontSize:13,color:T.muted,lineHeight:1.7,maxWidth:400,margin:"0 auto"}}>
+            <strong style={{color:T.text}}>{name||companyName}</strong> is ready to go.<br/>
+            Your cabinet defaults are saved and your first project is one click away.
+          </div>
+        </div>
+
+        <div style={{background:T.bg,borderRadius:8,padding:"14px 18px",marginBottom:24,fontSize:12,color:T.faint,lineHeight:1.8}}>
+          <div>✓ &nbsp;Company name set to <strong style={{color:T.text}}>{name||companyName}</strong></div>
+          <div>✓ &nbsp;Base cabinet: {formula.default_base_h}H × {formula.default_base_d}D mm</div>
+          <div>✓ &nbsp;Overhead cabinet: {formula.default_over_h}H × {formula.default_over_d}D mm</div>
+          <div>✓ &nbsp;Tall cabinet: {formula.default_tall_h}H × {formula.default_tall_d}D mm</div>
+          <div>✓ &nbsp;Assembly rate: ${formula.assembly_per_cab}/cabinet</div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Btn v="pri" full onClick={()=>finish(true)} disabled={busy}>
+            {busy?"Saving…":"Create First Project"}
+          </Btn>
+          <Btn v="gho" full onClick={()=>finish(false)} disabled={busy}>
+            {busy?"Saving…":"Explore the App"}
+          </Btn>
+        </div>
+        <div style={{textAlign:"center",marginTop:10}}>
+          <Btn v="gho" sm onClick={()=>setStep(2)}>← Back</Btn>
+        </div>
+      </Card>}
+
+    </div>
+  </div>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
