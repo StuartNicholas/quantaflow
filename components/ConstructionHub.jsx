@@ -12,6 +12,7 @@ import { listVariations as dbListVariations, createVariation as dbCreateVariatio
 import { getTakeoff as dbGetTakeoff, saveTakeoff as dbSaveTakeoff, addTakeoffItem as dbAddTakeoffItem, deleteTakeoffItem as dbDeleteTakeoffItem, ensureTakeoff as dbEnsureTakeoff, patchTakeoffMeta as dbPatchTakeoffMeta } from "../lib/db/takeoffs";
 import { listPurchaseOrders as dbListPurchaseOrders, createPurchaseOrder as dbCreatePurchaseOrder, updatePurchaseOrder as dbUpdatePurchaseOrder, deletePurchaseOrder as dbDeletePurchaseOrder, addPurchaseOrderItem as dbAddPurchaseOrderItem, addPurchaseOrderItems as dbAddPurchaseOrderItems, deletePurchaseOrderItem as dbDeletePurchaseOrderItem, getPOCommittedTotal as dbGetPOCommittedTotal } from "../lib/db/purchase_orders";
 import { listDefects as dbListDefects, createDefect as dbCreateDefect, updateDefect as dbUpdateDefect, deleteDefect as dbDeleteDefect, listHandoverItems as dbListHandoverItems, seedHandoverItems as dbSeedHandoverItems, createHandoverItem as dbCreateHandoverItem, toggleHandoverItem as dbToggleHandoverItem, deleteHandoverItem as dbDeleteHandoverItem } from "../lib/db/handover";
+import { getActivityFeed as dbGetActivityFeed, getQuoteVersionStats as dbGetQuoteVersionStats } from "../lib/db/reporting";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -909,6 +910,7 @@ export default function App() {
     {id:"builders",  icon:"🏗",label:"Builders"},
     {id:"suppliers", icon:"📦",label:"Suppliers"},
     {id:"rates",     icon:"≡",label:"Rate Library"},
+    {id:"reporting", icon:"◈",label:"Reporting"},
     {id:"xero",      icon:"⟳",label:"Xero Sync"},
     {id:"settings",  icon:"⚙",label:"Settings"},
   ];
@@ -1018,8 +1020,9 @@ export default function App() {
               {nav==="clients"   && <ClientsModule clients={clients} reloadClients={reloadClients} clientsLoading={clientsLoading} projects={projects} pop={pop}/>}
               {nav==="builders"  && <BuildersModule builders={builders} reloadBuilders={reloadBuilders} buildersLoading={buildersLoading} projects={projects} pop={pop}/>}
               {nav==="suppliers" && <SuppliersModule pop={pop}/>}
-              {nav==="rates"     && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
-              {nav==="xero"      && <XeroModule projects={projects} xero={xero} setXero={setXero} mutProj={mutProj} pop={pop}/>}
+              {nav==="rates"      && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
+              {nav==="reporting"  && <ReportingModule projects={projects} clients={clients}/>}
+              {nav==="xero"       && <XeroModule projects={projects} xero={xero} setXero={setXero} mutProj={mutProj} pop={pop}/>}
               {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} pop={pop}/>}
             </>
         }
@@ -1027,6 +1030,233 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REPORTING MODULE — company-level pipeline, conversion and activity
+// ═══════════════════════════════════════════════════════════════════════════
+function ReportingModule({projects, clients}) {
+  const [quoteStats, setQuoteStats] = useState([]);
+  const [activity,   setActivity]   = useState([]);
+  const [loading,    setLoading]    = useState(true);
+
+  useEffect(()=>{
+    let on=true;
+    (async()=>{
+      setLoading(true);
+      const [{ data:qs }, { data:act }] = await Promise.all([
+        dbGetQuoteVersionStats(),
+        dbGetActivityFeed(40),
+      ]);
+      if(!on) return;
+      setQuoteStats(qs||[]);
+      setActivity(act||[]);
+      setLoading(false);
+    })();
+    return ()=>{on=false;};
+  },[]);
+
+  // ── Pipeline metrics from project list ──────────────────────────────────
+  const byStatus = {};
+  projects.forEach(p=>{
+    const s=p.status||"draft";
+    if(!byStatus[s]) byStatus[s]={count:0,value:0};
+    byStatus[s].count++;
+    byStatus[s].value+=calc(p).total;
+  });
+
+  const totalPipeline = projects.reduce((s,p)=>s+calc(p).total,0);
+  const activeValue   = (byStatus.active?.value||0)+(byStatus.approved?.value||0);
+  const completedVal  = byStatus.complete?.value||0;
+
+  // ── Quote conversion ────────────────────────────────────────────────────
+  // Count only the most-recent version per project for conversion rate
+  const latestByProject = {};
+  quoteStats.forEach(qv=>{
+    if(!latestByProject[qv.project_id]||qv.version_number>latestByProject[qv.project_id].version_number)
+      latestByProject[qv.project_id]=qv;
+  });
+  const latest        = Object.values(latestByProject);
+  const totalIssued   = quoteStats.filter(q=>q.status!=="superseded").length;
+  const accepted      = latest.filter(q=>q.status==="accepted").length;
+  const sent          = latest.filter(q=>q.status==="sent").length;
+  const winRate       = latest.length>0 ? Math.round(accepted/latest.length*100) : 0;
+  const acceptedValue = quoteStats
+    .filter(q=>q.status==="accepted")
+    .reduce((s,q)=>s+(q.total_inc_gst||0),0);
+
+  // ── Top clients by project value ────────────────────────────────────────
+  const clientValues = {};
+  projects.forEach(p=>{
+    const cid = p.clientId||p.client_id||p.client||"Unknown";
+    const cl  = clients.find(c=>c.id===cid);
+    const name= cl?.name || (typeof cid==="string"&&cid.length<40?cid:"Unknown");
+    if(!clientValues[name]) clientValues[name]={name,value:0,count:0};
+    clientValues[name].value += calc(p).total;
+    clientValues[name].count++;
+  });
+  const topClients = Object.values(clientValues)
+    .sort((a,b)=>b.value-a.value).slice(0,8);
+  const maxClientVal = topClients[0]?.value||1;
+
+  // ── Status display config ───────────────────────────────────────────────
+  const STATUS_CFG = {
+    draft:    {color:T.faint,  label:"Draft"},
+    active:   {color:T.blue,   label:"Active"},
+    approved: {color:T.green,  label:"Approved"},
+    complete: {color:T.teal,   label:"Complete"},
+    archived: {color:T.faint,  label:"Archived"},
+  };
+
+  // ── Activity icon map ───────────────────────────────────────────────────
+  function actIcon(type){
+    const m={project:"◧",estimate:"≡",quote_version:"④",variation:"△",
+              purchase_order:"📦",defect:"⚠",handover_item:"✓",client:"◎"};
+    return m[type]||"•";
+  }
+  function timeAgo(iso){
+    const s=Math.floor((Date.now()-new Date(iso).getTime())/1000);
+    if(s<60)  return "just now";
+    if(s<3600) return `${Math.floor(s/60)}m ago`;
+    if(s<86400) return `${Math.floor(s/3600)}h ago`;
+    return `${Math.floor(s/86400)}d ago`;
+  }
+
+  return <div>
+    <Hdr>Reporting</Hdr>
+
+    {/* ── Top KPIs ── */}
+    <Row gap={12} wrap sx={{marginBottom:20}}>
+      <KPI label="Total Pipeline"   value={$$(totalPipeline,true)} sub={`${projects.length} projects`} color={T.accent}/>
+      <KPI label="Active Work"      value={$$(activeValue,true)}   sub="active + approved" color={T.blue}/>
+      <KPI label="Completed"        value={$$(completedVal,true)}  sub={`${byStatus.complete?.count||0} projects`} color={T.green}/>
+      <KPI label="Quote Win Rate"   value={`${winRate}%`}          sub={`${accepted} accepted of ${latest.length} issued`} color={T.yellow}/>
+      <KPI label="Accepted Value"   value={$$(acceptedValue,true)} sub={`${sent} still open`} color={T.teal}/>
+    </Row>
+
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,alignItems:"start"}}>
+
+      {/* ── LEFT column ── */}
+      <div style={{display:"flex",flexDirection:"column",gap:16}}>
+
+        {/* Pipeline by status */}
+        <Card>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:14}}>Pipeline by Status</div>
+          {Object.entries(STATUS_CFG).map(([key,cfg])=>{
+            const row=byStatus[key]||{count:0,value:0};
+            if(row.count===0&&key==="archived") return null;
+            const pct=totalPipeline>0?row.value/totalPipeline*100:0;
+            return <div key={key} style={{marginBottom:12}}>
+              <Row gap={8} sx={{marginBottom:5}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,width:100,flexShrink:0}}>
+                  <span style={{width:8,height:8,borderRadius:"50%",background:cfg.color,display:"inline-block"}}/>
+                  <span style={{fontSize:12,color:T.muted}}>{cfg.label}</span>
+                </div>
+                <div style={{flex:1,background:T.bg,borderRadius:4,height:8,overflow:"hidden"}}>
+                  <div style={{height:"100%",borderRadius:4,background:cfg.color,
+                    width:`${pct}%`,transition:"width 0.5s"}}/>
+                </div>
+                <span style={{fontFamily:T.mono,fontSize:12,color:T.text,width:90,textAlign:"right",flexShrink:0}}>
+                  {$$(row.value,true)}
+                </span>
+                <span style={{fontFamily:T.mono,fontSize:11,color:T.faint,width:20,textAlign:"right",flexShrink:0}}>
+                  {row.count}
+                </span>
+              </Row>
+            </div>;
+          })}
+        </Card>
+
+        {/* Quote conversion funnel */}
+        <Card>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:14}}>Quote Conversion</div>
+          {loading
+            ? <div style={{color:T.faint,fontSize:12}}>Loading…</div>
+            : <>
+              {[
+                {label:"Quotes Issued",  value:totalIssued,      color:T.blue},
+                {label:"Sent to Client", value:sent,             color:T.yellow},
+                {label:"Accepted",       value:accepted,         color:T.green},
+              ].map(row=>{
+                const pct=totalIssued>0?Math.round(row.value/totalIssued*100):0;
+                return <div key={row.label} style={{marginBottom:10}}>
+                  <Row gap={8} sx={{marginBottom:4}}>
+                    <span style={{fontSize:12,color:T.muted,width:130,flexShrink:0}}>{row.label}</span>
+                    <div style={{flex:1,background:T.bg,borderRadius:4,height:7,overflow:"hidden"}}>
+                      <div style={{height:"100%",borderRadius:4,background:row.color,
+                        width:`${pct}%`,transition:"width 0.5s"}}/>
+                    </div>
+                    <span style={{fontFamily:T.mono,fontSize:12,color:row.color,fontWeight:700,
+                      width:30,textAlign:"right",flexShrink:0}}>{row.value}</span>
+                  </Row>
+                </div>;
+              })}
+              {winRate>0&&<div style={{marginTop:12,padding:"8px 12px",borderRadius:6,
+                background:`${T.green}15`,border:`1px solid ${T.green}40`}}>
+                <span style={{fontSize:12,color:T.green,fontWeight:700}}>{winRate}% win rate</span>
+                <span style={{fontSize:12,color:T.muted}}> · {$$(acceptedValue,true)} total accepted</span>
+              </div>}
+              {latest.length===0&&<div style={{color:T.faint,fontSize:12}}>
+                No quotes issued yet — issue quotes from the Quote tab on any project.
+              </div>}
+            </>
+          }
+        </Card>
+
+        {/* Top clients */}
+        {topClients.length>0&&<Card>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:14}}>Top Clients by Value</div>
+          {topClients.map((cl,i)=>{
+            const pct=cl.value/maxClientVal*100;
+            return <div key={cl.name} style={{marginBottom:10}}>
+              <Row gap={8} sx={{marginBottom:4}}>
+                <span style={{fontSize:11,color:T.faint,fontFamily:T.mono,width:18,flexShrink:0}}>
+                  {i+1}
+                </span>
+                <span style={{fontSize:12,color:T.text,flex:1,overflow:"hidden",
+                  textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cl.name}</span>
+                <span style={{fontSize:11,color:T.faint,flexShrink:0}}>{cl.count} proj</span>
+                <span style={{fontFamily:T.mono,fontSize:12,color:T.accent,fontWeight:700,
+                  width:90,textAlign:"right",flexShrink:0}}>{$$(cl.value,true)}</span>
+              </Row>
+              <div style={{background:T.bg,borderRadius:3,height:5,overflow:"hidden",marginLeft:26}}>
+                <div style={{height:"100%",borderRadius:3,background:T.accent,
+                  width:`${pct}%`,transition:"width 0.5s"}}/>
+              </div>
+            </div>;
+          })}
+        </Card>}
+      </div>
+
+      {/* ── RIGHT column — activity feed ── */}
+      <div>
+        <Card sx={{maxHeight:780,display:"flex",flexDirection:"column"}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:14,flexShrink:0}}>Recent Activity</div>
+          {loading
+            ? <div style={{color:T.faint,fontSize:12}}>Loading…</div>
+            : activity.length===0
+              ? <div style={{color:T.faint,fontSize:12}}>No activity recorded yet.</div>
+              : <div style={{overflowY:"auto",flex:1}}>
+                  {activity.map((a,i)=><div key={a.id} style={{
+                    display:"flex",gap:10,padding:"9px 0",
+                    borderBottom:i<activity.length-1?`1px solid ${T.border}`:"none",
+                    alignItems:"flex-start"}}>
+                    <div style={{width:26,height:26,borderRadius:6,background:T.bg,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:12,flexShrink:0,color:T.accent}}>{actIcon(a.entity_type)}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,color:T.text,lineHeight:1.4,wordBreak:"break-word"}}>
+                        {a.description||`${a.action} ${a.entity_type}`}
+                      </div>
+                      <div style={{fontSize:10,color:T.faint,marginTop:2}}>{timeAgo(a.created_at)}</div>
+                    </div>
+                  </div>)}
+                </div>
+          }
+        </Card>
+      </div>
+    </div>
+  </div>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
