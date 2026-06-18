@@ -1048,7 +1048,7 @@ export default function App() {
               {nav==="rates"      && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
               {nav==="reporting"  && <ReportingModule projects={projects} clients={clients}/>}
               {nav==="xero"       && <XeroModule projects={projects} xero={xero} setXero={setXero} mutProj={mutProj} pop={pop}/>}
-              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} pop={pop}/>}
+              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} pop={pop}/>}
             </>
         }
         </ErrorBoundary>
@@ -6789,7 +6789,7 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // SETTINGS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function SettingsModule({company, setCompany, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, pop}) {
+function SettingsModule({company, setCompany, companyId, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, pop}) {
   const [local, setLocal] = useState(company);
   const [ai, setAi] = useLS("qf_ai", {mode:"proxy",endpoint:"/api/ai",apiKey:""});
   const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?"":displayName)||"");
@@ -6894,7 +6894,13 @@ function SettingsModule({company, setCompany, trash, setTrash, onRestore, user, 
           </div>
         </Card>
 
-        <Btn v="pri" full onClick={()=>{setCompany(local);pop("Settings saved!");}}>
+        <Btn v="pri" full onClick={async()=>{
+          setCompany(local);
+          if(companyId && local.name?.trim()) {
+            await supabase.from("companies").update({name:local.name.trim()}).eq("id",companyId);
+          }
+          pop("Settings saved!");
+        }}>
           Save All Settings
         </Btn>
 
