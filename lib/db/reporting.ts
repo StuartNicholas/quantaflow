@@ -6,9 +6,9 @@ export type ActivityEntry = {
   entity_type: string;
   entity_id: string;
   action: string;
-  description?: string | null;
+  summary?: string | null;
+  user_id?: string | null;
   created_at: string;
-  created_by?: string | null;
 };
 
 export type QuoteVersionStat = {

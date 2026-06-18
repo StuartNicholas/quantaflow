@@ -1247,7 +1247,7 @@ function ReportingModule({projects, clients}) {
                       fontSize:12,flexShrink:0,color:T.accent}}>{actIcon(a.entity_type)}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:12,color:T.text,lineHeight:1.4,wordBreak:"break-word"}}>
-                        {a.description||`${a.action} ${a.entity_type}`}
+                        {a.summary||`${a.action} ${a.entity_type}`}
                       </div>
                       <div style={{fontSize:10,color:T.faint,marginTop:2}}>{timeAgo(a.created_at)}</div>
                     </div>
