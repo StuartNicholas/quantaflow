@@ -14,6 +14,7 @@ import { listPurchaseOrders as dbListPurchaseOrders, createPurchaseOrder as dbCr
 import { listDefects as dbListDefects, createDefect as dbCreateDefect, updateDefect as dbUpdateDefect, deleteDefect as dbDeleteDefect, listHandoverItems as dbListHandoverItems, seedHandoverItems as dbSeedHandoverItems, createHandoverItem as dbCreateHandoverItem, toggleHandoverItem as dbToggleHandoverItem, deleteHandoverItem as dbDeleteHandoverItem } from "../lib/db/handover";
 import { getActivityFeed as dbGetActivityFeed, getQuoteVersionStats as dbGetQuoteVersionStats } from "../lib/db/reporting";
 import { listClaims as dbListClaims, createClaim as dbCreateClaim, updateClaim as dbUpdateClaim, deleteClaim as dbDeleteClaim, addClaimItem as dbAddClaimItem, addClaimItems as dbAddClaimItems, deleteClaimItem as dbDeleteClaimItem } from "../lib/db/claims";
+import { createCompany as dbCreateCompany, submitJoinRequest as dbSubmitJoinRequest, approveJoinRequest as dbApproveJoinRequest, rejectJoinRequest as dbRejectJoinRequest, listJoinRequests as dbListJoinRequests, listTeamMembers as dbListTeamMembers, getMyPendingRequest as dbGetMyPendingRequest } from "../lib/db/team";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -683,7 +684,10 @@ export default function App() {
   const [storageErr,setStorageErr]= useState(null);
   const [clientImport, setClientImport] = useState(null);
   const [profileName, setProfileName] = useState(null);
-  const [setupComplete, setSetupComplete] = useState(null); // null=loading, false=show wizard, true=done
+  const [setupComplete,      setSetupComplete]      = useState(null);  // null=loading, false=show wizard, true=done
+  const [needsCompany,       setNeedsCompany]       = useState(false); // true = no company_id yet
+  const [pendingJoinRequest, setPendingJoinRequest] = useState(null);  // pending request row or null
+  const [userRole,           setUserRole]           = useState("owner");
 
   // Friendly display name: saved profile name → auth metadata → email prefix.
   const displayName = profileName
@@ -772,28 +776,39 @@ export default function App() {
 
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
-          .select("company_id")
+          .select("company_id, role")
           .eq("id", currentUser.id)
           .single();
         if (profileError) throw profileError;
-        if (!profile?.company_id) throw new Error("User profile missing company_id.");
 
-        const { data: projectData, error: projectError } = await supabase
-          .from("projects")
-          .select("*")
-          .eq("company_id", profile.company_id)
-          .order("created", { ascending: false });
+        // No company yet — show company setup or pending approval screen
+        if (!profile?.company_id) {
+          const { data: pendingReq } = await supabase
+            .from("company_join_requests")
+            .select("*")
+            .eq("status", "pending")
+            .maybeSingle();
+          if (mounted) {
+            setUser(currentUser);
+            setNeedsCompany(true);
+            setPendingJoinRequest(pendingReq || null);
+          }
+          return;
+        }
+
+        const [
+          { data: companyRow },
+          { data: projectData, error: projectError },
+        ] = await Promise.all([
+          supabase.from("companies").select("name, setup_complete").eq("id", profile.company_id).single(),
+          supabase.from("projects").select("*").eq("company_id", profile.company_id).order("created", { ascending: false }),
+        ]);
         if (projectError) throw projectError;
-
-        const { data: companyRow } = await supabase
-          .from("companies")
-          .select("name, setup_complete")
-          .eq("id", profile.company_id)
-          .single();
 
         if (mounted) {
           setUser(currentUser);
           setCompanyId(profile.company_id);
+          setUserRole(profile.role || "owner");
           setProjects((projectData || []).map(normalizeProject));
           setSetupComplete(companyRow?.setup_complete ?? true);
           if (companyRow?.name) setCompany(c => ({...c, name: companyRow.name}));
@@ -930,6 +945,34 @@ export default function App() {
   return (
     <div style={{minHeight:"100vh",background:T.bg,color:T.text,fontFamily:T.font,display:"flex"}}>
 
+      {/* Company setup — shown when user has no company_id yet */}
+      {needsCompany && !pendingJoinRequest && <CompanySetupWizard
+        onCreated={({companyId:cid, companyName})=>{
+          setNeedsCompany(false);
+          setCompanyId(cid);
+          setSetupComplete(false);
+          setUserRole("owner");
+          if(companyName) setCompany(c=>({...c,name:companyName}));
+        }}
+        onJoinRequested={({companyName})=>{
+          setPendingJoinRequest({status:"pending",company_name:companyName});
+        }}
+      />}
+
+      {/* Pending approval — shown while waiting for owner to accept join request */}
+      {needsCompany && pendingJoinRequest && <PendingApprovalScreen
+        companyName={pendingJoinRequest.company_name||"your company"}
+        userEmail={user?.email||""}
+        onRefresh={async()=>{
+          const { data:prof } = await supabase.from("profiles").select("company_id,role").eq("id",user.id).single();
+          if(prof?.company_id){
+            // Approved — reload fully
+            window.location.reload();
+          }
+        }}
+      />}
+
+      {/* Cabinet defaults wizard — shown once after company is created */}
       {setupComplete===false&&companyId&&<SetupWizard
         companyId={companyId}
         companyName={company?.name||""}
@@ -1048,13 +1091,291 @@ export default function App() {
               {nav==="rates"      && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
               {nav==="reporting"  && <ReportingModule projects={projects} clients={clients}/>}
               {nav==="xero"       && <XeroModule projects={projects} xero={xero} setXero={setXero} mutProj={mutProj} pop={pop}/>}
-              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} pop={pop}/>}
+              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} userRole={userRole} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} pop={pop}/>}
             </>
         }
         </ErrorBoundary>
       </main>
     </div>
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COMPANY SETUP WIZARD — shown when user has no company yet (new signup)
+// ═══════════════════════════════════════════════════════════════════════════
+const COUNTRIES = [
+  {value:"AU",label:"Australia (ABN)"},
+  {value:"NZ",label:"New Zealand (NZBN)"},
+  {value:"GB",label:"United Kingdom (Company No.)"},
+  {value:"US",label:"United States (EIN)"},
+  {value:"SG",label:"Singapore (UEN)"},
+  {value:"OTHER",label:"Other country"},
+];
+const ABN_LABEL = {AU:"ABN",NZ:"NZBN",GB:"Company Number",US:"EIN",SG:"UEN",OTHER:"Business Registration No."};
+
+function CompanySetupWizard({onCreated, onJoinRequested}) {
+  const [mode,     setMode]     = useState(null); // null|'create'|'join'
+  const [busy,     setBusy]     = useState(false);
+  const [err,      setErr]      = useState(null);
+  const [name,     setName]     = useState("");
+  const [abn,      setAbn]      = useState("");
+  const [country,  setCountry]  = useState("AU");
+  const [joinAbn,  setJoinAbn]  = useState("");
+  const [fullName, setFullName] = useState("");
+
+  async function handleCreate(){
+    if(!name.trim()) return setErr("Company name is required.");
+    if(!abn.trim())  return setErr(`${ABN_LABEL[country]||"Business number"} is required.`);
+    setErr(null); setBusy(true);
+    const { data, error } = await dbCreateCompany(name.trim(), abn.trim(), country);
+    setBusy(false);
+    if(error) return setErr(error);
+    onCreated({companyId:data.company_id, companyName:name.trim()});
+  }
+
+  async function handleJoin(){
+    if(!fullName.trim()) return setErr("Your name is required.");
+    if(!joinAbn.trim())  return setErr("Business number is required.");
+    setErr(null); setBusy(true);
+    const { data, error } = await dbSubmitJoinRequest(joinAbn.trim(), fullName.trim());
+    setBusy(false);
+    if(error) return setErr(error);
+    onJoinRequested({companyName:data.companyName||data.company_name||""});
+  }
+
+  const OptionCard = ({icon, title, desc, onClick}) => (
+    <div onClick={onClick} style={{border:`2px solid ${T.border}`,borderRadius:10,padding:"22px 18px",
+      textAlign:"center",cursor:"pointer",transition:"border-color 0.15s",
+      onMouseEnter:e=>e.currentTarget.style.borderColor=T.accent,
+      onMouseLeave:e=>e.currentTarget.style.borderColor=T.border}}>
+      <div style={{fontSize:32,marginBottom:10}}>{icon}</div>
+      <div style={{fontWeight:700,fontSize:14,color:T.text,marginBottom:5}}>{title}</div>
+      <div style={{fontSize:12,color:T.muted,lineHeight:1.5}}>{desc}</div>
+    </div>
+  );
+
+  return <div style={{position:"fixed",inset:0,zIndex:9999,background:T.bg,
+    display:"flex",alignItems:"center",justifyContent:"center",padding:24,overflowY:"auto"}}>
+    <div style={{width:"100%",maxWidth:520}}>
+      <div style={{textAlign:"center",marginBottom:32}}>
+        <div style={{width:52,height:52,borderRadius:12,background:T.accent,color:"#000",
+          display:"flex",alignItems:"center",justifyContent:"center",
+          fontWeight:900,fontSize:22,margin:"0 auto 12px"}}>Q</div>
+        <div style={{fontSize:11,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Construction Hub</div>
+      </div>
+
+      {/* Choose mode */}
+      {!mode&&<Card hi>
+        <div style={{textAlign:"center",marginBottom:22}}>
+          <div style={{fontSize:20,fontWeight:800,color:T.text,marginBottom:8}}>Welcome to Construction Hub</div>
+          <div style={{fontSize:13,color:T.muted,lineHeight:1.6}}>
+            Are you setting up a new company, or joining an existing one?
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <OptionCard icon="🏢" title="New Company"
+            desc="Register your business and become the account owner"
+            onClick={()=>{setMode("create");setErr(null);}}/>
+          <OptionCard icon="👥" title="Join a Company"
+            desc="Request access to your company's existing account"
+            onClick={()=>{setMode("join");setErr(null);}}/>
+        </div>
+      </Card>}
+
+      {/* Create company */}
+      {mode==="create"&&<Card hi>
+        <div style={{marginBottom:18}}>
+          <div style={{fontSize:18,fontWeight:800,color:T.text,marginBottom:4}}>Register Your Company</div>
+          <div style={{fontSize:12,color:T.muted,lineHeight:1.5}}>
+            You'll be the account owner and can invite your team from Settings once set up.
+          </div>
+        </div>
+        <Inp label="Company / Trading Name" value={name} onChange={setName}
+          placeholder="e.g. Precision Joinery Pty Ltd" sx={{marginBottom:10}}/>
+        <Sel label="Country" value={country} onChange={setCountry}
+          options={COUNTRIES.map(c=>({value:c.value,label:c.label}))} sx={{marginBottom:10}}/>
+        <Inp label={ABN_LABEL[country]||"Business Number"} value={abn} onChange={setAbn}
+          placeholder="Used to uniquely identify your business" sx={{marginBottom:4}}/>
+        <div style={{fontSize:11,color:T.faint,marginBottom:16}}>
+          Your {ABN_LABEL[country]||"business number"} prevents duplicate registrations and lets team members find your company to join.
+        </div>
+        {err&&<div style={{color:T.red,fontSize:12,marginBottom:12,padding:"8px 12px",
+          background:`${T.red}18`,borderRadius:6,border:`1px solid ${T.red}44`}}>{err}</div>}
+        <Row gap={10} sx={{justifyContent:"space-between"}}>
+          <Btn v="gho" onClick={()=>{setMode(null);setErr(null);}}>← Back</Btn>
+          <Btn v="pri" onClick={handleCreate} disabled={busy||!name.trim()||!abn.trim()}>
+            {busy?"Creating…":"Create Company →"}
+          </Btn>
+        </Row>
+      </Card>}
+
+      {/* Join company */}
+      {mode==="join"&&<Card hi>
+        <div style={{marginBottom:18}}>
+          <div style={{fontSize:18,fontWeight:800,color:T.text,marginBottom:4}}>Join a Company</div>
+          <div style={{fontSize:12,color:T.muted,lineHeight:1.5}}>
+            Enter your company's business registration number. The account owner will approve your access.
+          </div>
+        </div>
+        <Inp label="Your Full Name" value={fullName} onChange={setFullName}
+          placeholder="e.g. Jane Smith" sx={{marginBottom:10}}/>
+        <Inp label="Company Business Number (ABN / NZBN / EIN etc.)" value={joinAbn} onChange={setJoinAbn}
+          placeholder="Ask your company admin for this number" sx={{marginBottom:4}}/>
+        <div style={{fontSize:11,color:T.faint,marginBottom:16}}>
+          This is the number your company registered with during setup.
+        </div>
+        {err&&<div style={{color:T.red,fontSize:12,marginBottom:12,padding:"8px 12px",
+          background:`${T.red}18`,borderRadius:6,border:`1px solid ${T.red}44`}}>{err}</div>}
+        <Row gap={10} sx={{justifyContent:"space-between"}}>
+          <Btn v="gho" onClick={()=>{setMode(null);setErr(null);}}>← Back</Btn>
+          <Btn v="pri" onClick={handleJoin} disabled={busy||!joinAbn.trim()||!fullName.trim()}>
+            {busy?"Submitting…":"Send Request →"}
+          </Btn>
+        </Row>
+      </Card>}
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PENDING APPROVAL SCREEN
+// ═══════════════════════════════════════════════════════════════════════════
+function PendingApprovalScreen({companyName, userEmail, onRefresh}) {
+  const [checking, setChecking] = useState(false);
+  const [checked,  setChecked]  = useState(false);
+
+  async function check(){
+    setChecking(true);
+    await onRefresh();
+    setChecked(true);
+    setChecking(false);
+  }
+
+  return <div style={{position:"fixed",inset:0,zIndex:9999,background:T.bg,
+    display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+    <div style={{width:"100%",maxWidth:460,textAlign:"center"}}>
+      <div style={{width:52,height:52,borderRadius:12,background:T.accent,color:"#000",
+        display:"flex",alignItems:"center",justifyContent:"center",
+        fontWeight:900,fontSize:22,margin:"0 auto 24px"}}>Q</div>
+      <div style={{fontSize:36,marginBottom:12}}>⏳</div>
+      <div style={{fontSize:20,fontWeight:800,color:T.text,marginBottom:10}}>Awaiting Approval</div>
+      <div style={{fontSize:13,color:T.muted,lineHeight:1.8,marginBottom:24}}>
+        Your request to join <strong style={{color:T.text}}>{companyName}</strong> has been sent.<br/>
+        The account owner will review your request and approve your access.
+      </div>
+      <Card sx={{marginBottom:16,textAlign:"left"}}>
+        <div style={{fontSize:12,color:T.faint,lineHeight:2}}>
+          <div>✓ &nbsp;Request submitted successfully</div>
+          <div>○ &nbsp;Owner reviews and approves you</div>
+          <div>○ &nbsp;You gain full access to the account</div>
+        </div>
+      </Card>
+      {checked&&<div style={{fontSize:12,color:T.muted,marginBottom:12}}>
+        Still pending — ask your admin to check their Settings → Team page.
+      </div>}
+      <Btn v="pri" full onClick={check} disabled={checking}>
+        {checking?"Checking…":"Check Approval Status"}
+      </Btn>
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEAM SECTION — embedded in SettingsModule, owner-only
+// ═══════════════════════════════════════════════════════════════════════════
+function TeamSection({companyId, pop}) {
+  const [members,  setMembers]  = useState([]);
+  const [requests, setRequests] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [busy,     setBusy]     = useState(null);
+
+  async function reload(){
+    const [{ data:m }, { data:r }] = await Promise.all([
+      dbListTeamMembers(),
+      dbListJoinRequests(),
+    ]);
+    setMembers(m||[]);
+    setRequests(r||[]);
+    setLoading(false);
+  }
+
+  useEffect(()=>{ reload(); },[]);
+
+  async function approve(req){
+    setBusy(req.id);
+    const { error } = await dbApproveJoinRequest(req.id);
+    setBusy(null);
+    if(error) return pop(error,"error");
+    pop(`${req.full_name||req.email} approved.`);
+    await reload();
+  }
+
+  async function reject(req){
+    if(!safeConfirm(`Reject ${req.full_name||req.email}'s request?`)) return;
+    setBusy(req.id);
+    const { error } = await dbRejectJoinRequest(req.id);
+    setBusy(null);
+    if(error) return pop(error,"error");
+    pop("Request rejected.","info");
+    await reload();
+  }
+
+  const ROLE_COLOR = {owner:T.accent, member:T.blue};
+
+  return <Card sx={{marginTop:14}}>
+    <div style={{fontWeight:700,fontSize:13,color:T.accent,marginBottom:14,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+      Team
+    </div>
+
+    {loading
+      ? <div style={{color:T.faint,fontSize:13}}>Loading…</div>
+      : <>
+        {/* Current members */}
+        <div style={{marginBottom:requests.length>0?16:0}}>
+          <div style={{fontSize:12,color:T.faint,fontWeight:600,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+            Members ({members.length})
+          </div>
+          {members.map(m=><div key={m.id} style={{display:"flex",alignItems:"center",gap:10,
+            padding:"8px 0",borderBottom:`1px solid ${T.border}`}}>
+            <div style={{width:30,height:30,borderRadius:"50%",background:T.accentDim,
+              border:`1px solid ${T.accentBrd}`,color:T.accent,display:"flex",
+              alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:13,flexShrink:0}}>
+              {(m.full_name||"?").slice(0,1).toUpperCase()}
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,color:T.text,fontWeight:600}}>{m.full_name||"Unnamed user"}</div>
+              <div style={{fontSize:11,color:T.faint}}>Since {m.created_at?new Date(m.created_at).toLocaleDateString():"—"}</div>
+            </div>
+            <Bdg color={ROLE_COLOR[m.role]||T.faint}>{m.role}</Bdg>
+          </div>)}
+        </div>
+
+        {/* Pending join requests */}
+        {requests.length>0&&<div>
+          <div style={{fontSize:12,color:T.yellow,fontWeight:600,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+            Pending Requests ({requests.length})
+          </div>
+          {requests.map(r=><div key={r.id} style={{display:"flex",alignItems:"center",gap:10,
+            padding:"10px 0",borderBottom:`1px solid ${T.border}`}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,color:T.text,fontWeight:600}}>{r.full_name||"Unknown"}</div>
+              <div style={{fontSize:11,color:T.faint}}>{r.email} · requested {r.requested_at?new Date(r.requested_at).toLocaleDateString():"—"}</div>
+            </div>
+            <Row gap={6}>
+              <Btn sm v="grn" onClick={()=>approve(r)} disabled={busy===r.id}>
+                {busy===r.id?"…":"Approve"}
+              </Btn>
+              <Btn sm v="red" onClick={()=>reject(r)} disabled={busy===r.id}>Reject</Btn>
+            </Row>
+          </div>)}
+        </div>}
+
+        {members.length===0&&requests.length===0&&<div style={{color:T.faint,fontSize:12,padding:"8px 0"}}>
+          No team members yet. Share your ABN with colleagues so they can request to join.
+        </div>}
+      </>
+    }
+  </Card>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6789,7 +7110,7 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // SETTINGS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function SettingsModule({company, setCompany, companyId, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, pop}) {
+function SettingsModule({company, setCompany, companyId, userRole, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, pop}) {
   const [local, setLocal] = useState(company);
   const [ai, setAi] = useLS("qf_ai", {mode:"proxy",endpoint:"/api/ai",apiKey:""});
   const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?"":displayName)||"");
@@ -6903,6 +7224,8 @@ function SettingsModule({company, setCompany, companyId, trash, setTrash, onRest
         }}>
           Save All Settings
         </Btn>
+
+        {userRole==="owner"&&<TeamSection companyId={companyId} pop={pop}/>}
 
         <Card>
           <div style={{fontWeight:700,marginBottom:10,fontSize:13,color:T.teal}}>Data Backup & Restore</div>
