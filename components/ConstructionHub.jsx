@@ -853,11 +853,14 @@ export default function App() {
           setUserRole(profile.role || "owner");
           setProjects((projectData || []).map(normalizeProject));
           setSetupComplete(companyRow?.setup_complete ?? true);
+          // Always overwrite abn and country from Supabase — they are the
+          // source of truth. Using ?? "" (not ||) ensures a stored empty
+          // string clears any stale localStorage value from a previous account.
           setCompany(c => ({
             ...c,
-            ...(companyRow?.name    ? {name:    companyRow.name}    : {}),
-            ...(companyRow?.abn     ? {abn:     companyRow.abn}     : {}),
-            ...(companyRow?.country ? {country: companyRow.country} : {}),
+            ...(companyRow?.name ? {name: companyRow.name} : {}),
+            abn:     companyRow?.abn     ?? "",
+            country: companyRow?.country ?? "AU",
           }));
         }
       } catch (err) {
