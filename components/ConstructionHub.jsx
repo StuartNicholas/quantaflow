@@ -869,12 +869,11 @@ export default function App() {
           if ((profile.role || "owner") === "owner") {
             supabase
               .from("company_join_requests")
-              .select("id", { count: "exact", head: true })
+              .select("*", { count: "exact", head: true })
               .eq("status", "pending")
               .then(({ count: n }) => {
                 if (!mounted) return;
-                const cnt = n || 0;
-                setPendingTeamCount(cnt);
+                setPendingTeamCount(n || 0);
               });
           }
         }
