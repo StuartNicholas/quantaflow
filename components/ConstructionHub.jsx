@@ -241,7 +241,7 @@ const SEED_RATES = [
 ];
 
 const SEED_COMPANY = {
-  name:"BuildRight Contractors", abn:"61 000 000 000",
+  name:"BuildRight Contractors", abn:"", country:"AU",
   address:"Unit 4, 88 Industry Rd, Henderson, Auckland 0612",
   phone:"09 837 5500", email:"quotes@buildright.co.nz",
   website:"www.buildright.co.nz", logoText:"BR",
@@ -842,7 +842,7 @@ export default function App() {
           { data: companyRow },
           { data: projectData, error: projectError },
         ] = await Promise.all([
-          supabase.from("companies").select("name, setup_complete").eq("id", profile.company_id).single(),
+          supabase.from("companies").select("name, setup_complete, abn, country").eq("id", profile.company_id).single(),
           supabase.from("projects").select("*").eq("company_id", profile.company_id).order("created", { ascending: false }),
         ]);
         if (projectError) throw projectError;
@@ -853,7 +853,12 @@ export default function App() {
           setUserRole(profile.role || "owner");
           setProjects((projectData || []).map(normalizeProject));
           setSetupComplete(companyRow?.setup_complete ?? true);
-          if (companyRow?.name) setCompany(c => ({...c, name: companyRow.name}));
+          setCompany(c => ({
+            ...c,
+            ...(companyRow?.name    ? {name:    companyRow.name}    : {}),
+            ...(companyRow?.abn     ? {abn:     companyRow.abn}     : {}),
+            ...(companyRow?.country ? {country: companyRow.country} : {}),
+          }));
         }
       } catch (err) {
         if (mounted) setProjectsError(err?.message || String(err));
@@ -1323,7 +1328,7 @@ function PendingApprovalScreen({companyName, userEmail, onRefresh}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // TEAM SECTION — embedded in SettingsModule, owner-only
 // ═══════════════════════════════════════════════════════════════════════════
-function TeamSection({companyId, pop}) {
+function TeamSection({companyId, companyAbn, companyCountry, pop}) {
   const [members,  setMembers]  = useState([]);
   const [requests, setRequests] = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -1361,11 +1366,37 @@ function TeamSection({companyId, pop}) {
   }
 
   const ROLE_COLOR = {owner:T.accent, member:T.blue};
+  const abnLabel = ABN_LABEL[companyCountry||"AU"] || "Business No.";
 
   return <Card sx={{marginTop:14}}>
-    <div style={{fontWeight:700,fontSize:13,color:T.accent,marginBottom:14,textTransform:"uppercase",letterSpacing:"0.05em"}}>
-      Team
+    <div style={{fontWeight:700,fontSize:13,color:T.accent,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.05em",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <span>Team</span>
+      {requests.length>0&&<span style={{background:T.yellow,color:"#000",fontSize:10,fontWeight:800,
+        padding:"2px 7px",borderRadius:10}}>{requests.length} pending</span>}
     </div>
+
+    {/* ABN share callout */}
+    {companyAbn
+      ? <div style={{marginBottom:14,padding:"10px 12px",background:T.accentDim,
+          border:`1px solid ${T.accentBrd}`,borderRadius:7}}>
+          <div style={{fontSize:11,color:T.muted,marginBottom:3,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+            Your company {abnLabel} — share with your team
+          </div>
+          <div style={{fontFamily:T.mono,fontSize:16,fontWeight:800,color:T.accent,letterSpacing:"0.05em"}}>
+            {companyAbn}
+          </div>
+          <div style={{fontSize:11,color:T.faint,marginTop:4}}>
+            New team members enter this number when they sign up to request access.
+          </div>
+        </div>
+      : <div style={{marginBottom:14,padding:"10px 12px",background:T.yellowDim,
+          border:`1px solid ${T.yellow}44`,borderRadius:7}}>
+          <div style={{fontSize:12,color:T.yellow,fontWeight:600,marginBottom:2}}>No {abnLabel} registered</div>
+          <div style={{fontSize:11,color:T.faint,lineHeight:1.5}}>
+            Add your {abnLabel} above and save — new employees need it to request to join your company.
+          </div>
+        </div>
+    }
 
     {loading
       ? <div style={{color:T.faint,fontSize:13}}>Loading…</div>
@@ -1411,7 +1442,7 @@ function TeamSection({companyId, pop}) {
         </div>}
 
         {members.length===0&&requests.length===0&&<div style={{color:T.faint,fontSize:12,padding:"8px 0"}}>
-          No team members yet. Share your ABN with colleagues so they can request to join.
+          No team members yet.
         </div>}
       </>
     }
@@ -7209,7 +7240,15 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
         </Row>
 
         <Inp label="Company / Trading Name" value={local.name} onChange={v=>set("name",v)}/>
-        <Inp label="ABN / NZBN" value={local.abn} onChange={v=>set("abn",v)}/>
+        <Sel label="Country" value={local.country||"AU"} onChange={v=>set("country",v)}
+          options={COUNTRIES.map(c=>({value:c.value,label:c.label}))} sx={{marginBottom:10}}/>
+        <Inp label={ABN_LABEL[local.country||"AU"]||"Business Registration No."}
+          value={local.abn||""} onChange={v=>set("abn",v)}
+          placeholder={`e.g. ${local.country==="AU"?"51 824 753 556":local.country==="NZ"?"9429040888883":"your business number"}`}/>
+        {!local.abn&&<div style={{fontSize:11,color:T.yellow,marginBottom:8,padding:"6px 10px",
+          background:T.yellowDim,borderRadius:5,border:`1px solid ${T.yellow}44`,lineHeight:1.5}}>
+          Register your business number so team members can find and request to join your company.
+        </div>}
         <Inp label="Registered Address" value={local.address} onChange={v=>set("address",v)}/>
         <Grid2 gap={10}>
           <Inp label="Phone" value={local.phone} onChange={v=>set("phone",v)}/>
@@ -7257,15 +7296,22 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
 
         <Btn v="pri" full onClick={async()=>{
           setCompany(local);
-          if(companyId && local.name?.trim()) {
-            await supabase.from("companies").update({name:local.name.trim()}).eq("id",companyId);
+          if(companyId) {
+            const patch = {};
+            if(local.name?.trim())   patch.name    = local.name.trim();
+            if(local.abn?.trim())    patch.abn     = local.abn.trim();
+            if(local.country)        patch.country  = local.country;
+            if(Object.keys(patch).length) {
+              await supabase.from("companies").update(patch).eq("id",companyId);
+            }
           }
           pop("Settings saved!");
         }}>
           Save All Settings
         </Btn>
 
-        {userRole==="owner"&&<TeamSection companyId={companyId} pop={pop}/>}
+        {userRole==="owner"&&<TeamSection companyId={companyId}
+          companyAbn={local.abn||""} companyCountry={local.country||"AU"} pop={pop}/>}
 
         <Card>
           <div style={{fontWeight:700,marginBottom:10,fontSize:13,color:T.teal}}>Data Backup & Restore</div>
