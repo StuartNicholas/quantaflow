@@ -842,9 +842,11 @@ export default function App() {
         const [
           { data: companyRow },
           { data: projectData, error: projectError },
+          { data: ratesData },
         ] = await Promise.all([
-          supabase.from("companies").select("name, setup_complete, abn, country").eq("id", profile.company_id).single(),
+          supabase.from("companies").select("name, setup_complete, abn, country, default_margin, default_overhead, default_gst, currency, address, phone, email, website, bank_name, bank_account, logo_text, payment_terms, quote_validity, cab_library, est_templates").eq("id", profile.company_id).single(),
           supabase.from("projects").select("*").eq("company_id", profile.company_id).is("trashed_at", null).order("created_at", { ascending: false }),
+          supabase.from("rates").select("*").order("sort_order", { ascending: true }),
         ]);
         if (projectError) throw projectError;
 
@@ -855,15 +857,60 @@ export default function App() {
           setProjects((projectData || []).map(normalizeProject));
           setSetupComplete(companyRow?.setup_complete ?? true);
           dbListTrashedProjects().then(({ data: td }) => { if (mounted) setTrash(td || []); });
-          // Always overwrite abn and country from Supabase — they are the
-          // source of truth. Using ?? "" (not ||) ensures a stored empty
-          // string clears any stale localStorage value from a previous account.
+
+          // Company settings — Supabase is source of truth; fall back to
+          // localStorage value (via ...c spread) when a column is still null
+          // (first run before migration). Using ?? keeps explicit empty strings.
           setCompany(c => ({
             ...c,
-            ...(companyRow?.name ? {name: companyRow.name} : {}),
-            abn:     companyRow?.abn     ?? "",
-            country: companyRow?.country ?? "AU",
+            ...(companyRow?.name          ? {name:           companyRow.name}           : {}),
+            abn:            companyRow?.abn             ?? "",
+            country:        companyRow?.country          ?? "AU",
+            defaultMargin:  companyRow?.default_margin   ?? c.defaultMargin,
+            defaultOverhead:companyRow?.default_overhead  ?? c.defaultOverhead,
+            defaultGst:     companyRow?.default_gst      ?? c.defaultGst,
+            currency:       companyRow?.currency          ?? c.currency,
+            address:        companyRow?.address           ?? c.address,
+            phone:          companyRow?.phone             ?? c.phone,
+            email:          companyRow?.email             ?? c.email,
+            website:        companyRow?.website           ?? c.website,
+            bankName:       companyRow?.bank_name         ?? c.bankName,
+            bankAccount:    companyRow?.bank_account      ?? c.bankAccount,
+            logoText:       companyRow?.logo_text         ?? c.logoText,
+            paymentTerms:   companyRow?.payment_terms     ?? c.paymentTerms,
+            quoteValidity:  companyRow?.quote_validity    ?? c.quoteValidity,
           }));
+
+          // CabLib — prefer Supabase; auto-migrate localStorage on first run
+          if (companyRow?.cab_library) {
+            skipCabLibSave.current = true;
+            setCabLib(companyRow.cab_library);
+          } else {
+            const local = (() => { try { const v = localStorage.getItem("qf_cablib"); return v ? JSON.parse(v) : null; } catch { return null; } })();
+            const toSave = local || SEED_CABLIB;
+            supabase.from("companies").update({ cab_library: toSave }).eq("id", profile.company_id);
+            if (local) { skipCabLibSave.current = true; setCabLib(local); }
+          }
+
+          // Rates — prefer Supabase; seed from localStorage or SEED_RATES on first run
+          if (ratesData?.length) {
+            setRates(ratesData);
+          } else {
+            const localRates = (() => { try { const v = localStorage.getItem("qf_rates"); return v ? JSON.parse(v) : null; } catch { return null; } })();
+            const seed = localRates || SEED_RATES;
+            const rows = seed.map((r, i) => ({
+              company_id: profile.company_id,
+              category:    r.category    || "",
+              description: r.description || "",
+              unit:        r.unit        || "",
+              rate:        parseFloat(r.rate) || 0,
+              notes:       r.notes       || "",
+              sort_order:  i,
+            }));
+            supabase.from("rates").insert(rows).select().then(({ data: inserted }) => {
+              if (mounted && inserted?.length) setRates(inserted);
+            });
+          }
 
           // Fetch pending join-request count for owners so the sidebar badge
           // and toast fire on login without waiting for the Team section to open.
@@ -887,6 +934,20 @@ export default function App() {
     loadProjects();
     return () => { mounted = false; };
   }, []);
+
+  // ── Cloud auto-save for cabLib ──────────────────────────────────────────────
+  // skipCabLibSave is set to true right before setCabLib is called from
+  // loadProjects so the initial Supabase load doesn't immediately write back.
+  const skipCabLibSave = useRef(false);
+  const cabLibSaveTimer = useRef(null);
+  useEffect(() => {
+    if (!companyId) return;
+    if (skipCabLibSave.current) { skipCabLibSave.current = false; return; }
+    clearTimeout(cabLibSaveTimer.current);
+    cabLibSaveTimer.current = setTimeout(() => {
+      supabase.from("companies").update({ cab_library: cabLib }).eq("id", companyId);
+    }, 1500);
+  }, [cabLib]);
 
   // Toast the owner when pending join requests are detected on login.
   const shownPendingToast = useRef(false);
@@ -3791,6 +3852,22 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
   const [nli, setNli] = useState({category:CATS[0],description:"",qty:1,unit:"m²",rate:0,margin:proj.margin||20});
   const [templates,setTemplates]=useLS("qf_templates",[]);
   const [showTpl,setShowTpl]=useState(false);
+  // Load templates from Supabase on mount; auto-save on change
+  useEffect(()=>{
+    if(!proj.company_id) return;
+    supabase.from("companies").select("est_templates").eq("id",proj.company_id).single()
+      .then(({data})=>{ if(data?.est_templates?.length) setTemplates(data.est_templates); });
+  },[proj.company_id]);
+  const _tplSaveSkip=useRef(true);
+  const _tplSaveTimer=useRef(null);
+  useEffect(()=>{
+    if(_tplSaveSkip.current){_tplSaveSkip.current=false;return;}
+    if(!proj.company_id) return;
+    clearTimeout(_tplSaveTimer.current);
+    _tplSaveTimer.current=setTimeout(()=>{
+      supabase.from("companies").update({est_templates:templates}).eq("id",proj.company_id);
+    },1000);
+  },[templates]);
   const [estId,setEstId]=useState(null);
   const [estLoading,setEstLoading]=useState(true);
 
@@ -7339,13 +7416,24 @@ const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?""
             <Btn v="pri" full onClick={async()=>{
               setCompany(local);
               if(companyId) {
-                const patch = {};
-                if(local.name?.trim())   patch.name    = local.name.trim();
-                if(local.abn?.trim())    patch.abn     = local.abn.trim();
-                if(local.country)        patch.country  = local.country;
-                if(Object.keys(patch).length) {
-                  await supabase.from("companies").update(patch).eq("id",companyId);
-                }
+                await supabase.from("companies").update({
+                  name:             local.name?.trim()    || undefined,
+                  abn:              local.abn?.trim()     || undefined,
+                  country:          local.country         || "AU",
+                  default_margin:   local.defaultMargin,
+                  default_overhead: local.defaultOverhead,
+                  default_gst:      local.defaultGst,
+                  currency:         local.currency,
+                  address:          local.address         || null,
+                  phone:            local.phone           || null,
+                  email:            local.email           || null,
+                  website:          local.website         || null,
+                  bank_name:        local.bankName        || null,
+                  bank_account:     local.bankAccount     || null,
+                  logo_text:        local.logoText        || null,
+                  payment_terms:    local.paymentTerms    || null,
+                  quote_validity:   local.quoteValidity   || null,
+                }).eq("id",companyId);
               }
               pop("Settings saved!");
             }}>
@@ -7373,7 +7461,7 @@ const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?""
       <Card>
           <div style={{fontWeight:700,marginBottom:10,fontSize:13,color:T.teal}}>Data Backup & Restore</div>
           <div style={{color:T.muted,fontSize:12,marginBottom:8,lineHeight:1.6}}>
-            All data lives in this browser. Export a full backup regularly.
+            Projects, clients, quotes and team data are saved to the cloud. This backup covers browser-cached settings (rates, cabinet library, company defaults) as a local fallback.
           </div>
           {/* storage meter */}
           <div style={{marginBottom:12}}>
