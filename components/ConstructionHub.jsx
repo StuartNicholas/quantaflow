@@ -1370,14 +1370,16 @@ function TeamSection({companyId, companyAbn, companyCountry, onCountChange, pop}
   const [requests, setRequests] = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [busy,     setBusy]     = useState(null);
+  const [reqErr,   setReqErr]   = useState(null);
 
   async function reload(){
-    const [{ data:m }, { data:r }] = await Promise.all([
+    const [{ data:m }, { data:r, error:rErr }] = await Promise.all([
       dbListTeamMembers(),
       dbListJoinRequests(),
     ]);
     setMembers(m||[]);
     setRequests(r||[]);
+    setReqErr(rErr||null);
     setLoading(false);
     onCountChange?.(r?.length || 0);
   }
@@ -1479,7 +1481,10 @@ function TeamSection({companyId, companyAbn, companyCountry, onCountChange, pop}
           </div>)}
         </div>}
 
-        {members.length===0&&requests.length===0&&<div style={{color:T.faint,fontSize:12,padding:"8px 0"}}>
+        {reqErr&&<div style={{color:T.red||"#ef4444",fontSize:12,padding:"8px 0",wordBreak:"break-all"}}>
+          Error loading requests: {reqErr}
+        </div>}
+        {members.length===0&&requests.length===0&&!reqErr&&<div style={{color:T.faint,fontSize:12,padding:"8px 0"}}>
           No team members yet.
         </div>}
       </>
@@ -7263,96 +7268,111 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
       </Row>
     </Card>
 
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-      {/* Company details */}
+    {userRole==="owner"
+      ? <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+          {/* Company details — owner only */}
+          <Card>
+            <div style={{fontWeight:700,marginBottom:14,color:T.accent,fontSize:13}}>Company Details</div>
+
+            <Row gap={12} sx={{marginBottom:14}}>
+              <div style={{width:48,height:48,borderRadius:10,background:T.accent,color:"#000",
+                display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:18,flexShrink:0}}>
+                {local.logoText}
+              </div>
+              <Inp label="Logo Initials (2 chars)" value={local.logoText}
+                onChange={v=>set("logoText",v.slice(0,2).toUpperCase())} sx={{flex:1,marginBottom:0}}/>
+            </Row>
+
+            <Inp label="Company / Trading Name" value={local.name} onChange={v=>set("name",v)}/>
+            <Sel label="Country" value={local.country||"AU"} onChange={v=>set("country",v)}
+              options={COUNTRIES.map(c=>({value:c.value,label:c.label}))} sx={{marginBottom:10}}/>
+            <Inp label={ABN_LABEL[local.country||"AU"]||"Business Registration No."}
+              value={local.abn||""} onChange={v=>set("abn",v)}
+              placeholder={`e.g. ${local.country==="AU"?"51 824 753 556":local.country==="NZ"?"9429040888883":"your business number"}`}/>
+            {!local.abn&&<div style={{fontSize:11,color:T.yellow,marginBottom:8,padding:"6px 10px",
+              background:T.yellowDim,borderRadius:5,border:`1px solid ${T.yellow}44`,lineHeight:1.5}}>
+              Register your business number so team members can find and request to join your company.
+            </div>}
+            <Inp label="Registered Address" value={local.address} onChange={v=>set("address",v)}/>
+            <Grid2 gap={10}>
+              <Inp label="Phone" value={local.phone} onChange={v=>set("phone",v)}/>
+              <Inp label="Email" value={local.email} onChange={v=>set("email",v)}/>
+            </Grid2>
+            <Inp label="Website" value={local.website} onChange={v=>set("website",v)}/>
+            <Grid2 gap={10}>
+              <Inp label="Bank Name" value={local.bankName||""} onChange={v=>set("bankName",v)}/>
+              <Inp label="Bank Account" value={local.bankAccount||""} onChange={v=>set("bankAccount",v)}/>
+            </Grid2>
+          </Card>
+
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            {/* Quote defaults */}
+            <Card>
+              <div style={{fontWeight:700,marginBottom:14,color:T.accent,fontSize:13}}>Quote Defaults</div>
+              <Grid3 gap={10}>
+                <Inp label="Default Margin %" value={local.defaultMargin} onChange={v=>set("defaultMargin",v)} type="number" mono/>
+                <Inp label="Default Overhead %" value={local.defaultOverhead} onChange={v=>set("defaultOverhead",v)} type="number" mono/>
+                <Inp label="Default GST %" value={local.defaultGst} onChange={v=>set("defaultGst",v)} type="number" mono/>
+              </Grid3>
+              <Sel label="Currency" value={local.currency} onChange={v=>set("currency",v)} options={["AUD","NZD","USD","GBP","SGD"]}/>
+              <Inp label="Quote Validity Text" value={local.quoteValidity||""} onChange={v=>set("quoteValidity",v)} rows={2}/>
+              <Inp label="Payment Terms" value={local.paymentTerms||""} onChange={v=>set("paymentTerms",v)} rows={2}/>
+            </Card>
+
+            {/* Live pricing preview */}
+            <Card>
+              <div style={{fontWeight:700,marginBottom:10,fontSize:13,color:T.accent}}>Live Pricing Preview</div>
+              <div style={{color:T.muted,fontSize:11,marginBottom:10}}>How a $10,000 cost item builds to a quote total:</div>
+              {[
+                {l:"Raw cost",         v:"$10,000",                            c:T.muted},
+                {l:`+ ${local.defaultMargin}% margin`, v:`$${previewMargin.toFixed(0)}`,  c:T.text},
+                {l:`+ ${local.defaultOverhead}% overhead`, v:`$${previewOverhead.toFixed(0)}`, c:T.text},
+                {l:`+ ${local.defaultGst}% GST`,       v:`$${previewGst.toFixed(0)}`,     c:T.accent, bold:true},
+              ].map(r=><div key={r.l} style={{display:"flex",justifyContent:"space-between",
+                padding:"6px 0",borderBottom:`1px solid ${T.border}`,fontSize:13}}>
+                <span style={{color:T.muted}}>{r.l}</span>
+                <span style={{fontFamily:T.mono,color:r.c,fontWeight:r.bold?800:600}}>{r.v}</span>
+              </div>)}
+              <div style={{marginTop:8,fontSize:11,color:T.faint}}>
+                Effective multiplier: {(previewGst/previewCost).toFixed(3)}×
+              </div>
+            </Card>
+
+            <Btn v="pri" full onClick={async()=>{
+              setCompany(local);
+              if(companyId) {
+                const patch = {};
+                if(local.name?.trim())   patch.name    = local.name.trim();
+                if(local.abn?.trim())    patch.abn     = local.abn.trim();
+                if(local.country)        patch.country  = local.country;
+                if(Object.keys(patch).length) {
+                  await supabase.from("companies").update(patch).eq("id",companyId);
+                }
+              }
+              pop("Settings saved!");
+            }}>
+              Save All Settings
+            </Btn>
+
+            <TeamSection companyId={companyId}
+              companyAbn={local.abn||""} companyCountry={local.country||"AU"}
+              onCountChange={onTeamCountChange} pop={pop}/>
+          </div>
+        </div>
+      : <Card sx={{marginBottom:0}}>
+          <div style={{fontWeight:700,marginBottom:4,color:T.accent,fontSize:13}}>Your Company</div>
+          <div style={{fontSize:16,fontWeight:700,color:T.text,marginBottom:4}}>{local.name||"—"}</div>
+          {local.abn&&<div style={{fontSize:12,color:T.muted,fontFamily:T.mono,marginBottom:4}}>
+            {ABN_LABEL[local.country||"AU"]||"Business No."}: {local.abn}
+          </div>}
+          <div style={{fontSize:12,color:T.faint,marginTop:6}}>
+            Company details and settings are managed by your company owner.
+          </div>
+        </Card>
+    }
+
+    <div style={{display:"flex",flexDirection:"column",gap:14,marginTop:14}}>
       <Card>
-        <div style={{fontWeight:700,marginBottom:14,color:T.accent,fontSize:13}}>Company Details</div>
-
-        <Row gap={12} sx={{marginBottom:14}}>
-          <div style={{width:48,height:48,borderRadius:10,background:T.accent,color:"#000",
-            display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:18,flexShrink:0}}>
-            {local.logoText}
-          </div>
-          <Inp label="Logo Initials (2 chars)" value={local.logoText}
-            onChange={v=>set("logoText",v.slice(0,2).toUpperCase())} sx={{flex:1,marginBottom:0}}/>
-        </Row>
-
-        <Inp label="Company / Trading Name" value={local.name} onChange={v=>set("name",v)}/>
-        <Sel label="Country" value={local.country||"AU"} onChange={v=>set("country",v)}
-          options={COUNTRIES.map(c=>({value:c.value,label:c.label}))} sx={{marginBottom:10}}/>
-        <Inp label={ABN_LABEL[local.country||"AU"]||"Business Registration No."}
-          value={local.abn||""} onChange={v=>set("abn",v)}
-          placeholder={`e.g. ${local.country==="AU"?"51 824 753 556":local.country==="NZ"?"9429040888883":"your business number"}`}/>
-        {!local.abn&&<div style={{fontSize:11,color:T.yellow,marginBottom:8,padding:"6px 10px",
-          background:T.yellowDim,borderRadius:5,border:`1px solid ${T.yellow}44`,lineHeight:1.5}}>
-          Register your business number so team members can find and request to join your company.
-        </div>}
-        <Inp label="Registered Address" value={local.address} onChange={v=>set("address",v)}/>
-        <Grid2 gap={10}>
-          <Inp label="Phone" value={local.phone} onChange={v=>set("phone",v)}/>
-          <Inp label="Email" value={local.email} onChange={v=>set("email",v)}/>
-        </Grid2>
-        <Inp label="Website" value={local.website} onChange={v=>set("website",v)}/>
-        <Grid2 gap={10}>
-          <Inp label="Bank Name" value={local.bankName||""} onChange={v=>set("bankName",v)}/>
-          <Inp label="Bank Account" value={local.bankAccount||""} onChange={v=>set("bankAccount",v)}/>
-        </Grid2>
-      </Card>
-
-      <div style={{display:"flex",flexDirection:"column",gap:14}}>
-        {/* Quote defaults */}
-        <Card>
-          <div style={{fontWeight:700,marginBottom:14,color:T.accent,fontSize:13}}>Quote Defaults</div>
-          <Grid3 gap={10}>
-            <Inp label="Default Margin %" value={local.defaultMargin} onChange={v=>set("defaultMargin",v)} type="number" mono/>
-            <Inp label="Default Overhead %" value={local.defaultOverhead} onChange={v=>set("defaultOverhead",v)} type="number" mono/>
-            <Inp label="Default GST %" value={local.defaultGst} onChange={v=>set("defaultGst",v)} type="number" mono/>
-          </Grid3>
-          <Sel label="Currency" value={local.currency} onChange={v=>set("currency",v)} options={["AUD","NZD","USD","GBP","SGD"]}/>
-          <Inp label="Quote Validity Text" value={local.quoteValidity||""} onChange={v=>set("quoteValidity",v)} rows={2}/>
-          <Inp label="Payment Terms" value={local.paymentTerms||""} onChange={v=>set("paymentTerms",v)} rows={2}/>
-        </Card>
-
-        {/* Live pricing preview */}
-        <Card>
-          <div style={{fontWeight:700,marginBottom:10,fontSize:13,color:T.accent}}>Live Pricing Preview</div>
-          <div style={{color:T.muted,fontSize:11,marginBottom:10}}>How a $10,000 cost item builds to a quote total:</div>
-          {[
-            {l:"Raw cost",         v:"$10,000",                            c:T.muted},
-            {l:`+ ${local.defaultMargin}% margin`, v:`$${previewMargin.toFixed(0)}`,  c:T.text},
-            {l:`+ ${local.defaultOverhead}% overhead`, v:`$${previewOverhead.toFixed(0)}`, c:T.text},
-            {l:`+ ${local.defaultGst}% GST`,       v:`$${previewGst.toFixed(0)}`,     c:T.accent, bold:true},
-          ].map(r=><div key={r.l} style={{display:"flex",justifyContent:"space-between",
-            padding:"6px 0",borderBottom:`1px solid ${T.border}`,fontSize:13}}>
-            <span style={{color:T.muted}}>{r.l}</span>
-            <span style={{fontFamily:T.mono,color:r.c,fontWeight:r.bold?800:600}}>{r.v}</span>
-          </div>)}
-          <div style={{marginTop:8,fontSize:11,color:T.faint}}>
-            Effective multiplier: {(previewGst/previewCost).toFixed(3)}×
-          </div>
-        </Card>
-
-        <Btn v="pri" full onClick={async()=>{
-          setCompany(local);
-          if(companyId) {
-            const patch = {};
-            if(local.name?.trim())   patch.name    = local.name.trim();
-            if(local.abn?.trim())    patch.abn     = local.abn.trim();
-            if(local.country)        patch.country  = local.country;
-            if(Object.keys(patch).length) {
-              await supabase.from("companies").update(patch).eq("id",companyId);
-            }
-          }
-          pop("Settings saved!");
-        }}>
-          Save All Settings
-        </Btn>
-
-        {userRole==="owner"&&<TeamSection companyId={companyId}
-          companyAbn={local.abn||""} companyCountry={local.country||"AU"}
-          onCountChange={onTeamCountChange} pop={pop}/>}
-
-        <Card>
           <div style={{fontWeight:700,marginBottom:10,fontSize:13,color:T.teal}}>Data Backup & Restore</div>
           <div style={{color:T.muted,fontSize:12,marginBottom:8,lineHeight:1.6}}>
             All data lives in this browser. Export a full backup regularly.
@@ -7449,7 +7469,6 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
               </>
             : <div style={{color:T.faint,fontSize:12}}>Deleted projects land here and can be restored. Keeps the last 25.</div>}
         </Card>
-      </div>
     </div>
   </div>;
 }
