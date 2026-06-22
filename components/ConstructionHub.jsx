@@ -1173,7 +1173,7 @@ export default function App() {
               {nav==="rates"      && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
               {nav==="reporting"  && <ReportingModule projects={projects} clients={clients}/>}
               {nav==="xero"       && <XeroModule projects={projects} xero={xero} setXero={setXero} mutProj={mutProj} pop={pop}/>}
-              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} userRole={userRole} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} pop={pop}/>}
+              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} userRole={userRole} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} onTeamCountChange={setPendingTeamCount} pop={pop}/>}
             </>
         }
         </ErrorBoundary>
@@ -7220,7 +7220,7 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // SETTINGS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function SettingsModule({company, setCompany, companyId, userRole, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, pop}) {
+function SettingsModule({company, setCompany, companyId, userRole, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, onTeamCountChange, pop}) {
   const [local, setLocal] = useState(company);
   const [ai, setAi] = useLS("qf_ai", {mode:"proxy",endpoint:"/api/ai",apiKey:""});
   const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?"":displayName)||"");
@@ -7351,7 +7351,7 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
 
         {userRole==="owner"&&<TeamSection companyId={companyId}
           companyAbn={local.abn||""} companyCountry={local.country||"AU"}
-          onCountChange={setPendingTeamCount} pop={pop}/>}
+          onCountChange={onTeamCountChange} pop={pop}/>}
 
         <Card>
           <div style={{fontWeight:700,marginBottom:10,fontSize:13,color:T.teal}}>Data Backup & Restore</div>
