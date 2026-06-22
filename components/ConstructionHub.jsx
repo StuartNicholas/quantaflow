@@ -663,6 +663,39 @@ class ErrorBoundary extends Component {
   }
 }
 
+// Catches crashes in the company-setup / pending-approval / setup-wizard overlays
+// so a render error there doesn't take down the entire page.
+class SetupErrorBoundary extends Component {
+  constructor(props){ super(props); this.state={error:null}; }
+  static getDerivedStateFromError(error){ return {error}; }
+  componentDidCatch(error,info){ console.error("QuantaFlow setup error:",error,info); }
+  render(){
+    if(this.state.error) return (
+      <div style={{position:"fixed",inset:0,zIndex:9999,background:T.bg,
+        display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+        <div style={{maxWidth:440,textAlign:"center",color:T.text,fontFamily:T.font}}>
+          <div style={{fontSize:36,marginBottom:16}}>⚠</div>
+          <div style={{fontSize:18,fontWeight:800,marginBottom:10,color:T.text}}>Setup failed to load</div>
+          <div style={{color:T.muted,fontSize:13,marginBottom:8,lineHeight:1.6}}>
+            There was an error displaying the company setup screen.
+          </div>
+          <div style={{color:T.faint,fontSize:11,fontFamily:T.mono,marginBottom:20,
+            background:T.panel,padding:"8px 12px",borderRadius:6,border:`1px solid ${T.border}`,
+            textAlign:"left",wordBreak:"break-all"}}>
+            {String(this.state.error?.message||this.state.error)}
+          </div>
+          <button onClick={()=>window.location.reload()} style={{background:T.accent,color:"#000",
+            border:"none",padding:"10px 24px",borderRadius:8,fontWeight:700,cursor:"pointer",
+            fontSize:14,fontFamily:T.font}}>
+            Reload Page
+          </button>
+        </div>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // APP ROOT
 // ═══════════════════════════════════════════════════════════════════════════
@@ -774,18 +807,27 @@ export default function App() {
         const currentUser = userData?.user;
         if (!currentUser) throw new Error("No authenticated user found.");
 
-        const { data: profile, error: profileError } = await supabase
-          .from("profiles")
-          .select("company_id, role")
-          .eq("id", currentUser.id)
-          .single();
-        if (profileError) throw profileError;
+        // Use maybeSingle so a missing profile row doesn't throw PGRST116.
+        // Retry once after 900ms to handle the rare race where the
+        // on_auth_user_created trigger hasn't committed its INSERT yet.
+        let profile = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt > 0) await new Promise(r => setTimeout(r, 900));
+          const { data: pRow, error: pErr } = await supabase
+            .from("profiles")
+            .select("company_id, role")
+            .eq("id", currentUser.id)
+            .maybeSingle();
+          if (pErr) throw pErr;
+          if (pRow) { profile = pRow; break; }
+        }
 
         // No company yet — show company setup or pending approval screen
         if (!profile?.company_id) {
           const { data: pendingReq } = await supabase
             .from("company_join_requests")
-            .select("*")
+            .select("id, company_name, status")
+            .eq("user_id", currentUser.id)
             .eq("status", "pending")
             .maybeSingle();
           if (mounted) {
@@ -945,48 +987,45 @@ export default function App() {
   return (
     <div style={{minHeight:"100vh",background:T.bg,color:T.text,fontFamily:T.font,display:"flex"}}>
 
-      {/* Company setup — shown when user has no company_id yet */}
-      {needsCompany && !pendingJoinRequest && <CompanySetupWizard
-        onCreated={({companyId:cid, companyName})=>{
-          setNeedsCompany(false);
-          setCompanyId(cid);
-          setSetupComplete(false);
-          setUserRole("owner");
-          if(companyName) setCompany(c=>({...c,name:companyName}));
-        }}
-        onJoinRequested={({companyName})=>{
-          setPendingJoinRequest({status:"pending",company_name:companyName});
-        }}
-      />}
+      {/* Company setup / pending approval / cabinet wizard overlays */}
+      <SetupErrorBoundary>
+        {needsCompany && !pendingJoinRequest && <CompanySetupWizard
+          onCreated={({companyId:cid, companyName})=>{
+            setNeedsCompany(false);
+            setCompanyId(cid);
+            setSetupComplete(false);
+            setUserRole("owner");
+            if(companyName) setCompany(c=>({...c,name:companyName}));
+          }}
+          onJoinRequested={({companyName})=>{
+            setPendingJoinRequest({status:"pending",company_name:companyName});
+          }}
+        />}
 
-      {/* Pending approval — shown while waiting for owner to accept join request */}
-      {needsCompany && pendingJoinRequest && <PendingApprovalScreen
-        companyName={pendingJoinRequest.company_name||"your company"}
-        userEmail={user?.email||""}
-        onRefresh={async()=>{
-          const { data:prof } = await supabase.from("profiles").select("company_id,role").eq("id",user.id).single();
-          if(prof?.company_id){
-            // Approved — reload fully
-            window.location.reload();
-          }
-        }}
-      />}
+        {needsCompany && pendingJoinRequest && <PendingApprovalScreen
+          companyName={pendingJoinRequest.company_name||"your company"}
+          userEmail={user?.email||""}
+          onRefresh={async()=>{
+            const { data:prof } = await supabase.from("profiles").select("company_id,role").eq("id",user.id).maybeSingle();
+            if(prof?.company_id){ window.location.reload(); }
+          }}
+        />}
 
-      {/* Cabinet defaults wizard — shown once after company is created */}
-      {setupComplete===false&&companyId&&<SetupWizard
-        companyId={companyId}
-        companyName={company?.name||""}
-        displayName={displayName}
-        onComplete={({name})=>{
-          setSetupComplete(true);
-          if(name) setCompany(c=>({...c,name}));
-          pop("Setup complete — welcome to Construction Hub!");
-        }}
-        onCreateProject={()=>{
-          setSetupComplete(true);
-          setNav("projects");
-        }}
-      />}
+        {setupComplete===false&&companyId&&<SetupWizard
+          companyId={companyId}
+          companyName={company?.name||""}
+          displayName={displayName}
+          onComplete={({name})=>{
+            setSetupComplete(true);
+            if(name) setCompany(c=>({...c,name}));
+            pop("Setup complete — welcome to Construction Hub!");
+          }}
+          onCreateProject={()=>{
+            setSetupComplete(true);
+            setNav("projects");
+          }}
+        />}
+      </SetupErrorBoundary>
 
       {/* ── SIDEBAR ─────────────────────────────────────────────────── */}
       <aside style={{width:196,background:T.panel,borderRight:`1px solid ${T.border}`,
@@ -1144,10 +1183,11 @@ function CompanySetupWizard({onCreated, onJoinRequested}) {
   }
 
   const OptionCard = ({icon, title, desc, onClick}) => (
-    <div onClick={onClick} style={{border:`2px solid ${T.border}`,borderRadius:10,padding:"22px 18px",
-      textAlign:"center",cursor:"pointer",transition:"border-color 0.15s",
-      onMouseEnter:e=>e.currentTarget.style.borderColor=T.accent,
-      onMouseLeave:e=>e.currentTarget.style.borderColor=T.border}}>
+    <div onClick={onClick}
+      onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent}
+      onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}
+      style={{border:`2px solid ${T.border}`,borderRadius:10,padding:"22px 18px",
+        textAlign:"center",cursor:"pointer",transition:"border-color 0.15s"}}>
       <div style={{fontSize:32,marginBottom:10}}>{icon}</div>
       <div style={{fontWeight:700,fontSize:14,color:T.text,marginBottom:5}}>{title}</div>
       <div style={{fontSize:12,color:T.muted,lineHeight:1.5}}>{desc}</div>
