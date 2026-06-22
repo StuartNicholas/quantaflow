@@ -6358,6 +6358,182 @@ function ratesFor(room, pricing){
 
 
 
+function CsvImportModal({sections, activeTrade, activeSection, companyId, onImport, onClose, pop}) {
+  const [file,setFile]=useState(null);
+  const [headers,setHeaders]=useState([]);
+  const [rows,setRows]=useState([]);
+  const [mapping,setMapping]=useState({name:"",unit:"",rate:"",supplier:"",notes:""});
+  const [targetSection,setTargetSection]=useState(activeSection||"");
+  const [busy,setBusy]=useState(false);
+
+  function parseCSV(text) {
+    const lines=text.split(/\r?\n/).filter(l=>l.trim());
+    if(lines.length<2) return {headers:[],rows:[]};
+    function parseLine(line) {
+      const res=[]; let inQ=false, cur="";
+      for(let i=0;i<line.length;i++){
+        const ch=line[i];
+        if(ch==='"'){inQ=!inQ;}
+        else if(ch===','&&!inQ){res.push(cur.trim());cur="";}
+        else{cur+=ch;}
+      }
+      res.push(cur.trim()); return res;
+    }
+    const hdrs=parseLine(lines[0]);
+    const rs=lines.slice(1).map(l=>parseLine(l)).filter(r=>r.some(c=>c.trim()));
+    return {headers:hdrs,rows:rs};
+  }
+
+  function handleFile(f) {
+    setFile(f);
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const {headers:hdrs,rows:rs}=parseCSV(e.target.result);
+      setHeaders(hdrs); setRows(rs);
+      const lh=hdrs.map(h=>h.toLowerCase());
+      const pick=re=>hdrs[lh.findIndex(h=>re.test(h))]||"";
+      setMapping({
+        name:    pick(/name|desc|item|product|material/),
+        unit:    pick(/^unit|uom|measure/),
+        rate:    pick(/rate|price|cost|amount|each|ea/),
+        supplier:pick(/supplier|vendor|brand/),
+        notes:   pick(/note|comment|remark/),
+      });
+    };
+    reader.readAsText(f);
+  }
+
+  const sectionList=sections.filter(s=>s.parent_id);
+  const preview=rows.slice(0,6);
+  const nameIdx=headers.indexOf(mapping.name);
+  const importCount=mapping.name ? rows.filter(r=>r[nameIdx]?.trim()).length : 0;
+
+  async function doImport() {
+    if(!mapping.name) return pop("Map a Name column first.","error");
+    if(!mapping.rate) return pop("Map a Rate column first.","error");
+    if(!targetSection) return pop("Select a target section to import into.","error");
+    const rateIdx=headers.indexOf(mapping.rate);
+    const unitIdx=mapping.unit?headers.indexOf(mapping.unit):-1;
+    const supplierIdx=mapping.supplier?headers.indexOf(mapping.supplier):-1;
+    const notesIdx=mapping.notes?headers.indexOf(mapping.notes):-1;
+    const toInsert=rows
+      .filter(r=>r[nameIdx]?.trim())
+      .map((r,i)=>({
+        company_id:companyId, section_id:targetSection,
+        name:r[nameIdx]?.trim()||"",
+        unit:unitIdx>=0?(r[unitIdx]?.trim()||"ea"):"ea",
+        rate:rateIdx>=0?parseFloat((r[rateIdx]||"").replace(/[^0-9.]/g,""))||0:0,
+        supplier:supplierIdx>=0?r[supplierIdx]?.trim()||"":"",
+        notes:notesIdx>=0?r[notesIdx]?.trim()||"":"",
+        attributes:{}, sort_order:i,
+      }));
+    if(!toInsert.length) return pop("No valid rows found — check your Name column mapping.","error");
+    setBusy(true);
+    for(let i=0;i<toInsert.length;i+=100){
+      const {error}=await supabase.from("catalogue_items").insert(toInsert.slice(i,i+100));
+      if(error){pop(error.message,"error");setBusy(false);return;}
+    }
+    setBusy(false);
+    pop(`${toInsert.length} items imported.`);
+    onImport(); onClose();
+  }
+
+  return <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.7)",
+    display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:T.card,border:`1px solid ${T.border}`,
+      borderRadius:12,padding:24,width:"100%",maxWidth:700,maxHeight:"90vh",overflowY:"auto",
+      boxShadow:"0 24px 72px rgba(0,0,0,0.7)"}}>
+      <div style={{fontWeight:800,fontSize:15,marginBottom:16,color:T.text}}>Import CSV — Supplier Price List</div>
+
+      {!file
+        ? <label style={{display:"block",border:`2px dashed ${T.border}`,borderRadius:10,
+            padding:40,textAlign:"center",cursor:"pointer",transition:"border-color 0.15s"}}
+            onDragOver={e=>{e.preventDefault();}}
+            onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files[0];if(f)handleFile(f);}}>
+            <input type="file" accept=".csv,text/csv" style={{display:"none"}}
+              onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
+            <div style={{fontSize:36,marginBottom:10}}>📄</div>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>Click to upload or drag & drop a CSV</div>
+            <div style={{color:T.muted,fontSize:12}}>Export your supplier price list from Excel as CSV first</div>
+            <div style={{marginTop:14,color:T.faint,fontSize:11}}>
+              Expected columns: <span style={{fontFamily:T.mono}}>Name, Unit, Price/Rate, Supplier, Notes</span> — column names are flexible
+            </div>
+          </label>
+        : <>
+          <div style={{color:T.muted,fontSize:12,marginBottom:14}}>
+            📄 <strong style={{color:T.text}}>{file.name}</strong> — {rows.length} data rows detected
+            <span onClick={()=>{setFile(null);setHeaders([]);setRows([]);setMapping({name:"",unit:"",rate:"",supplier:"",notes:""});}}
+              style={{marginLeft:12,color:T.accent,cursor:"pointer",fontSize:11}}>Change file</span>
+          </div>
+
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:12,fontWeight:600,color:T.muted,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Target section</div>
+            <select value={targetSection} onChange={e=>setTargetSection(e.target.value)}
+              style={{background:T.card2,color:T.text,border:`1px solid ${T.border}`,borderRadius:7,
+                padding:"8px 12px",width:"100%",fontSize:13}}>
+              <option value="">— select a section to import into —</option>
+              {sectionList.map(s=>{
+                const trade=sections.find(t=>t.id===s.parent_id);
+                return <option key={s.id} value={s.id}>{trade?`${trade.name} › `:""}{s.name}</option>;
+              })}
+            </select>
+          </div>
+
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:12,fontWeight:600,color:T.muted,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+              Map columns <span style={{color:T.faint,fontWeight:400,textTransform:"none",fontSize:11}}>— * required</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8}}>
+              {[
+                {field:"name",label:"Name *"},
+                {field:"unit",label:"Unit"},
+                {field:"rate",label:"Rate * ($)"},
+                {field:"supplier",label:"Supplier"},
+                {field:"notes",label:"Notes"},
+              ].map(({field,label})=>(
+                <div key={field}>
+                  <div style={{color:T.faint,fontSize:11,marginBottom:4}}>{label}</div>
+                  <select value={mapping[field]} onChange={e=>setMapping(m=>({...m,[field]:e.target.value}))}
+                    style={{background:T.card2,color:T.text,width:"100%",fontSize:12,padding:"5px 7px",
+                      border:`1px solid ${(field==="name"||field==="rate")&&!mapping[field]?T.red:T.border}`,
+                      borderRadius:6}}>
+                    <option value="">— skip —</option>
+                    {headers.map(h=><option key={h} value={h}>{h}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {preview.length>0&&<div style={{marginBottom:16}}>
+            <div style={{fontSize:12,fontWeight:600,color:T.muted,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+              Preview — first {preview.length} rows
+            </div>
+            <div style={{overflowX:"auto",border:`1px solid ${T.border}`,borderRadius:8}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                <thead><tr style={{background:T.bg}}>
+                  {headers.map(h=><th key={h} style={{padding:"6px 10px",color:T.faint,textAlign:"left",fontWeight:600,whiteSpace:"nowrap"}}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {preview.map((row,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+                    {headers.map((_,j)=><td key={j} style={{padding:"4px 10px",color:T.text,whiteSpace:"nowrap"}}>{row[j]||""}</td>)}
+                  </tr>)}
+                </tbody>
+              </table>
+            </div>
+          </div>}
+        </>}
+
+      <Row gap={8} sx={{justifyContent:"flex-end",marginTop:8}}>
+        <Btn v="gho" onClick={onClose}>Cancel</Btn>
+        {file&&<Btn v="pri" onClick={doImport} disabled={busy||!importCount}>
+          {busy?"Importing…":`Import ${importCount} item${importCount!==1?"s":""}`}
+        </Btn>}
+      </Row>
+    </div>
+  </div>;
+}
+
 function CatalogueLibrary({pop}) {
   const [companyId,setCompanyId]=useState(null);
   const [canEdit,setCanEdit]=useState(false);
@@ -6371,6 +6547,7 @@ function CatalogueLibrary({pop}) {
   const [err,setErr]=useState(null);
   const [newItem,setNewItem]=useState({name:"",unit:"ea",rate:0,supplier:"",notes:"",attrText:"",sheet_length_mm:"",sheet_width_mm:"",kerf_mm:"",trim_mm:""});
   const [modal,setModal]=useState(null); // {type, ...}
+  const [showImport,setShowImport]=useState(false);
 
   const trades=sections.filter(s=>!s.parent_id).sort((a,b)=>a.sort_order-b.sort_order);
   const subSections=sections.filter(s=>s.parent_id===activeTrade).sort((a,b)=>a.sort_order-b.sort_order);
@@ -6483,6 +6660,16 @@ function CatalogueLibrary({pop}) {
     <div style={{color:T.faint,fontSize:12,marginTop:6}}>If this mentions a missing table, run the CATALOGUE Layer 1 SQL in Supabase first.</div></Card>;
 
   return <div>
+    {showImport&&<CsvImportModal
+      sections={sections} activeTrade={activeTrade} activeSection={activeSection}
+      companyId={companyId} pop={pop}
+      onImport={()=>{
+        if(activeSection){
+          supabase.from("catalogue_items").select("*").eq("section_id",activeSection).order("sort_order")
+            .then(({data})=>setItems(data||[]));
+        }
+      }}
+      onClose={()=>setShowImport(false)}/>}
     {modal?.type==="trade"&&<PromptModal title="New trade tab" label="Trade name"
       placeholder="e.g. Cabinetry, Electrical, Plumbing" confirmText="Add trade"
       onConfirm={createTrade} onCancel={()=>setModal(null)}/>}
@@ -6537,6 +6724,7 @@ function CatalogueLibrary({pop}) {
               style={{color:T.red,marginLeft:2}}>×</span>}
           </div>)}
           {canEdit&&activeTrade&&<Btn sm v="gho" onClick={()=>setModal({type:"section"})}>+ Section</Btn>}
+          {canEdit&&<Btn sm v="gho" onClick={()=>setShowImport(true)}>⬆ Import CSV</Btn>}
         </Row>
 
         {!activeSection
