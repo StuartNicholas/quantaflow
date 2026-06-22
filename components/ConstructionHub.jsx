@@ -7226,8 +7226,7 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 function SettingsModule({company, setCompany, companyId, userRole, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, onTeamCountChange, pop}) {
   const [local, setLocal] = useState(company);
-  const [ai, setAi] = useLS("qf_ai", {mode:"proxy",endpoint:"/api/ai",apiKey:""});
-  const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?"":displayName)||"");
+const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?"":displayName)||"");
   const [savingName, setSavingName] = useState(false);
   const set = (k,v) => setLocal(x=>({...x,[k]:v}));
 
@@ -7420,31 +7419,7 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
           </Row>
         </Card>
 
-        {/* AI Connection — required when hosting outside Claude.ai */}
-        <Card>
-          <div style={{fontWeight:700,marginBottom:8,fontSize:13,color:T.purple}}>AI Connection</div>
-          <div style={{color:T.muted,fontSize:12,marginBottom:10,lineHeight:1.6}}>
-            Default: the built-in /api/ai server route, which reads ANTHROPIC_API_KEY or OPENAI_API_KEY from .env.local — your key never reaches the browser.
-          </div>
-          <Sel label="Mode" value={ai.mode} onChange={v=>setAi(x=>({...x,mode:v}))}
-            options={[
-              {value:"proxy",label:"Built-in server proxy /api/ai (default — key stays on the server)"},
-              {value:"claude",label:"Claude.ai artifact mode (only works inside Claude.ai)"},
-              {value:"direct",label:"Direct API key in browser (DEV/TESTING ONLY)"},
-            ]}/>
-          {ai.mode==="proxy"&&<Inp label="Proxy endpoint URL" value={ai.endpoint} onChange={v=>setAi(x=>({...x,endpoint:v}))}
-            placeholder="https://yourapp.com/api/ai" mono/>}
-          {ai.mode==="direct"&&<>
-            <Inp label="Anthropic API key" value={ai.apiKey} onChange={v=>setAi(x=>({...x,apiKey:v}))}
-              placeholder="sk-ant-…" mono type="password"/>
-            <div style={{background:T.redDim,border:`1px solid ${T.red}44`,borderRadius:6,padding:"8px 12px",fontSize:11,color:T.red,lineHeight:1.6}}>
-              ⚠ The key is stored in this browser and visible to anyone using it. Never ship this mode to customers —
-              use a server proxy that holds the key and meters usage per account.
-            </div>
-          </>}
-        </Card>
-
-        {/* Trash — restore soft-deleted projects */}
+{/* Trash — restore soft-deleted projects */}
         <Card>
           <div style={{fontWeight:700,marginBottom:8,fontSize:13,color:T.red}}>Trash ({(trash||[]).length})</div>
           {(trash||[]).length
