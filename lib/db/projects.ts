@@ -12,7 +12,22 @@ export async function listProjects(): Promise<DbResult<any[]>> {
     const { data, error } = await supabase
       .from("projects")
       .select("*")
+      .is("trashed_at", null)
       .order("created_at", { ascending: false });
+    if (error) return { data: null, error: errMsg(error) };
+    return { data: data || [], error: null };
+  } catch (e) {
+    return { data: null, error: errMsg(e) };
+  }
+}
+
+export async function listTrashedProjects(): Promise<DbResult<any[]>> {
+  try {
+    const { data, error } = await supabase
+      .from("projects")
+      .select("id, name, client_name, trashed_at")
+      .not("trashed_at", "is", null)
+      .order("trashed_at", { ascending: false });
     if (error) return { data: null, error: errMsg(error) };
     return { data: data || [], error: null };
   } catch (e) {
@@ -63,11 +78,42 @@ export async function updateProjectQuoteValue(id: string, total: number): Promis
   }
 }
 
+/** Soft-delete: sets trashed_at. Project stays in DB, invisible in listProjects. */
+export async function trashProject(id: string, name?: string): Promise<DbResult<true>> {
+  try {
+    const { error } = await supabase
+      .from("projects")
+      .update({ trashed_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) return { data: null, error: errMsg(error) };
+    await logActivity("project", id, "trash", `Moved to trash${name ? `: ${name}` : ""}`);
+    return { data: true, error: null };
+  } catch (e) {
+    return { data: null, error: errMsg(e) };
+  }
+}
+
+/** Restore: clears trashed_at so the project reappears in listProjects. */
+export async function restoreProject(id: string, name?: string): Promise<DbResult<true>> {
+  try {
+    const { error } = await supabase
+      .from("projects")
+      .update({ trashed_at: null })
+      .eq("id", id);
+    if (error) return { data: null, error: errMsg(error) };
+    await logActivity("project", id, "restore", `Restored from trash${name ? `: ${name}` : ""}`);
+    return { data: true, error: null };
+  } catch (e) {
+    return { data: null, error: errMsg(e) };
+  }
+}
+
+/** Hard-delete: permanently removes the row. Owner-only — enforced in the UI. */
 export async function deleteProject(id: string, name?: string): Promise<DbResult<true>> {
   try {
     const { error } = await supabase.from("projects").delete().eq("id", id);
     if (error) return { data: null, error: errMsg(error) };
-    await logActivity("project", id, "delete", `Deleted project${name ? `: ${name}` : ""}`);
+    await logActivity("project", id, "delete", `Permanently deleted project${name ? `: ${name}` : ""}`);
     return { data: true, error: null };
   } catch (e) {
     return { data: null, error: errMsg(e) };

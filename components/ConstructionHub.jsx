@@ -6,7 +6,7 @@ import { listClients as dbListClients, createClient as dbCreateClient, updateCli
 import { listBuilders as dbListBuilders, createBuilder as dbCreateBuilder, updateBuilder as dbUpdateBuilder, deleteBuilder as dbDeleteBuilder } from "../lib/db/builders";
 import { listSuppliers as dbListSuppliers, createSupplier as dbCreateSupplier, updateSupplier as dbUpdateSupplier, deleteSupplier as dbDeleteSupplier } from "../lib/db/suppliers";
 import { getEstimate as dbGetEstimate, updateEstimate as dbUpdateEstimate, addItem as dbAddItem, addItems as dbAddItems, updateItem as dbUpdateItem, deleteItem as dbDeleteItem } from "../lib/db/estimates";
-import { updateProjectQuoteValue as dbUpdateProjectQuoteValue } from "../lib/db/projects";
+import { updateProjectQuoteValue as dbUpdateProjectQuoteValue, trashProject as dbTrashProject, restoreProject as dbRestoreProject, deleteProject as dbDeleteProject, listTrashedProjects as dbListTrashedProjects } from "../lib/db/projects";
 import { listQuoteVersions as dbListQuoteVersions, getQuoteVersionItems as dbGetQuoteVersionItems, issueQuote as dbIssueQuote, updateQuoteStatus as dbUpdateQuoteStatus } from "../lib/db/quotes";
 import { listVariations as dbListVariations, createVariation as dbCreateVariation, updateVariation as dbUpdateVariation, deleteVariation as dbDeleteVariation } from "../lib/db/variations";
 import { getTakeoff as dbGetTakeoff, saveTakeoff as dbSaveTakeoff, addTakeoffItem as dbAddTakeoffItem, deleteTakeoffItem as dbDeleteTakeoffItem, ensureTakeoff as dbEnsureTakeoff, patchTakeoffMeta as dbPatchTakeoffMeta } from "../lib/db/takeoffs";
@@ -713,7 +713,7 @@ export default function App() {
   const [cabLib,    setCabLib]    = useLS("qf_cablib",   SEED_CABLIB);
   const [company,   setCompany]   = useLS("qf_company",  SEED_COMPANY);
   const [xero,      setXero]      = useLS("qf_xero", {connected:false,autoSync:true,twoWay:false,syncPO:false,taxCode:"GST",accountCode:"200",log:[]});
-  const [trash,     setTrash]     = useLS("qf_trash", []);
+  const [trash,     setTrash]     = useState([]);
   const [storageErr,setStorageErr]= useState(null);
   const [clientImport, setClientImport] = useState(null);
   const [profileName, setProfileName] = useState(null);
@@ -854,6 +854,7 @@ export default function App() {
           setUserRole(profile.role || "owner");
           setProjects((projectData || []).map(normalizeProject));
           setSetupComplete(companyRow?.setup_complete ?? true);
+          dbListTrashedProjects().then(({ data: td }) => { if (mounted) setTrash(td || []); });
           // Always overwrite abn and country from Supabase — they are the
           // source of truth. Using ?? "" (not ||) ensures a stored empty
           // string clears any stale localStorage value from a previous account.
@@ -913,16 +914,11 @@ export default function App() {
 
   async function trashProject(id){
     const p=projects.find(x=>x.id===id); if(!p) return;
-    try {
-      const { error } = await supabase.from("projects").delete().eq("id", id);
-      if (error) throw error;
-      setTrash(t=>[{...p,trashedAt:new Date().toISOString()},...t].slice(0,25));
-      setProjects(ps=>ps.filter(x=>x.id!==id));
-      pop(`"${p.name}" moved to Trash — restore from Settings.`);
-    } catch (err) {
-      pop(err?.message||String(err), "error");
-      console.error(err);
-    }
+    const { error } = await dbTrashProject(id, p.name);
+    if (error) { pop(error, "error"); return; }
+    setProjects(ps=>ps.filter(x=>x.id!==id));
+    setTrash(t=>[{id:p.id,name:p.name,client_name:p.client,trashed_at:new Date().toISOString()},...t]);
+    pop(`"${p.name}" moved to Trash — restore from Settings.`);
   }
 
   async function createProject(np){
@@ -953,11 +949,14 @@ export default function App() {
     }
   }
 
-  function restoreProject(id){
+  async function restoreProject(id){
     const p=trash.find(x=>x.id===id); if(!p) return;
-    const {trashedAt,...clean}=p;
-    setProjects(ps=>[clean,...ps]);
+    const { error } = await dbRestoreProject(id, p.name);
+    if (error) { pop(error, "error"); return; }
     setTrash(t=>t.filter(x=>x.id!==id));
+    // Re-fetch the full project row from Supabase so the restored project is complete
+    const { data } = await supabase.from("projects").select("*").eq("id", id).maybeSingle();
+    if (data) setProjects(ps=>[normalizeProject(data),...ps]);
     pop(`"${p.name}" restored.`);
   }
   const [nav,       setNav]       = useState("dashboard");
@@ -7428,21 +7427,29 @@ const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?""
                   alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${T.border}`}}>
                   <div>
                     <div style={{fontSize:13,fontWeight:600,color:T.text}}>{p.name}</div>
-                    <div style={{fontSize:11,color:T.faint}}>{p.client} · trashed {String(p.trashedAt||"").slice(0,10)}</div>
+                    <div style={{fontSize:11,color:T.faint}}>
+                      {p.client_name||p.client||""}{(p.client_name||p.client)?" · ":""}trashed {String(p.trashed_at||p.trashedAt||"").slice(0,10)}
+                    </div>
                   </div>
                   <Row gap={6}>
                     <Btn sm v="grn" onClick={()=>onRestore(p.id)}>Restore</Btn>
-                    <Btn sm v="red" onClick={()=>{
-                      if(safeConfirm(`PERMANENTLY delete "${p.name}"? This cannot be undone.`))
-                        setTrash(t=>t.filter(x=>x.id!==p.id));
-                    }}>Delete Forever</Btn>
+                    {userRole==="owner"&&<Btn sm v="red" onClick={async()=>{
+                      if(!safeConfirm(`PERMANENTLY delete "${p.name}"? This cannot be undone.`)) return;
+                      const { error } = await dbDeleteProject(p.id, p.name);
+                      if(error){ pop(error,"error"); return; }
+                      setTrash(t=>t.filter(x=>x.id!==p.id));
+                      pop(`"${p.name}" permanently deleted.`);
+                    }}>Delete Forever</Btn>}
                   </Row>
                 </div>)}
-                <Btn sm v="gho" sx={{marginTop:10}} onClick={()=>{
-                  if(safeConfirm("Empty trash permanently?")) {setTrash([]);pop("Trash emptied.");}
-                }}>Empty Trash</Btn>
+                {userRole==="owner"&&<Btn sm v="gho" sx={{marginTop:10}} onClick={async()=>{
+                  if(!safeConfirm("Permanently delete all trashed projects? This cannot be undone.")) return;
+                  await Promise.all((trash||[]).map(p=>dbDeleteProject(p.id,p.name)));
+                  setTrash([]);
+                  pop("Trash emptied.");
+                }}>Empty Trash</Btn>}
               </>
-            : <div style={{color:T.faint,fontSize:12}}>Deleted projects land here and can be restored. Keeps the last 25.</div>}
+            : <div style={{color:T.faint,fontSize:12}}>Deleted projects appear here. Any team member can restore. Only owners can delete forever.</div>}
         </Card>
     </div>
   </div>;
