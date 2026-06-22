@@ -1073,7 +1073,6 @@ export default function App() {
     {id:"suppliers", icon:"📦",label:"Suppliers"},
     {id:"rates",     icon:"≡",label:"Rate Library"},
     {id:"reporting", icon:"◈",label:"Reporting"},
-    {id:"xero",      icon:"⟳",label:"Xero Sync"},
     {id:"settings",  icon:"⚙",label:"Settings"},
   ];
 
@@ -1164,12 +1163,6 @@ export default function App() {
           <div style={{color:T.faint,fontSize:10,marginBottom:5,textTransform:"uppercase",letterSpacing:"0.08em"}}>Pipeline</div>
           <div style={{color:T.accent,fontFamily:T.mono,fontWeight:800,fontSize:17}}>{$$(pipeline,true)}</div>
           <div style={{color:T.muted,fontSize:11,marginTop:2}}>{projects.length} projects</div>
-          <div style={{marginTop:7,display:"flex",alignItems:"center",gap:5,fontSize:11}}>
-            <span style={{width:6,height:6,borderRadius:"50%",display:"inline-block",
-              background:xero.connected?T.green:T.faint,
-              boxShadow:xero.connected?`0 0 5px ${T.green}`:"none"}}/>
-            <span style={{color:xero.connected?T.green:T.muted}}>Xero {xero.connected?"live":"offline"}</span>
-          </div>
         </div>
       </aside>
 
@@ -1229,9 +1222,8 @@ export default function App() {
               {nav==="clients"   && <ClientsModule clients={clients} reloadClients={reloadClients} clientsLoading={clientsLoading} projects={projects} pop={pop}/>}
               {nav==="builders"  && <BuildersModule builders={builders} reloadBuilders={reloadBuilders} buildersLoading={buildersLoading} projects={projects} pop={pop}/>}
               {nav==="suppliers" && <SuppliersModule pop={pop}/>}
-              {nav==="rates"      && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} pop={pop}/>}
+              {nav==="rates"      && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} companyId={companyId} pop={pop}/>}
               {nav==="reporting"  && <ReportingModule projects={projects} clients={clients}/>}
-              {nav==="xero"       && <XeroModule projects={projects} xero={xero} setXero={setXero} mutProj={mutProj} pop={pop}/>}
               {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} userRole={userRole} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} onTeamCountChange={setPendingTeamCount} pop={pop}/>}
             </>
         }
@@ -2005,41 +1997,30 @@ function Dashboard({projects, xero, onOpen, setNav}) {
       <KPI label="Total Pipeline"  value={$$(pipeline,true)} sub={`${projects.length} projects`}/>
       <KPI label="Won & Active"    value={$$(wonVal,true)} sub="approved + active" color={T.green}/>
       <KPI label="Win Rate"        value={winRate!==null?`${winRate}%`:"—"} sub={`${won} won · ${lost} lost`} color={winRate>=50?T.green:T.yellow}/>
-      <KPI label="Invoiced"        value={$$(invoiced,true)} sub="pushed to Xero" color={T.teal}/>
+      <KPI label="Invoiced"        value={$$(invoiced,true)} sub="total invoiced" color={T.teal}/>
       <KPI label="Active Jobs"     value={activeJobs} sub="on-site" color={T.blue}/>
       <KPI label="Pending Quotes"  value={pending} sub="awaiting decision" color={T.yellow}/>
     </Row>
 
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-      <Card>
-        <div style={{fontWeight:700,fontSize:13,marginBottom:14}}>Recent Projects</div>
-        {projects.slice(0,6).map(p=>{
-          const c=calc(p); const sm=STATUS[p.status]||STATUS.draft;
-          return <div key={p.id} onClick={()=>onOpen(p.id)} style={{
-            display:"flex",justifyContent:"space-between",alignItems:"center",
-            padding:"9px 0",borderBottom:`1px solid ${T.border}`,cursor:"pointer"}}>
-            <div>
-              <div style={{fontWeight:600,fontSize:13,color:T.text}}>{p.name}</div>
-              <div style={{color:T.faint,fontSize:11}}>{p.client} · {p.created}</div>
-            </div>
-            <Row gap={8}>
-              <Bdg color={sm.color}>{sm.label}</Bdg>
-              <span style={{fontFamily:T.mono,fontSize:12,color:T.accent,fontWeight:700}}>{$$(c.total,true)}</span>
-            </Row>
-          </div>;
-        })}
-        {!projects.length&&<div style={{color:T.faint,fontSize:12}}>No projects yet.</div>}
-      </Card>
-
-      <Card>
-        <div style={{fontWeight:700,fontSize:13,marginBottom:14}}>Xero Activity</div>
-        {(xero.log||[]).slice(0,8).map((l,i)=><div key={i} style={{display:"flex",gap:10,marginBottom:7,alignItems:"flex-start"}}>
-          <span style={{color:T.faint,fontFamily:T.mono,fontSize:10,flexShrink:0,width:55}}>{l.ts}</span>
-          <span style={{color:l.ok?T.green:T.red,fontSize:12}}>{l.msg}</span>
-        </div>)}
-        {!(xero.log||[]).length&&<div style={{color:T.faint,fontSize:12}}>No sync activity yet.</div>}
-      </Card>
-    </div>
+    <Card sx={{marginBottom:14}}>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:14}}>Recent Projects</div>
+      {projects.slice(0,6).map(p=>{
+        const c=calc(p); const sm=STATUS[p.status]||STATUS.draft;
+        return <div key={p.id} onClick={()=>onOpen(p.id)} style={{
+          display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"9px 0",borderBottom:`1px solid ${T.border}`,cursor:"pointer"}}>
+          <div>
+            <div style={{fontWeight:600,fontSize:13,color:T.text}}>{p.name}</div>
+            <div style={{color:T.faint,fontSize:11}}>{p.client} · {p.created}</div>
+          </div>
+          <Row gap={8}>
+            <Bdg color={sm.color}>{sm.label}</Bdg>
+            <span style={{fontFamily:T.mono,fontSize:12,color:T.accent,fontWeight:700}}>{$$(c.total,true)}</span>
+          </Row>
+        </div>;
+      })}
+      {!projects.length&&<div style={{color:T.faint,fontSize:12}}>No projects yet.</div>}
+    </Card>
 
     <Card>
       <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Pipeline by Status</div>
@@ -4523,7 +4504,13 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
           <Btn sm v="red" onClick={()=>setStatus(selVersion.id,"declined")}>✕ Declined</Btn>
         </>}
 
-        <Btn sm v="gho" onClick={()=>{ window.print(); pop("Use browser Print → Save as PDF","info"); }}>⎙ Print</Btn>
+        <Btn sm v="gho" onClick={()=>{ window.print(); pop("Browser print dialog opened — choose 'Save as PDF' to create a file you can send.","info"); }}>⎙ Save as PDF</Btn>
+        <Btn sm v="gho" onClick={()=>{
+          const sub=encodeURIComponent(`Quote – ${proj.name}`);
+          const body=encodeURIComponent(`Hi ${proj.client||""},\n\nPlease find attached our quote for the above project.\n\nIf you have any questions please don't hesitate to get in touch.\n\nKind regards`);
+          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
+          pop("Email client opened — attach your saved PDF before sending.","info");
+        }}>✉ Email Client</Btn>
         {hasEstItems&&<Btn sm v="pri" onClick={()=>setShowIssue(s=>!s)}>
           {versions.length===0?"Issue Quote v1":`Issue New (v${nextVNum})`}
         </Btn>}
@@ -6078,18 +6065,20 @@ function SuppliersModule({pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // RATE LIBRARY
 // ═══════════════════════════════════════════════════════════════════════════
-function RateLibrary({rates, setRates, cabLib, setCabLib, pop}) {
+function RateLibrary({rates, setRates, cabLib, setCabLib, companyId, pop}) {
   const [tab,setTab]=useState("catalogue");
   return <div>
-    <Hdr sub="Build your cost catalogue, then set how cabinets are priced from it.">Rate Library</Hdr>
+    <Hdr sub="Build your cost catalogue, set how cabinets are priced, and manage your trade rates.">Rate Library</Hdr>
     <Tabs tabs={[
       {id:"catalogue",label:"📚 Catalogue"},
       {id:"formula",label:"🧮 Cabinet Formula"},
       {id:"library",label:"🗄️ Cabinet Library"},
+      {id:"traderates",label:"⚡ Trade Rates"},
     ]} active={tab} onChange={setTab}/>
-    {tab==="catalogue"&& <CatalogueLibrary pop={pop}/>}
-    {tab==="formula"  && <CabinetFormula pop={pop}/>}
-    {tab==="library"  && <CabinetLibraryTab pop={pop}/>}
+    {tab==="catalogue"  && <CatalogueLibrary pop={pop}/>}
+    {tab==="formula"    && <CabinetFormula pop={pop}/>}
+    {tab==="library"    && <CabinetLibraryTab pop={pop}/>}
+    {tab==="traderates" && <TradeRates rates={rates} setRates={setRates} companyId={companyId} pop={pop}/>}
   </div>;
 }
 
@@ -7243,12 +7232,13 @@ function InstallLibrary({cabLib,setCabLib,pop}) {
 }
 
 // ── Trade Rates: the general per-trade rate table
-function TradeRates({rates, setRates, pop}) {
+function TradeRates({rates, setRates, companyId, pop}) {
   const [showAdd, setShowAdd] = useState(false);
   const [nr, setNr] = useState({category:CATS[0],description:"",unit:"m²",rate:0,notes:""});
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [editId, setEditId] = useState(null);
+  const [busy, setBusy] = useState(false);
 
   const cats = ["All",...CATS.filter(c=>rates.some(r=>r.category===c))];
   const filtered = rates.filter(r=>{
@@ -7257,24 +7247,52 @@ function TradeRates({rates, setRates, pop}) {
     return mc&&ms;
   });
 
-  function addRate() {
+  async function addRate() {
     if(!nr.description) return pop("Description required.","error");
-    setRates(rs=>[...rs,{...nr,id:Date.now(),rate:parseFloat(nr.rate)||0}]);
+    if(!companyId) return pop("Company not loaded yet.","error");
+    setBusy(true);
+    const row={company_id:companyId,category:nr.category,description:nr.description,
+      unit:nr.unit,rate:parseFloat(nr.rate)||0,notes:nr.notes||"",sort_order:rates.length};
+    const {data,error}=await supabase.from("rates").insert(row).select().single();
+    setBusy(false);
+    if(error) return pop(error.message,"error");
+    setRates(rs=>[...rs,data]);
     setNr({category:CATS[0],description:"",unit:"m²",rate:0,notes:""});
     setShowAdd(false); pop("Rate added.");
   }
 
-  function importCSV(e) {
+  async function delRate(id) {
+    const {error}=await supabase.from("rates").delete().eq("id",id);
+    if(error) return pop(error.message,"error");
+    setRates(rs=>rs.filter(x=>x.id!==id)); pop("Rate deleted.");
+  }
+
+  async function saveEdit(id) {
+    const r=rates.find(x=>x.id===id); if(!r) return;
+    const {error}=await supabase.from("rates").update({
+      description:r.description, rate:parseFloat(r.rate)||0, notes:r.notes||""
+    }).eq("id",id);
+    if(error) return pop(error.message,"error");
+    setEditId(null); pop("Rate saved.");
+  }
+
+  async function importCSV(e) {
     const file=e.target.files?.[0]; if(!file) return;
+    if(!companyId) return pop("Company not loaded yet.","error");
     const reader=new FileReader();
-    reader.onload=ev=>{
-      const lines=ev.target.result.split("\n").slice(1); // skip header
-      let added=0;
-      lines.forEach(line=>{
+    reader.onload=async ev=>{
+      const lines=ev.target.result.split("\n").slice(1);
+      const rows=[];
+      lines.forEach((line,i)=>{
         const [category,description,unit,rate,notes=""]=line.split(",").map(x=>x.trim().replace(/^"|"$/g,""));
-        if(description&&rate) { setRates(rs=>[...rs,{id:uid(),category:category||"Other",description,unit:unit||"ea",rate:parseFloat(rate)||0,notes}]); added++; }
+        if(description&&rate) rows.push({company_id:companyId,category:category||"Other",
+          description,unit:unit||"ea",rate:parseFloat(rate)||0,notes,sort_order:rates.length+i});
       });
-      pop(`${added} rates imported.`);
+      if(!rows.length) return pop("No valid rows found.","error");
+      const {data,error}=await supabase.from("rates").insert(rows).select();
+      if(error) return pop(error.message,"error");
+      setRates(rs=>[...rs,...(data||[])]);
+      pop(`${rows.length} rates imported.`);
     };
     reader.readAsText(file);
     e.target.value="";
@@ -7291,7 +7309,7 @@ function TradeRates({rates, setRates, pop}) {
         <Btn v="gho" sm>⬆ Import CSV</Btn>
         <input type="file" accept=".csv" style={{display:"none"}} onChange={importCSV}/>
       </label>
-      <Btn v="pri" sm onClick={()=>setShowAdd(!showAdd)}>+ Add Rate</Btn>
+      <Btn v="pri" sm onClick={()=>setShowAdd(!showAdd)} disabled={busy}>+ Add Rate</Btn>
     </Row>
 
     {showAdd&&<Card hi sx={{marginBottom:14}}>
@@ -7344,8 +7362,8 @@ function TradeRates({rates, setRates, pop}) {
             <td style={{padding:"9px 12px",color:T.muted,fontSize:12}}>{r.notes}</td>
             <td style={{padding:"9px 12px"}}>
               <Row gap={5}>
-                <Btn sm v="gho" onClick={()=>setEditId(editId===r.id?null:r.id)}>{editId===r.id?"Done":"Edit"}</Btn>
-                <Btn sm v="red" onClick={()=>{setRates(rs=>rs.filter(x=>x.id!==r.id));pop("Rate deleted.");}}>✕</Btn>
+                <Btn sm v="gho" onClick={()=>editId===r.id?saveEdit(r.id):setEditId(r.id)}>{editId===r.id?"Save":"Edit"}</Btn>
+                <Btn sm v="red" onClick={()=>delRate(r.id)}>✕</Btn>
               </Row>
             </td>
           </tr>)}
