@@ -844,7 +844,7 @@ export default function App() {
           { data: projectData, error: projectError },
         ] = await Promise.all([
           supabase.from("companies").select("name, setup_complete, abn, country").eq("id", profile.company_id).single(),
-          supabase.from("projects").select("*").eq("company_id", profile.company_id).order("created", { ascending: false }),
+          supabase.from("projects").select("*").eq("company_id", profile.company_id).is("trashed_at", null).order("created_at", { ascending: false }),
         ]);
         if (projectError) throw projectError;
 
