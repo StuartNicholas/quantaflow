@@ -721,6 +721,7 @@ export default function App() {
   const [needsCompany,       setNeedsCompany]       = useState(false); // true = no company_id yet
   const [pendingJoinRequest, setPendingJoinRequest] = useState(null);  // pending request row or null
   const [userRole,           setUserRole]           = useState("owner");
+  const [pendingTeamCount,   setPendingTeamCount]   = useState(0);     // pending join requests (owner only)
 
   // Friendly display name: saved profile name → auth metadata → email prefix.
   const displayName = profileName
@@ -862,6 +863,20 @@ export default function App() {
             abn:     companyRow?.abn     ?? "",
             country: companyRow?.country ?? "AU",
           }));
+
+          // Fetch pending join-request count for owners so the sidebar badge
+          // and toast fire on login without waiting for the Team section to open.
+          if ((profile.role || "owner") === "owner") {
+            supabase
+              .from("company_join_requests")
+              .select("id", { count: "exact", head: true })
+              .eq("status", "pending")
+              .then(({ count: n }) => {
+                if (!mounted) return;
+                const cnt = n || 0;
+                setPendingTeamCount(cnt);
+              });
+          }
         }
       } catch (err) {
         if (mounted) setProjectsError(err?.message || String(err));
@@ -872,6 +887,19 @@ export default function App() {
     loadProjects();
     return () => { mounted = false; };
   }, []);
+
+  // Toast the owner when pending join requests are detected on login.
+  const shownPendingToast = useRef(false);
+  useEffect(()=>{
+    if(pendingTeamCount > 0 && !shownPendingToast.current){
+      shownPendingToast.current = true;
+      pop(
+        `${pendingTeamCount} team join request${pendingTeamCount>1?"s":""} waiting — check Settings → Team`,
+        "info"
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[pendingTeamCount]);
 
   // surface localStorage quota failures instead of silently dropping saves
   useEffect(()=>{
@@ -1054,6 +1082,8 @@ export default function App() {
         <nav style={{padding:"10px 7px",flex:1}}>
           {NAV.map(n=>{
             const active = nav===n.id && !curProj;
+            const badge = n.id==="settings" && userRole==="owner" && pendingTeamCount > 0
+              ? pendingTeamCount : 0;
             return <div key={n.id} onClick={()=>{setNav(n.id);closeProj();}} style={{
               display:"flex",alignItems:"center",gap:9,padding:"8px 11px",borderRadius:6,
               cursor:"pointer",marginBottom:2,
@@ -1061,7 +1091,12 @@ export default function App() {
               border:`1px solid ${active?T.accentBrd:"transparent"}`,
               color:active?T.accent:T.muted,fontSize:13,fontWeight:active?700:400,
               transition:"all 0.15s"}}>
-              <span style={{fontSize:15,lineHeight:1}}>{n.icon}</span>{n.label}
+              <span style={{fontSize:15,lineHeight:1}}>{n.icon}</span>
+              <span style={{flex:1}}>{n.label}</span>
+              {badge>0&&<span style={{background:T.yellow,color:"#000",fontSize:10,
+                fontWeight:800,padding:"2px 6px",borderRadius:10,lineHeight:1.4}}>
+                {badge}
+              </span>}
             </div>;
           })}
         </nav>
@@ -1331,7 +1366,7 @@ function PendingApprovalScreen({companyName, userEmail, onRefresh}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // TEAM SECTION — embedded in SettingsModule, owner-only
 // ═══════════════════════════════════════════════════════════════════════════
-function TeamSection({companyId, companyAbn, companyCountry, pop}) {
+function TeamSection({companyId, companyAbn, companyCountry, onCountChange, pop}) {
   const [members,  setMembers]  = useState([]);
   const [requests, setRequests] = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -1345,6 +1380,7 @@ function TeamSection({companyId, companyAbn, companyCountry, pop}) {
     setMembers(m||[]);
     setRequests(r||[]);
     setLoading(false);
+    onCountChange?.(r?.length || 0);
   }
 
   useEffect(()=>{ reload(); },[]);
@@ -7314,7 +7350,8 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
         </Btn>
 
         {userRole==="owner"&&<TeamSection companyId={companyId}
-          companyAbn={local.abn||""} companyCountry={local.country||"AU"} pop={pop}/>}
+          companyAbn={local.abn||""} companyCountry={local.country||"AU"}
+          onCountChange={setPendingTeamCount} pop={pop}/>}
 
         <Card>
           <div style={{fontWeight:700,marginBottom:10,fontSize:13,color:T.teal}}>Data Backup & Restore</div>
