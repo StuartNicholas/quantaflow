@@ -6,3 +6,10 @@ body {
   min-height: 100%;
   background: #07090c;
 }
+
+.qf-tabs {
+  scrollbar-width: none;
+}
+.qf-tabs::-webkit-scrollbar {
+  display: none;
+}

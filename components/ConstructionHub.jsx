@@ -580,7 +580,7 @@ function KPI({label,value,sub,color=T.accent,sx={}}) {
 }
 
 function Tabs({tabs,active,onChange}) {
-  return <div style={{display:"flex",borderBottom:`1px solid ${T.border}`,marginBottom:20,overflowX:"auto"}}>
+  return <div className="qf-tabs" style={{display:"flex",borderBottom:`1px solid ${T.border}`,marginBottom:20,overflowX:"auto"}}>
     {tabs.map(t=><div key={t.id} onClick={()=>onChange(t.id)} style={{
       padding:"9px 16px",cursor:"pointer",fontSize:13,whiteSpace:"nowrap",
       fontWeight:active===t.id?700:400,color:active===t.id?T.accent:T.muted,
