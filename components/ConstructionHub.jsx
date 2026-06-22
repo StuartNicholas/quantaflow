@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, Component } from "react";
+import { useState, useEffect, useRef, Component, Fragment } from "react";
 import { supabase } from "../lib/supabase";
 import { listClients as dbListClients, createClient as dbCreateClient, updateClient as dbUpdateClient, deleteClient as dbDeleteClient } from "../lib/db/clients";
 import { listBuilders as dbListBuilders, createBuilder as dbCreateBuilder, updateBuilder as dbUpdateBuilder, deleteBuilder as dbDeleteBuilder } from "../lib/db/builders";
@@ -1489,7 +1489,7 @@ function SetupWizard({companyId, companyName, displayName, onComplete, onCreateP
         {STEPS.map((s,i)=>{
           const n=i+1;
           const done=step>n; const active=step===n;
-          return <React.Fragment key={s}>
+          return <Fragment key={s}>
             {i>0&&<div style={{width:28,height:1,background:done?T.accent:T.border}}/>}
             <div style={{display:"flex",alignItems:"center",gap:5}}>
               <div style={{width:22,height:22,borderRadius:"50%",fontSize:11,fontWeight:700,
@@ -1501,7 +1501,7 @@ function SetupWizard({companyId, companyName, displayName, onComplete, onCreateP
               </div>
               <span style={{fontSize:11,color:active?T.accent:T.faint,fontWeight:active?700:400}}>{s}</span>
             </div>
-          </React.Fragment>;
+          </Fragment>;
         })}
       </div>
 
