@@ -8,15 +8,13 @@ type AuthGateProps = { children: React.ReactNode };
 export default function AuthGate({ children }: AuthGateProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [newPassword, setNewPassword] = useState("");
+  const [mode, setMode] = useState<"login" | "signup" | "forgot" | "recovery">("login");
   const [loading, setLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [message, setMessage] = useState("");
-
-  // NOTE: company + profile creation is handled entirely by the database
-  // trigger `on_auth_user_created` (security definer). The client must NOT
-  // create companies — doing both caused duplicate companies per signup.
+  const [messageType, setMessageType] = useState<"error" | "success">("error");
 
   useEffect(() => {
     let mounted = true;
@@ -28,7 +26,12 @@ export default function AuthGate({ children }: AuthGateProps) {
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      if (_event === "PASSWORD_RECOVERY") {
+        setMode("recovery");
+        setUser(null);
+      } else {
+        setUser(session?.user ?? null);
+      }
     });
 
     return () => {
@@ -36,6 +39,11 @@ export default function AuthGate({ children }: AuthGateProps) {
       listener.subscription.unsubscribe();
     };
   }, []);
+
+  function setMsg(text: string, type: "error" | "success" = "error") {
+    setMessage(text);
+    setMessageType(type);
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -45,13 +53,26 @@ export default function AuthGate({ children }: AuthGateProps) {
       if (mode === "signup") {
         const { error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
-        setMessage("Account created. Check your email if confirmation is enabled.");
-      } else {
+        setMsg("Account created — check your email to confirm your address.", "success");
+      } else if (mode === "login") {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+      } else if (mode === "forgot") {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: typeof window !== "undefined" ? window.location.origin : "",
+        });
+        if (error) throw error;
+        setMsg("Password reset email sent — check your inbox and click the link.", "success");
+      } else if (mode === "recovery") {
+        if (newPassword.length < 6) throw new Error("Password must be at least 6 characters.");
+        const { error } = await supabase.auth.updateUser({ password: newPassword });
+        if (error) throw error;
+        setMsg("Password updated — you can now log in.", "success");
+        setMode("login");
+        setNewPassword("");
       }
     } catch (error: any) {
-      setMessage(error.message || "Authentication failed.");
+      setMsg(error.message || "Something went wrong.");
     } finally {
       setAuthLoading(false);
     }
@@ -65,37 +86,92 @@ export default function AuthGate({ children }: AuthGateProps) {
     );
   }
 
+  if (mode === "recovery") {
+    return (
+      <main style={styles.page}>
+        <div style={styles.card}>
+          <div style={styles.logo}>QF</div>
+          <h1 style={styles.title}>Set New Password</h1>
+          <p style={styles.subtitle}>Enter a new password for your account.</p>
+          <form onSubmit={handleSubmit} style={styles.form}>
+            <label style={styles.label}>New Password</label>
+            <input
+              type="password" required minLength={6}
+              value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
+              style={styles.input} placeholder="At least 6 characters"
+            />
+            <button type="submit" disabled={authLoading} style={styles.submit}>
+              {authLoading ? "Saving…" : "Set New Password"}
+            </button>
+          </form>
+          {message && <p style={{ ...styles.message, color: messageType === "success" ? "#4ade80" : "#fbbf24" }}>{message}</p>}
+        </div>
+      </main>
+    );
+  }
+
   if (!user) {
     return (
       <main style={styles.page}>
         <div style={styles.card}>
           <div style={styles.logo}>QF</div>
           <h1 style={styles.title}>QuantaFlow</h1>
-          <p style={styles.subtitle}>Sign in to access your construction estimating platform.</p>
+          <p style={styles.subtitle}>
+            {mode === "forgot"
+              ? "Enter your email and we'll send you a reset link."
+              : "Sign in to access your construction estimating platform."}
+          </p>
 
-          <div style={styles.tabs}>
-            <button onClick={() => setMode("login")} style={mode === "login" ? styles.activeTab : styles.tab}>Login</button>
-            <button onClick={() => setMode("signup")} style={mode === "signup" ? styles.activeTab : styles.tab}>Sign Up</button>
-          </div>
+          {mode !== "forgot" && (
+            <div style={styles.tabs}>
+              <button onClick={() => { setMode("login"); setMessage(""); }} style={mode === "login" ? styles.activeTab : styles.tab}>Login</button>
+              <button onClick={() => { setMode("signup"); setMessage(""); }} style={mode === "signup" ? styles.activeTab : styles.tab}>Sign Up</button>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} style={styles.form}>
             <label style={styles.label}>Email</label>
             <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} style={styles.input} />
-            <label style={styles.label}>Password</label>
-            <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} style={styles.input} />
+
+            {mode !== "forgot" && (
+              <>
+                <label style={styles.label}>Password</label>
+                <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} style={styles.input} />
+              </>
+            )}
+
+            {mode === "login" && (
+              <div style={{ textAlign: "right", marginTop: 2 }}>
+                <button type="button" onClick={() => { setMode("forgot"); setMessage(""); }}
+                  style={{ background: "none", border: "none", color: "#94a3b8", fontSize: 12, cursor: "pointer", padding: 0 }}>
+                  Forgot password?
+                </button>
+              </div>
+            )}
+
             <button type="submit" disabled={authLoading} style={styles.submit}>
-              {authLoading ? "Please wait…" : mode === "login" ? "Login" : "Create Account"}
+              {authLoading ? "Please wait…"
+                : mode === "login" ? "Login"
+                : mode === "signup" ? "Create Account"
+                : "Send Reset Email"}
             </button>
           </form>
 
-          {message && <p style={styles.message}>{message}</p>}
+          {mode === "forgot" && (
+            <div style={{ textAlign: "center", marginTop: 14 }}>
+              <button type="button" onClick={() => { setMode("login"); setMessage(""); }}
+                style={{ background: "none", border: "none", color: "#94a3b8", fontSize: 13, cursor: "pointer" }}>
+                ← Back to login
+              </button>
+            </div>
+          )}
+
+          {message && <p style={{ ...styles.message, color: messageType === "success" ? "#4ade80" : "#fbbf24" }}>{message}</p>}
         </div>
       </main>
     );
   }
 
-  // The user bar / logout now lives inside the app (top bar shows the name,
-  // Settings holds the Logout button) so it no longer floats over content.
   return <>{children}</>;
 }
 
@@ -112,6 +188,6 @@ const styles: Record<string, React.CSSProperties> = {
   label: { color: "#cbd5e1", fontSize: 14, marginTop: 8 },
   input: { background: "#0f172a", color: "white", border: "1px solid #334155", borderRadius: 10, padding: 14, fontSize: 16, outline: "none" },
   submit: { marginTop: 16, background: "#f59e0b", color: "#111827", border: 0, borderRadius: 10, padding: 14, fontSize: 16, fontWeight: 900, cursor: "pointer" },
-  message: { color: "#fbbf24", marginTop: 18, fontSize: 14 },
+  message: { marginTop: 18, fontSize: 14 },
   muted: { color: "#94a3b8" },
 };

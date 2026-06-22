@@ -7545,7 +7545,16 @@ const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?""
           </Row>
           <div style={{fontSize:11,color:T.faint,marginTop:4}}>This name shows at the top of the app and on your activity.</div>
         </div>
-        <Btn v="red" onClick={()=>{ if(safeConfirm("Log out of QuantaFlow?")) onSignOut?.(); }}>Log out</Btn>
+        <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"flex-end"}}>
+          <Btn v="red" onClick={()=>{ if(safeConfirm("Log out of QuantaFlow?")) onSignOut?.(); }}>Log out</Btn>
+          <Btn v="gho" sm onClick={async()=>{
+            if(!user?.email) return;
+            const { error } = await supabase.auth.resetPasswordForEmail(user.email, {
+              redirectTo: typeof window!=="undefined" ? window.location.origin : "",
+            });
+            pop(error ? error.message : "Password reset email sent — check your inbox.", error ? "error" : "success");
+          }}>Change password</Btn>
+        </div>
       </Row>
     </Card>
 
