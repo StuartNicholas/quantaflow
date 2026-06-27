@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
-const ADMIN_EMAIL = "stuartdeannicholas@gmail.com";
+const ADMIN_EMAIL = "stuart.dean.nicholas@gmail.com";
 const USD_TO_AUD = 1.55;
 
 const PLAN_PRICE: Record<string, number> = {
@@ -21,6 +21,7 @@ const C = {
   bg: "#07090c", card: "#101820", border: "#1e293b", faint: "#334155",
   text: "#f1f5f9", muted: "#64748b",
   green: "#22c55e", yellow: "#f59e0b", red: "#ef4444", blue: "#3b82f6",
+  teal: "#14b8a6",
 };
 
 function Card({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
@@ -97,6 +98,8 @@ export default function AdminPage() {
   const usage: any[] = data?.usage || [];
   const profiles: any[] = data?.profiles || [];
   const authUsers: any[] = data?.authUsers || [];
+  const planRequests: any[] = (data?.planRequests || []).filter((r: any) => r.status === "pending");
+  const creditRequests: any[] = (data?.creditRequests || []).filter((r: any) => r.status === "pending");
 
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
@@ -215,8 +218,8 @@ export default function AdminPage() {
                   const unprofitable = mrr > 0 && costAUD > mrr * 0.5;
 
                   return (
-                    <>
-                      <tr key={c.id}
+                    <React.Fragment key={c.id}>
+                      <tr
                         onClick={() => setExpandedId(expanded ? null : c.id)}
                         style={{ cursor: "pointer", borderBottom: expanded ? "none" : `1px solid ${C.faint}`, background: expanded ? C.faint : "transparent" }}
                         onMouseEnter={e => { if (!expanded) e.currentTarget.style.background = "#1a2535"; }}
@@ -254,7 +257,7 @@ export default function AdminPage() {
 
                       {/* Expanded row */}
                       {expanded && (
-                        <tr key={`${c.id}-exp`} style={{ borderBottom: `1px solid ${C.faint}` }}>
+                        <tr style={{ borderBottom: `1px solid ${C.faint}` }}>
                           <td colSpan={7} style={{ padding: "0 14px 14px 14px", background: C.faint }}>
                             <div style={{ display: "flex", gap: 16, flexWrap: "wrap", paddingTop: 10 }}>
 
@@ -300,7 +303,7 @@ export default function AdminPage() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </React.Fragment>
                   );
                 })}
                 {companies.length === 0 && (
@@ -346,6 +349,104 @@ export default function AdminPage() {
           </Card>
         </div>
       </div>
+
+      {/* ── Pending requests ── */}
+      {(planRequests.length > 0 || creditRequests.length > 0) && (
+        <Card style={{ padding: 0, overflow: "hidden", marginTop: 16 }}>
+          <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, fontWeight: 700 }}>
+            Pending Requests <span style={{ color: C.red, fontWeight: 800, fontSize: 13 }}>{planRequests.length + creditRequests.length}</span>
+          </div>
+
+          {/* Plan change requests */}
+          {planRequests.map((r: any) => {
+            const co = companies.find(c => c.id === r.company_id);
+            const [acting, setActing] = React.useState(false);
+            async function approve() {
+              setActing(true);
+              await fetch("/api/admin", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ action: "approvePlanRequest", requestId: r.id, companyId: r.company_id, requestedPlan: r.requested_plan }),
+              });
+              await load(token);
+            }
+            async function reject() {
+              setActing(true);
+              await fetch("/api/admin", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ action: "updatePlanRequest", requestId: r.id, status: "rejected" }),
+              });
+              await load(token);
+            }
+            return (
+              <div key={r.id} style={{ padding: "14px 20px", borderBottom: `1px solid ${C.faint}`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{co?.name || r.company_id}</div>
+                  <div style={{ fontSize: 13, color: C.muted }}>
+                    Plan change: <span style={{ color: C.text }}>{r.current_plan}</span> → <span style={{ color: C.yellow, fontWeight: 700 }}>{r.requested_plan}</span>
+                    {" · "}Effective: {new Date(r.effective_date).toLocaleDateString("en-AU")}
+                    {" · "}Requested: {new Date(r.requested_at).toLocaleDateString("en-AU")}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={approve} disabled={acting}
+                    style={{ background: C.green, color: "#111", border: "none", borderRadius: 7, padding: "7px 16px", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
+                    ✓ Approve
+                  </button>
+                  <button onClick={reject} disabled={acting}
+                    style={{ background: C.faint, color: C.text, border: "none", borderRadius: 7, padding: "7px 16px", cursor: "pointer", fontSize: 13 }}>
+                    ✗ Reject
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Credit purchase requests */}
+          {creditRequests.map((r: any) => {
+            const co = companies.find(c => c.id === r.company_id);
+            const [acting, setActing] = React.useState(false);
+            async function fulfill() {
+              setActing(true);
+              await fetch("/api/admin", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ action: "fulfillCreditRequest", requestId: r.id, companyId: r.company_id, creditsToAdd: r.credits_requested }),
+              });
+              await load(token);
+            }
+            return (
+              <div key={r.id} style={{ padding: "14px 20px", borderBottom: `1px solid ${C.faint}`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{co?.name || r.company_id}</div>
+                  <div style={{ fontSize: 13, color: C.muted }}>
+                    Credit top-up: <span style={{ color: C.teal, fontWeight: 700 }}>{r.credits_requested} credits</span>
+                    {" · "}Amount: <span style={{ color: C.green }}>${r.amount_aud} AUD</span>
+                    {" · "}Requested: {new Date(r.requested_at).toLocaleDateString("en-AU")}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={fulfill} disabled={acting}
+                    style={{ background: C.yellow, color: "#111", border: "none", borderRadius: 7, padding: "7px 16px", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
+                    ✓ Mark Paid & Add Credits
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      {/* Debug panel — shows if queries are failing */}
+      {data?.debug && (data.debug.companiesError || data.debug.companiesCount === 0) && (
+        <Card style={{ padding: 16, marginTop: 16, border: `1px solid ${C.red}55` }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 8 }}>Debug Info</div>
+          <pre style={{ fontSize: 11, color: C.muted, margin: 0, whiteSpace: "pre-wrap" }}>
+            {JSON.stringify(data.debug, null, 2)}
+          </pre>
+        </Card>
+      )}
 
       {/* Edit company modal */}
       {editing && (

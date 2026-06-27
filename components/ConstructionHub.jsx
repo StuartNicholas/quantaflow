@@ -7583,13 +7583,194 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// SUBSCRIPTION HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+const PLAN_PRICE_AUD = {beta:0,starter:89,team:149,pro:229,enterprise:999};
+const PLAN_LIMITS    = {beta:100,starter:200,team:500,pro:1500,enterprise:-1};
+const PLAN_CLR = p => p==="starter"?T.blue:p==="team"?T.green:p==="pro"?T.accent:p==="enterprise"?T.purple:T.muted;
+const CREDIT_PACKS = [
+  {credits:100, aud:35,  label:"Starter Pack",  note:"35¢ / credit"},
+  {credits:300, aud:89,  label:"Value Pack",     note:"30¢ / credit"},
+  {credits:1000,aud:249, label:"Pro Pack",        note:"25¢ / credit"},
+];
+
+function PlanChangeModal({currentPlan, companyId, onClose, pop}) {
+  const ALL_PLANS = [
+    {id:"starter", label:"Starter",    price:89,  credits:200,  features:["200 AI credits/mo","All modules","1 user"]},
+    {id:"team",    label:"Team",       price:149, credits:500,  features:["500 AI credits/mo","All modules","Up to 5 users"]},
+    {id:"pro",     label:"Pro",        price:229, credits:1500, features:["1,500 AI credits/mo","All modules","Unlimited users","Priority support"]},
+    {id:"enterprise",label:"Enterprise",price:999,credits:-1,  features:["Unlimited AI credits","All modules","Unlimited users","Dedicated support"]},
+  ].filter(p=>p.id!==currentPlan);
+  const order={beta:0,starter:1,team:2,pro:3,enterprise:4};
+  const isUpgrade = id => (order[id]||0)>(order[currentPlan]||0);
+
+  const [selected,setSelected]=useState(null);
+  const [submitting,setSubmitting]=useState(false);
+
+  async function submit() {
+    if(!selected) return;
+    setSubmitting(true);
+    const now=new Date();
+    const nextMonthFirst=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()+1,1)).toISOString().slice(0,10);
+    const effectiveDate=isUpgrade(selected)?now.toISOString().slice(0,10):nextMonthFirst;
+    const {data:{user:u}}=await supabase.auth.getUser();
+    const {error}=await supabase.from("plan_change_requests").insert({
+      company_id:companyId, requested_by:u?.id||null,
+      current_plan:currentPlan, requested_plan:selected,
+      effective_date:effectiveDate, status:"pending",
+    });
+    setSubmitting(false);
+    if(error){pop(error.message,"error");return;}
+    pop(isUpgrade(selected)
+      ?"Upgrade requested — we'll be in touch within 24 hours to confirm payment."
+      :`Downgrade to ${selected} is scheduled for ${new Date(nextMonthFirst).toLocaleDateString("en-AU")}.`,
+      "success");
+    onClose();
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:16,overflowY:"auto"}}>
+      <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:16,padding:24,width:"100%",maxWidth:520}}>
+        <div style={{fontWeight:800,fontSize:18,marginBottom:4}}>Change Plan</div>
+        <div style={{color:T.muted,fontSize:13,marginBottom:20}}>
+          Currently on <strong style={{color:T.text}}>{currentPlan}</strong> plan.
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:20}}>
+          {ALL_PLANS.map(p=>(
+            <div key={p.id} onClick={()=>setSelected(p.id)}
+              style={{border:`2px solid ${selected===p.id?PLAN_CLR(p.id):T.border}`,borderRadius:10,
+                padding:14,cursor:"pointer",background:selected===p.id?`${PLAN_CLR(p.id)}11`:T.panel,transition:"border 0.15s"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                    <span style={{fontWeight:700,fontSize:14,color:PLAN_CLR(p.id)}}>{p.label}</span>
+                    <Bdg color={isUpgrade(p.id)?T.green:T.muted}>{isUpgrade(p.id)?"Upgrade":"Downgrade"}</Bdg>
+                  </div>
+                  <div style={{color:T.muted,fontSize:12}}>{p.features.join(" · ")}</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontWeight:800,fontSize:18}}>${p.price}</div>
+                  <div style={{color:T.muted,fontSize:11}}>AUD/mo</div>
+                </div>
+              </div>
+              {selected===p.id&&(
+                <div style={{marginTop:10,padding:"8px 10px",background:T.bg,borderRadius:7,fontSize:12,color:T.muted}}>
+                  {isUpgrade(p.id)
+                    ?"⚡ Our team will contact you to confirm payment — usually activated within 24 hours."
+                    :`📅 Takes effect ${new Date(Date.UTC(new Date().getUTCFullYear(),new Date().getUTCMonth()+1,1)).toLocaleDateString("en-AU")} — you stay on your current plan until then.`}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <Btn v="pri" full onClick={submit} disabled={!selected||submitting}>
+            {submitting?"Submitting…":selected?`Request ${isUpgrade(selected)?"upgrade to":"downgrade to"} ${selected}`:"Select a plan above"}
+          </Btn>
+          <Btn v="gho" onClick={onClose}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CreditTopupModal({companyId, onClose, pop}) {
+  const [selected,setSelected]=useState(null);
+  const [submitting,setSubmitting]=useState(false);
+
+  async function submit() {
+    if(selected===null) return;
+    setSubmitting(true);
+    const pack=CREDIT_PACKS[selected];
+    const {data:{user:u}}=await supabase.auth.getUser();
+    const {error}=await supabase.from("credit_purchase_requests").insert({
+      company_id:companyId, requested_by:u?.id||null,
+      credits_requested:pack.credits, amount_aud:pack.aud, status:"pending",
+    });
+    setSubmitting(false);
+    if(error){pop(error.message,"error");return;}
+    const sub=encodeURIComponent("QuantaFlow — Credit Top-Up Request");
+    const body=encodeURIComponent(`Hi,\n\nI'd like to purchase the ${pack.label} (${pack.credits} AI credits for $${pack.aud} AUD).\n\nPlease send me a payment link.\n\nThanks`);
+    window.open(`mailto:stuart.dean.nicholas@gmail.com?subject=${sub}&body=${body}`,"_self");
+    pop(`Credit request sent — we'll email you a payment link. Your ${pack.credits} credits will be added on payment.`,"success");
+    onClose();
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:16}}>
+      <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:16,padding:24,width:"100%",maxWidth:400}}>
+        <div style={{fontWeight:800,fontSize:18,marginBottom:4}}>Buy Extra AI Credits</div>
+        <div style={{color:T.muted,fontSize:13,marginBottom:20}}>
+          Credits are added to your monthly allowance immediately on payment. They never expire.
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:16}}>
+          {CREDIT_PACKS.map((pack,i)=>(
+            <div key={i} onClick={()=>setSelected(i)}
+              style={{border:`2px solid ${selected===i?T.teal:T.border}`,borderRadius:10,padding:14,
+                cursor:"pointer",background:selected===i?T.tealDim:T.panel,transition:"border 0.15s"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:14,color:selected===i?T.teal:T.text,marginBottom:2}}>{pack.label}</div>
+                  <div style={{color:T.muted,fontSize:12}}>{pack.credits} AI credits · {pack.note}</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontWeight:800,fontSize:18}}>${pack.aud}</div>
+                  <div style={{color:T.muted,fontSize:11}}>AUD</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{background:T.bg,borderRadius:8,padding:10,marginBottom:16,fontSize:12,color:T.muted,lineHeight:1.5}}>
+          🔒 Stripe checkout coming soon — for now we'll email you a payment link within a few hours of your request.
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <Btn v="tel" full onClick={submit} disabled={selected===null||submitting}>
+            {submitting?"Submitting…":selected!==null?`Request ${CREDIT_PACKS[selected].credits} credits — $${CREDIT_PACKS[selected].aud} AUD`:"Select a package above"}
+          </Btn>
+          <Btn v="gho" onClick={onClose}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SETTINGS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
 function SettingsModule({company, setCompany, companyId, userRole, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, onTeamCountChange, pop}) {
   const [local, setLocal] = useState(company);
-const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?"":displayName)||"");
+  const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?"":displayName)||"");
   const [savingName, setSavingName] = useState(false);
   const set = (k,v) => setLocal(x=>({...x,[k]:v}));
+
+  // Subscription & credits state
+  const [planInfo, setPlanInfo] = useState(null);
+  const [pendingPlanReq, setPendingPlanReq] = useState(null);
+  const [showPlanModal, setShowPlanModal] = useState(false);
+  const [showCreditModal, setShowCreditModal] = useState(false);
+
+  useEffect(()=>{
+    if(!companyId) return;
+    (async()=>{
+      const now=new Date();
+      const monthStart=`${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,"0")}-01T00:00:00Z`;
+      const [compRes, usageRes, reqRes] = await Promise.all([
+        supabase.from("companies").select("plan,ai_monthly_limit,ai_credits_extra").eq("id",companyId).maybeSingle(),
+        supabase.from("ai_usage").select("credits").gte("created_at",monthStart),
+        supabase.from("plan_change_requests").select("*").eq("company_id",companyId).eq("status","pending")
+          .order("requested_at",{ascending:false}).limit(1).maybeSingle(),
+      ]);
+      const creditsUsed=(usageRes.data||[]).reduce((s,r)=>s+(r.credits||0),0);
+      const rawLimit=compRes.data?.ai_monthly_limit??100;
+      setPlanInfo({
+        plan: compRes.data?.plan||"beta",
+        limit: rawLimit<0?-1:rawLimit+(compRes.data?.ai_credits_extra||0),
+        creditsUsed,
+      });
+      setPendingPlanReq(reqRes.data||null);
+    })();
+  },[companyId]);
 
   // storage usage meter (localStorage ~5MB budget in most browsers)
   const usageKB=(()=>{try{let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);n+=(k.length+(localStorage.getItem(k)||"").length)*2;}return Math.round(n/1024);}catch{return 0;}})();
@@ -7636,6 +7817,50 @@ const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?""
         </div>
       </Row>
     </Card>
+
+    {/* ── Subscription & Credits ── */}
+    {planInfo&&<Card sx={{marginBottom:16}}>
+      <div style={{fontWeight:700,fontSize:13,color:T.teal,marginBottom:14,textTransform:"uppercase",letterSpacing:"0.05em"}}>Subscription & Credits</div>
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
+        <span style={{background:`${PLAN_CLR(planInfo.plan)}22`,color:PLAN_CLR(planInfo.plan),
+          borderRadius:8,padding:"4px 14px",fontWeight:800,fontSize:14}}>
+          {planInfo.plan.charAt(0).toUpperCase()+planInfo.plan.slice(1)} Plan
+        </span>
+        <span style={{color:T.muted,fontSize:13}}>
+          {PLAN_PRICE_AUD[planInfo.plan]>0?`$${PLAN_PRICE_AUD[planInfo.plan]} AUD/month`:"Free during beta"}
+        </span>
+      </div>
+      {planInfo.limit===-1
+        ? <div style={{color:T.green,fontSize:13,marginBottom:14}}>∞ Unlimited AI credits</div>
+        : <div style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:T.muted,marginBottom:4}}>
+              <span>AI Credits this month</span>
+              <span style={{fontFamily:T.mono,color:planInfo.creditsUsed>=planInfo.limit?T.red:T.text}}>
+                {planInfo.creditsUsed} / {planInfo.limit}
+              </span>
+            </div>
+            <div style={{background:T.bg,borderRadius:4,height:8,overflow:"hidden"}}>
+              <div style={{height:"100%",borderRadius:4,transition:"width 0.3s",
+                width:`${Math.min(100,planInfo.creditsUsed/planInfo.limit*100)}%`,
+                background:planInfo.creditsUsed/planInfo.limit>=1?T.red:planInfo.creditsUsed/planInfo.limit>0.8?T.yellow:T.green}}/>
+            </div>
+            <div style={{fontSize:11,color:T.faint,marginTop:4}}>Resets on the 1st of each month</div>
+          </div>
+      }
+      {pendingPlanReq&&<div style={{background:T.yellowDim,border:`1px solid ${T.yellow}44`,borderRadius:8,
+        padding:"8px 12px",fontSize:12,color:T.yellow,marginBottom:12}}>
+        ⏳ Plan change to <strong>{pendingPlanReq.requested_plan}</strong> pending — submitted {new Date(pendingPlanReq.requested_at).toLocaleDateString("en-AU")}.
+      </div>}
+      {userRole==="owner"&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <Btn sm v="pri" onClick={()=>setShowPlanModal(true)}>Change Plan</Btn>
+        <Btn sm v="tel" onClick={()=>setShowCreditModal(true)}>⚡ Buy Extra Credits</Btn>
+      </div>}
+    </Card>}
+
+    {showPlanModal&&<PlanChangeModal currentPlan={planInfo?.plan||"beta"} companyId={companyId}
+      onClose={()=>setShowPlanModal(false)} pop={pop}/>}
+    {showCreditModal&&<CreditTopupModal companyId={companyId}
+      onClose={()=>setShowCreditModal(false)} pop={pop}/>}
 
     {userRole==="owner"
       ? <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
