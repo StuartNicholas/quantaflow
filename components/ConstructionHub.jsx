@@ -2624,6 +2624,8 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
   const [aiSummary, setAiSummary] = useState(null);
   const [takeoffId, setTakeoffId] = useState(null);
   const [loadingTakeoff, setLoadingTakeoff] = useState(true);
+  const [creditsExhausted, setCreditsExhausted] = useState(null); // {used,limit}
+  const [aiUsage, setAiUsage] = useState(null); // {used,limit} for this month
 
   const log = (msg, type="info") => setALog(l=>[...l,{msg,type,ts:new Date().toLocaleTimeString()}]);
 
@@ -2654,6 +2656,23 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
     return ()=>{on=false;};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[proj.id]);
+
+  // ── Fetch this month's AI usage for the usage indicator
+  useEffect(()=>{
+    (async()=>{
+      const now=new Date(); const y=now.getUTCFullYear(); const m=String(now.getUTCMonth()+1).padStart(2,"0");
+      const start=`${y}-${m}-01T00:00:00Z`;
+      const [usageRes, companyRes] = await Promise.all([
+        supabase.from("ai_usage").select("credits").gte("created_at",start),
+        supabase.from("companies").select("ai_monthly_limit,ai_credits_extra").eq("id",proj.company_id).maybeSingle(),
+      ]);
+      const used=(usageRes.data||[]).reduce((s,r)=>s+(r.credits||0),0);
+      const rawLimit=companyRes.data?.ai_monthly_limit??50;
+      // -1 = Enterprise unlimited; otherwise add extra purchased credits
+      const limit=rawLimit<0?-1:rawLimit+(companyRes.data?.ai_credits_extra||0);
+      setAiUsage({used,limit});
+    })();
+  },[proj.company_id, analyzing]);
 
   // ── PDF.js loader
   async function pdfjs() {
@@ -2724,7 +2743,7 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
   //  · "claude" (default): bare call, works only inside Claude.ai (proxied)
   //  · "proxy": your own server endpoint holding the API key (PRODUCTION setup)
   //  · "direct": API key in browser (DEV ONLY — key is visible to the user)
-  async function callAI(content, maxTok=1800) {
+  async function callAI(content, maxTok=1800, meta={}) {
     let aiCfg={mode:"proxy",endpoint:"/api/ai",apiKey:""}; // default: built-in Next.js server proxy
     try{ aiCfg={...aiCfg,...JSON.parse(localStorage.getItem("qf_ai")||"{}")}; }catch{}
     const url = aiCfg.mode==="proxy"&&aiCfg.endpoint ? aiCfg.endpoint : "https://api.anthropic.com/v1/messages";
@@ -2733,14 +2752,24 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
       headers["x-api-key"]=aiCfg.apiKey;
       headers["anthropic-version"]="2023-06-01";
       headers["anthropic-dangerous-direct-browser-access"]="true";
+    } else {
+      // Pass auth token so the server can meter usage per company
+      try {
+        const { data:{ session } } = await supabase.auth.getSession();
+        if(session?.access_token) headers["Authorization"]=`Bearer ${session.access_token}`;
+      } catch {}
     }
     const r=await fetch(url,{
       method:"POST",headers,
       body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:maxTok,
-        messages:[{role:"user",content}]})
+        messages:[{role:"user",content}], meta})
     });
     const d=await r.json();
-    if(d.error) throw new Error(typeof d.error==="object"?d.error.message||JSON.stringify(d.error):String(d.error));
+    if(d.error){
+      const err=new Error(typeof d.error==="object"?d.error.message||JSON.stringify(d.error):String(d.error));
+      if(typeof d.error==="object"){ err.code=d.error.code; err.used=d.error.used; err.limit=d.error.limit; }
+      throw err;
+    }
     return d.content.map(b=>b.text||"").join("");
   }
 
@@ -2750,7 +2779,7 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
 
   // ── Fatal AI-provider errors: stop the run immediately instead of burning
   //    through every batch against a dead key/account (e.g. 26× quota errors)
-  const isFatalAI = m => /exceeded your current quota|insufficient_quota|billing|credit balance|invalid api key|incorrect api key|authentication_error|invalid x-api-key|unauthorized/i.test(m||"");
+  const isFatalAI = m => /exceeded your current quota|insufficient_quota|billing|credit balance|invalid api key|incorrect api key|authentication_error|invalid x-api-key|unauthorized|monthly AI takeoff allowance/i.test(m||"");
   const friendlyAI = m => /quota|billing|credit/i.test(m||"")
     ? "Your AI provider account has no available credit. OpenAI: platform.openai.com → Settings → Billing → add credits. Anthropic: console.anthropic.com → Billing. Then restart the dev server (npm run dev) and re-run."
     : "Your AI key was rejected. Check the key in .env.local is correct and active, then restart the dev server (npm run dev).";
@@ -2842,10 +2871,11 @@ ${cabinetryActive?"IMPORTANT: score=3 for any kitchen plan/elevation, bathroom e
 ${joineryActive?"IMPORTANT: score=3 for window schedule, door schedule, sliding door schedule, joinery schedule pages.":""}
 Pages: ${idxs.map(x=>x+1).join(",")}. JSON only: {"pages":[{"page":1,"score":3,"type":"floor plan with kitchen layout"}]}`;
         try {
-          const res=await callAI([...blocks,{type:"text",text:prompt}],600);
+          const res=await callAI([...blocks,{type:"text",text:prompt}],600,{pages:idxs.length,kind:"ai_scan"});
           const p=parseJSON(res);
           (p?.pages||[]).forEach(x=>{scores[x.page-1]={score:x.score,type:x.type||""};});
         } catch(e) {
+          if(e.code==="limit_reached") throw e;
           if(isFatalAI(e.message)) throw new Error(friendlyAI(e.message));
           log(`Scan ${i+1} failed (${(e.message||"").slice(0,90)}) — pages kept for Phase 2 anyway.`,"error");
           idxs.forEach(idx=>{scores[idx]={score:2,type:"unclassified"};});
@@ -2913,7 +2943,7 @@ ${EXTRACT_SCHEMA}`;
         const imgs=await Promise.all(idxs.map(idx=>rasterise(idx+1,EXTRACT_DPI,pdfDoc)));
         const blocks=imgs.map(b=>({type:"image",source:{type:"base64",media_type:"image/jpeg",data:b}}));
         try {
-          const res=await callAI([...blocks,{type:"text",text:EXTRACT}],MAX_TOK);
+          const res=await callAI([...blocks,{type:"text",text:EXTRACT}],MAX_TOK,{pages:idxs.length,kind:"ai_takeoff"});
           const parsed=parseJSON(res);
           if(parsed){
             const cabLines=(parsed.cabinetryUnits||[]).reduce((s,u)=>s+(u.rooms||[]).reduce((s2,r)=>s2+(r.cabinets||[]).length,0),0);
@@ -2924,6 +2954,7 @@ ${EXTRACT_SCHEMA}`;
             log(`Batch ${i+1} WARNING: response could not be parsed — pages ${idxs.map(x=>x+1).join(", ")} data lost. Try re-running.`,"error");
           }
         } catch(e) {
+          if(e.code==="limit_reached") throw e;
           if(isFatalAI(e.message)) throw new Error(friendlyAI(e.message));
           consecFail++;
           log(`Batch ${i+1} error: ${e.message}`,"error");
@@ -3111,8 +3142,14 @@ ${EXTRACT_SCHEMA}`;
       log(`✓ ${newItems.length} takeoff items created (${totalCabLines} cabinetry lines). Push to Estimate when ready.`,"success");
 
     } catch(e) {
-      log(`Error: ${e.message}`,"error");
-      pop(e.message.length<90?e.message:"Analysis failed — see log.","error");
+      if(e.code==="limit_reached"){
+        setCreditsExhausted({used:e.used, limit:e.limit});
+        setAiUsage({used:e.used, limit:e.limit});
+        log(`AI credits exhausted — ${e.used} of ${e.limit} credits used this month.`,"error");
+      } else {
+        log(`Error: ${e.message}`,"error");
+        pop(e.message.length<90?e.message:"Analysis failed — see log.","error");
+      }
     } finally { setAnalyzing(false); }
   }
 
@@ -3427,7 +3464,7 @@ ${EXTRACT_SCHEMA}`;
       <Btn v="pri" onClick={()=>fileInput.current?.click()}>📁 Upload PDF Plans</Btn>
       <input ref={fileInput} type="file" accept=".pdf" style={{display:"none"}}
         onChange={e=>{const f=e.target.files?.[0];if(f)handleFile(f);e.target.value="";}}/>
-      {pdfMeta&&<Btn v="tel" onClick={runExtract} disabled={analyzing}>
+      {pdfMeta&&<Btn v="tel" onClick={runExtract} disabled={analyzing||!!creditsExhausted}>
         {analyzing?`⏳ Analysing… ${progress.done}/${progress.total||"?"}`
           :`⬡ AI Extract — ${pdfMeta.numPages} pages · ${tradeScope}`}
       </Btn>}
@@ -3435,7 +3472,49 @@ ${EXTRACT_SCHEMA}`;
       {pdfMeta&&<Btn v="blu" onClick={()=>openMeasure(currentPage)}>📐 Measure p{currentPage+1}</Btn>}
       <Btn v="gho" onClick={addLayer}>+ Layer</Btn>
       <Btn v="pri" onClick={openPicker}>+ Add Item</Btn>
+      {aiUsage&&<div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6,fontSize:11}}>
+        {aiUsage.limit===-1?(
+          <span style={{color:T.green}}>∞ Unlimited AI credits</span>
+        ):(
+          <>
+            <div style={{width:80,height:5,borderRadius:3,background:T.border,overflow:"hidden"}}>
+              <div style={{height:"100%",borderRadius:3,
+                background:aiUsage.used>=aiUsage.limit?T.red:aiUsage.used/aiUsage.limit>0.8?T.yellow:T.green,
+                width:`${Math.min(100,aiUsage.used/aiUsage.limit*100)}%`,transition:"width 0.3s"}}/>
+            </div>
+            <span style={{color:aiUsage.used>=aiUsage.limit?T.red:T.muted}}>
+              {aiUsage.used}/{aiUsage.limit} AI credits
+            </span>
+          </>
+        )}
+      </div>}
     </Row>
+
+    {/* ── Credits exhausted panel */}
+    {creditsExhausted&&<Card hi sx={{marginBottom:14,border:`1px solid ${T.red}55`,background:`${T.red}0a`}}>
+      <Row gap={10} sx={{alignItems:"flex-start"}}>
+        <div style={{fontSize:28,flexShrink:0}}>⚡</div>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:700,fontSize:14,color:T.red,marginBottom:4}}>AI credits exhausted</div>
+          <div style={{color:T.muted,fontSize:13,marginBottom:10}}>
+            Your company has used all {creditsExhausted.limit} AI credits for this month.
+            Credits reset on the 1st of next month, or you can purchase additional credits to keep going now.
+          </div>
+          <Row gap={8}>
+            <Btn v="pri" onClick={()=>{
+              const sub=encodeURIComponent("QuantaFlow — Purchase AI Credits");
+              const body=encodeURIComponent(`Hi,\n\nWe've reached our AI credit limit (${creditsExhausted.used}/${creditsExhausted.limit} used) and would like to purchase additional credits.\n\nPlease let us know the options.\n\nThanks`);
+              window.open(`mailto:stuartdeannicholas@gmail.com?subject=${sub}&body=${body}`,"_self");
+            }}>Purchase more credits</Btn>
+            <Btn v="gho" onClick={()=>setCreditsExhausted(null)}>Dismiss</Btn>
+          </Row>
+        </div>
+        <div style={{textAlign:"right",flexShrink:0}}>
+          <div style={{fontFamily:T.mono,fontSize:22,fontWeight:800,color:T.red}}>{creditsExhausted.used}</div>
+          <div style={{color:T.faint,fontSize:11}}>of {creditsExhausted.limit} used</div>
+        </div>
+      </Row>
+    </Card>}
 
     {/* ── MEASURE PANEL — scale-calibrated on-plan measurement */}
     {measure&&<Card sx={{marginBottom:14,padding:0,overflow:"hidden"}} hi>

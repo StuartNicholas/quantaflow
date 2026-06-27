@@ -69,7 +69,9 @@ export async function POST(req: Request) {
 
   const pages = Math.max(0, Number(meta?.pages) || 0);
   const kind = String(meta?.kind || "ai_takeoff");
-  const credits = Math.max(1, pages || 1);
+  // Phase 1 scans (kind="ai_scan") are cheap classification passes — don't consume credits.
+  // Only Phase 2 extractions (kind="ai_takeoff") count against the company's allowance.
+  const credits = kind === "ai_scan" ? 0 : Math.max(1, pages || 1);
 
   // ── Pre-flight limit check (only blocks if the company's plan has hard_block on)
   if (companyId && supaUrl && serviceKey) {
