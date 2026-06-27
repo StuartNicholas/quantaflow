@@ -7735,6 +7735,71 @@ function CreditTopupModal({companyId, onClose, pop}) {
   );
 }
 
+function CancelSubscriptionModal({currentPlan, companyId, onClose, pop}) {
+  const [reason, setReason] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit() {
+    if(!confirmed) return;
+    setSubmitting(true);
+    const now = new Date();
+    const nextMonthFirst = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth()+1, 1)).toISOString().slice(0,10);
+    const {data:{user:u}} = await supabase.auth.getUser();
+    const {error} = await supabase.from("plan_change_requests").insert({
+      company_id: companyId, requested_by: u?.id||null,
+      current_plan: currentPlan, requested_plan: "cancelled",
+      effective_date: nextMonthFirst, status: "pending",
+      notes: reason||null,
+    });
+    setSubmitting(false);
+    if(error){pop(error.message,"error");return;}
+    pop(`Cancellation requested — your ${currentPlan} plan will end on ${new Date(nextMonthFirst).toLocaleDateString("en-AU")}. We'll be in touch to confirm.`,"success");
+    onClose();
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:16}}>
+      <div style={{background:T.card,border:`1px solid ${T.red}55`,borderRadius:16,padding:24,width:"100%",maxWidth:440}}>
+        <div style={{fontWeight:800,fontSize:18,color:T.red,marginBottom:4}}>Cancel Subscription</div>
+        <div style={{color:T.muted,fontSize:13,marginBottom:20,lineHeight:1.6}}>
+          Your <strong style={{color:T.text}}>{currentPlan}</strong> plan will remain active until the end of your current billing period. After that, you'll lose access to paid features.
+        </div>
+
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:12,color:T.muted,marginBottom:6}}>Reason for cancelling (optional)</div>
+          <textarea value={reason} onChange={e=>setReason(e.target.value)} rows={3}
+            placeholder="e.g. No longer needed, switching to another tool, too expensive…"
+            style={{width:"100%",background:T.bg,color:T.text,border:`1px solid ${T.border}`,
+              borderRadius:8,padding:"10px 12px",fontSize:13,resize:"vertical",boxSizing:"border-box",fontFamily:"inherit"}}/>
+        </div>
+
+        <div onClick={()=>setConfirmed(c=>!c)}
+          style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",
+            background:T.redDim,border:`1px solid ${T.red}44`,borderRadius:8,padding:12,marginBottom:20}}>
+          <div style={{width:18,height:18,borderRadius:4,border:`2px solid ${confirmed?T.red:T.faint}`,
+            background:confirmed?T.red:"transparent",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            {confirmed&&<span style={{color:"#fff",fontSize:12,fontWeight:900}}>✓</span>}
+          </div>
+          <span style={{fontSize:13,color:T.red}}>
+            I understand my subscription will be cancelled at the end of the billing period
+          </span>
+        </div>
+
+        <div style={{display:"flex",gap:10}}>
+          <Btn v="gho" full onClick={onClose}>Keep my subscription</Btn>
+          <button onClick={submit} disabled={!confirmed||submitting}
+            style={{flex:1,background:confirmed?T.red:"#2a1515",color:confirmed?"#fff":T.faint,
+              border:`1px solid ${confirmed?T.red:T.faint}`,borderRadius:8,padding:12,
+              fontWeight:700,cursor:confirmed?"pointer":"not-allowed",fontSize:14,transition:"all 0.15s"}}>
+            {submitting?"Submitting…":"Cancel subscription"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SETTINGS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -7749,6 +7814,7 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
   const [pendingPlanReq, setPendingPlanReq] = useState(null);
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [showCreditModal, setShowCreditModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   useEffect(()=>{
     if(!companyId) return;
@@ -7851,16 +7917,26 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
         padding:"8px 12px",fontSize:12,color:T.yellow,marginBottom:12}}>
         ⏳ Plan change to <strong>{pendingPlanReq.requested_plan}</strong> pending — submitted {new Date(pendingPlanReq.requested_at).toLocaleDateString("en-AU")}.
       </div>}
-      {userRole==="owner"&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        <Btn sm v="pri" onClick={()=>setShowPlanModal(true)}>Change Plan</Btn>
-        <Btn sm v="tel" onClick={()=>setShowCreditModal(true)}>⚡ Buy Extra Credits</Btn>
-      </div>}
+      {userRole==="owner"&&<>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <Btn sm v="pri" onClick={()=>setShowPlanModal(true)}>Change Plan</Btn>
+          <Btn sm v="tel" onClick={()=>setShowCreditModal(true)}>⚡ Buy Extra Credits</Btn>
+        </div>
+        {planInfo.plan!=="beta"&&<div style={{marginTop:20,paddingTop:16,borderTop:`1px solid ${T.border}`}}>
+          <button onClick={()=>setShowCancelModal(true)}
+            style={{background:"none",border:"none",color:T.muted,fontSize:12,cursor:"pointer",padding:0,textDecoration:"underline"}}>
+            Cancel subscription
+          </button>
+        </div>}
+      </>}
     </Card>}
 
     {showPlanModal&&<PlanChangeModal currentPlan={planInfo?.plan||"beta"} companyId={companyId}
       onClose={()=>setShowPlanModal(false)} pop={pop}/>}
     {showCreditModal&&<CreditTopupModal companyId={companyId}
       onClose={()=>setShowCreditModal(false)} pop={pop}/>}
+    {showCancelModal&&<CancelSubscriptionModal currentPlan={planInfo?.plan||"beta"} companyId={companyId}
+      onClose={()=>setShowCancelModal(false)} pop={pop}/>}
 
     {userRole==="owner"
       ? <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>

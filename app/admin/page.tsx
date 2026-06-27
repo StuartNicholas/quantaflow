@@ -99,6 +99,8 @@ export default function AdminPage() {
   const profiles: any[] = data?.profiles || [];
   const authUsers: any[] = data?.authUsers || [];
   const planRequests: any[] = (data?.planRequests || []).filter((r: any) => r.status === "pending");
+  const cancelRequests: any[] = planRequests.filter((r: any) => r.requested_plan === "cancelled");
+  const changeRequests: any[] = planRequests.filter((r: any) => r.requested_plan !== "cancelled");
   const creditRequests: any[] = (data?.creditRequests || []).filter((r: any) => r.status === "pending");
 
   const now = new Date();
@@ -351,14 +353,47 @@ export default function AdminPage() {
       </div>
 
       {/* ── Pending requests ── */}
-      {(planRequests.length > 0 || creditRequests.length > 0) && (
+      {(planRequests.length > 0 || creditRequests.length > 0 || cancelRequests.length > 0) && (
         <Card style={{ padding: 0, overflow: "hidden", marginTop: 16 }}>
           <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, fontWeight: 700 }}>
             Pending Requests <span style={{ color: C.red, fontWeight: 800, fontSize: 13 }}>{planRequests.length + creditRequests.length}</span>
           </div>
 
+          {/* Cancellation requests — shown first, highlighted in red */}
+          {cancelRequests.map((r: any) => {
+            const co = companies.find(c => c.id === r.company_id);
+            const [acting, setActing] = React.useState(false);
+            async function confirmCancel() {
+              setActing(true);
+              await fetch("/api/admin", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ action: "approvePlanRequest", requestId: r.id, companyId: r.company_id, requestedPlan: "beta", requestedLimit: 0 }),
+              });
+              await load(token);
+            }
+            return (
+              <div key={r.id} style={{ padding: "14px 20px", borderBottom: `1px solid ${C.faint}`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: `${C.red}08` }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.red, flexShrink: 0 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: C.red }}>{co?.name || r.company_id} — Cancellation Request</div>
+                  <div style={{ fontSize: 13, color: C.muted }}>
+                    Current plan: <span style={{ color: C.text }}>{r.current_plan}</span>
+                    {" · "}Effective: {new Date(r.effective_date).toLocaleDateString("en-AU")}
+                    {" · "}Requested: {new Date(r.requested_at).toLocaleDateString("en-AU")}
+                  </div>
+                  {r.notes && <div style={{ fontSize: 12, color: C.muted, marginTop: 4, fontStyle: "italic" }}>Reason: {r.notes}</div>}
+                </div>
+                <button onClick={confirmCancel} disabled={acting}
+                  style={{ background: C.red, color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
+                  Confirm Cancellation
+                </button>
+              </div>
+            );
+          })}
+
           {/* Plan change requests */}
-          {planRequests.map((r: any) => {
+          {changeRequests.map((r: any) => {
             const co = companies.find(c => c.id === r.company_id);
             const [acting, setActing] = React.useState(false);
             async function approve() {
