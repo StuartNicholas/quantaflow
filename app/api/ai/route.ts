@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
-// QuantaFlow AI proxy + usage metering.
+// Verixo AI proxy + usage metering.
 // The API key and the Supabase SERVICE-ROLE key live HERE on the server only.
 //
 // .env.local (and Vercel → Settings → Environment Variables) must contain:

@@ -158,9 +158,9 @@ export default function AdminPage() {
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 28 }}>
-        <div style={{ width: 42, height: 42, borderRadius: 10, background: C.yellow, color: "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 15, flexShrink: 0 }}>QF</div>
+        <div style={{ width: 42, height: 42, borderRadius: 10, background: C.yellow, color: "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 15, flexShrink: 0 }}>V</div>
         <div>
-          <div style={{ fontWeight: 800, fontSize: 22 }}>QuantaFlow Admin</div>
+          <div style={{ fontWeight: 800, fontSize: 22 }}>Verixo Admin</div>
           <div style={{ color: C.muted, fontSize: 12 }}>
             {now.toLocaleDateString("en-AU", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
           </div>

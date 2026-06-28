@@ -81,7 +81,7 @@ export default function AuthGate({ children }: AuthGateProps) {
   if (loading) {
     return (
       <main style={styles.page}>
-        <p style={styles.muted}>Loading QuantaFlow…</p>
+        <p style={styles.muted}>Loading Verixo…</p>
       </main>
     );
   }
@@ -90,7 +90,7 @@ export default function AuthGate({ children }: AuthGateProps) {
     return (
       <main style={styles.page}>
         <div style={styles.card}>
-          <div style={styles.logo}>QF</div>
+          <div style={styles.logo}>V</div>
           <h1 style={styles.title}>Set New Password</h1>
           <p style={styles.subtitle}>Enter a new password for your account.</p>
           <form onSubmit={handleSubmit} style={styles.form}>
@@ -114,12 +114,18 @@ export default function AuthGate({ children }: AuthGateProps) {
     return (
       <main style={styles.page}>
         <div style={styles.card}>
-          <div style={styles.logo}>QF</div>
-          <h1 style={styles.title}>QuantaFlow</h1>
+          <div style={styles.brandBlock}>
+            <div style={styles.logo}>V</div>
+            <div>
+              <div style={styles.brandName}>VERIXO</div>
+              <div style={styles.brandTagline}>The Complete Construction Platform</div>
+              <div style={styles.brandBy}>by Shilacon</div>
+            </div>
+          </div>
           <p style={styles.subtitle}>
             {mode === "forgot"
               ? "Enter your email and we'll send you a reset link."
-              : "Sign in to access your construction estimating platform."}
+              : "Sign in to your account."}
           </p>
 
           {mode !== "forgot" && (
@@ -178,9 +184,13 @@ export default function AuthGate({ children }: AuthGateProps) {
 const styles: Record<string, React.CSSProperties> = {
   page: { minHeight: "100vh", background: "radial-gradient(circle at top, rgba(245,158,11,0.12), transparent 35%), #07090c", color: "white", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "Arial, sans-serif" },
   card: { width: "100%", maxWidth: 430, background: "#101820", border: "1px solid #243241", borderRadius: 20, padding: 32, boxShadow: "0 30px 80px rgba(0,0,0,0.45)" },
-  logo: { width: 48, height: 48, borderRadius: 12, background: "#f59e0b", color: "#111827", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, marginBottom: 20 },
+  brandBlock: { display: "flex", alignItems: "center", gap: 16, marginBottom: 24 },
+  logo: { width: 52, height: 52, borderRadius: 14, background: "#f59e0b", color: "#111827", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 22, flexShrink: 0 },
+  brandName: { fontSize: 28, fontWeight: 900, letterSpacing: "0.12em", color: "#f1f5f9", lineHeight: 1 },
+  brandTagline: { fontSize: 12, color: "#94a3b8", marginTop: 4, letterSpacing: "0.02em" },
+  brandBy: { fontSize: 11, color: "#4b5f72", marginTop: 3, letterSpacing: "0.05em" },
   title: { fontSize: 34, fontWeight: 900, margin: 0 },
-  subtitle: { color: "#94a3b8", marginTop: 10, lineHeight: 1.5 },
+  subtitle: { color: "#94a3b8", marginTop: 0, marginBottom: 4, lineHeight: 1.5, fontSize: 14 },
   tabs: { display: "flex", gap: 10, marginTop: 28 },
   tab: { flex: 1, padding: "12px 16px", borderRadius: 10, border: "1px solid #334155", background: "#1e293b", color: "#cbd5e1", cursor: "pointer", fontWeight: 700 },
   activeTab: { flex: 1, padding: "12px 16px", borderRadius: 10, border: "1px solid #f59e0b", background: "#f59e0b", color: "#111827", cursor: "pointer", fontWeight: 900 },

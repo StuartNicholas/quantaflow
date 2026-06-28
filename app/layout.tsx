@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "QuantaFlow — Construction Hub",
+  title: "Verixo — The Complete Construction Platform",
   description: "AI takeoff · Cabinetry estimating · Quoting · Job costing · Claims",
 };
 

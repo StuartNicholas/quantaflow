@@ -646,7 +646,7 @@ function ConfirmModal({title,message,confirmText="Delete",danger,onConfirm,onCan
 class ErrorBoundary extends Component {
   constructor(props){ super(props); this.state={error:null}; }
   static getDerivedStateFromError(error){ return {error}; }
-  componentDidCatch(error,info){ console.error("QuantaFlow module error:",error,info); }
+  componentDidCatch(error,info){ console.error("Verixo module error:",error,info); }
   render(){
     if(this.state.error) return <div style={{padding:24,background:T.card,border:`1px solid ${T.red}55`,
       borderRadius:9,margin:20,color:T.text,fontFamily:T.font}}>
@@ -668,7 +668,7 @@ class ErrorBoundary extends Component {
 class SetupErrorBoundary extends Component {
   constructor(props){ super(props); this.state={error:null}; }
   static getDerivedStateFromError(error){ return {error}; }
-  componentDidCatch(error,info){ console.error("QuantaFlow setup error:",error,info); }
+  componentDidCatch(error,info){ console.error("Verixo setup error:",error,info); }
   render(){
     if(this.state.error) return (
       <div style={{position:"fixed",inset:0,zIndex:9999,background:T.bg,
@@ -1112,7 +1112,7 @@ export default function App() {
           onComplete={({name})=>{
             setSetupComplete(true);
             if(name) setCompany(c=>({...c,name}));
-            pop("Setup complete — welcome to Construction Hub!");
+            pop("Setup complete — welcome to Verixo!");
           }}
           onCreateProject={()=>{
             setSetupComplete(true);
@@ -1132,7 +1132,7 @@ export default function App() {
             </div>
             <div>
               <div style={{fontWeight:800,fontSize:12,lineHeight:1.2,color:T.text}}>{company.name}</div>
-              <div style={{color:T.muted,fontSize:10}}>QuantaFlow</div>
+              <div style={{color:T.muted,fontSize:10}}>Verixo <span style={{color:T.faint}}>by Shilacon</span></div>
             </div>
           </div>
         </div>
@@ -1295,13 +1295,13 @@ function CompanySetupWizard({onCreated, onJoinRequested}) {
         <div style={{width:52,height:52,borderRadius:12,background:T.accent,color:"#000",
           display:"flex",alignItems:"center",justifyContent:"center",
           fontWeight:900,fontSize:22,margin:"0 auto 12px"}}>Q</div>
-        <div style={{fontSize:11,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Construction Hub</div>
+        <div style={{fontSize:11,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Verixo</div>
       </div>
 
       {/* Choose mode */}
       {!mode&&<Card hi>
         <div style={{textAlign:"center",marginBottom:22}}>
-          <div style={{fontSize:20,fontWeight:800,color:T.text,marginBottom:8}}>Welcome to Construction Hub</div>
+          <div style={{fontSize:20,fontWeight:800,color:T.text,marginBottom:8}}>Welcome to Verixo</div>
           <div style={{fontSize:13,color:T.muted,lineHeight:1.6}}>
             Are you setting up a new company, or joining an existing one?
           </div>
@@ -1607,7 +1607,7 @@ function SetupWizard({companyId, companyName, displayName, onComplete, onCreateP
         <div style={{width:52,height:52,borderRadius:12,background:T.accent,color:"#000",
           display:"flex",alignItems:"center",justifyContent:"center",
           fontWeight:900,fontSize:22,margin:"0 auto 12px"}}>Q</div>
-        <div style={{fontSize:11,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Construction Hub</div>
+        <div style={{fontSize:11,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Verixo</div>
       </div>
 
       {/* Step indicators */}
@@ -3502,7 +3502,7 @@ ${EXTRACT_SCHEMA}`;
           </div>
           <Row gap={8}>
             <Btn v="pri" onClick={()=>{
-              const sub=encodeURIComponent("QuantaFlow — Purchase AI Credits");
+              const sub=encodeURIComponent("Verixo — Purchase AI Credits");
               const body=encodeURIComponent(`Hi,\n\nWe've reached our AI credit limit (${creditsExhausted.used}/${creditsExhausted.limit} used) and would like to purchase additional credits.\n\nPlease let us know the options.\n\nThanks`);
               window.open(`mailto:stuartdeannicholas@gmail.com?subject=${sub}&body=${body}`,"_self");
             }}>Purchase more credits</Btn>
@@ -7689,7 +7689,7 @@ function CreditTopupModal({companyId, onClose, pop}) {
     });
     setSubmitting(false);
     if(error){pop(error.message,"error");return;}
-    const sub=encodeURIComponent("QuantaFlow — Credit Top-Up Request");
+    const sub=encodeURIComponent("Verixo — Credit Top-Up Request");
     const body=encodeURIComponent(`Hi,\n\nI'd like to purchase the ${pack.label} (${pack.credits} AI credits for $${pack.aud} AUD).\n\nPlease send me a payment link.\n\nThanks`);
     window.open(`mailto:stuart.dean.nicholas@gmail.com?subject=${sub}&body=${body}`,"_self");
     pop(`Credit request sent — we'll email you a payment link. Your ${pack.credits} credits will be added on payment.`,"success");
@@ -7872,7 +7872,7 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
           <div style={{fontSize:11,color:T.faint,marginTop:4}}>This name shows at the top of the app and on your activity.</div>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"flex-end"}}>
-          <Btn v="red" onClick={()=>{ if(safeConfirm("Log out of QuantaFlow?")) onSignOut?.(); }}>Log out</Btn>
+          <Btn v="red" onClick={()=>{ if(safeConfirm("Log out of Verixo?")) onSignOut?.(); }}>Log out</Btn>
           <Btn v="gho" sm onClick={async()=>{
             if(!user?.email) return;
             const { error } = await supabase.auth.resetPasswordForEmail(user.email, {
@@ -8071,11 +8071,11 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
           <Row gap={8}>
             <Btn v="grn" onClick={()=>{
               const keys=["qf_projects","qf_clients","qf_rates","qf_cablib","qf_company","qf_xero","qf_templates","qf_trash","qf_ai"];
-              const dump={exportedAt:new Date().toISOString(),app:"QuantaFlow",data:{}};
+              const dump={exportedAt:new Date().toISOString(),app:"Verixo",data:{}};
               keys.forEach(k=>{try{const v=localStorage.getItem(k);if(v)dump.data[k]=JSON.parse(v);}catch{}});
               const a=document.createElement("a");
               a.href=URL.createObjectURL(new Blob([JSON.stringify(dump,null,2)],{type:"application/json"}));
-              a.download=`quantaflow-backup-${new Date().toISOString().slice(0,10)}.json`;
+              a.download=`verixo-backup-${new Date().toISOString().slice(0,10)}.json`;
               a.click();
               try{localStorage.setItem("qf_lastBackup",String(Date.now()));}catch{}
               pop("Full backup exported.");
@@ -8088,7 +8088,7 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
                 r.onload=ev=>{
                   try{
                     const dump=JSON.parse(ev.target.result);
-                    if(!dump.data) throw new Error("Not a QuantaFlow backup");
+                    if(!dump.data) throw new Error("Not a valid Verixo backup file");
                     if(!safeConfirm("Restore will REPLACE all current data with the backup. Continue?")) return;
                     Object.entries(dump.data).forEach(([k,v])=>localStorage.setItem(k,JSON.stringify(v)));
                     pop("Backup restored — reloading…");

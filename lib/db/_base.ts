@@ -1,7 +1,7 @@
 import { supabase } from "../supabase";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Construction Hub — data-access base helpers
+// Verixo — data-access base helpers
 // Components never call supabase directly; they call typed helpers in /lib/db.
 // This module centralises: session-derived identity (never trust the browser
 // for company_id), a consistent {data,error} return shape, and audit stamping.
