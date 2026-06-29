@@ -3166,7 +3166,8 @@ ${EXTRACT_SCHEMA}`;
   }
 
   async function addManual() {
-    if(!newItem.label||!newItem.qty) return pop("Label and quantity required.","error");
+    if(!newItem.label.trim()) return pop("Description is required.","error");
+    if(!parseFloat(newItem.qty)) return pop("Quantity must be greater than 0.","error");
     let tid=takeoffId;
     if(!tid){ const {data:t}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} }
     if(!tid) return pop("Could not save item — try again.","error");
@@ -3471,7 +3472,8 @@ ${EXTRACT_SCHEMA}`;
       {items.length>0&&<Btn v="grn" onClick={pushToEstimate}>→ Push {items.length} items to Estimate</Btn>}
       {pdfMeta&&<Btn v="blu" onClick={()=>openMeasure(currentPage)}>📐 Measure p{currentPage+1}</Btn>}
       <Btn v="gho" onClick={addLayer}>+ Layer</Btn>
-      <Btn v="pri" onClick={openPicker}>+ Add Item</Btn>
+      <Btn v="pri" onClick={openPicker}>+ Library Item</Btn>
+      <Btn v="gho" onClick={()=>{setNewItem({type:"count",label:"",qty:1,unit:"ea",layerId:activeLayer});setShowAddItem(true);}}>+ Manual Item</Btn>
       {aiUsage&&<div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6,fontSize:11}}>
         {aiUsage.limit===-1?(
           <span style={{color:T.green}}>∞ Unlimited AI credits</span>
