@@ -3161,7 +3161,7 @@ ${EXTRACT_SCHEMA}`;
     setLayers(newLayers);
     // Persist to Supabase (create takeoff record first if none exists)
     let tid=takeoffId;
-    if(!tid){ const {data:t}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} }
+    if(!tid){ const {data:t,error:tErr}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} else { pop("Could not create takeoff: "+(tErr||"unknown error"),"error"); return; } }
     if(tid) dbPatchTakeoffMeta(proj.id,{layers:newLayers});
   }
 
@@ -3169,14 +3169,14 @@ ${EXTRACT_SCHEMA}`;
     if(!newItem.label.trim()) return pop("Description is required.","error");
     if(!parseFloat(newItem.qty)) return pop("Quantity must be greater than 0.","error");
     let tid=takeoffId;
-    if(!tid){ const {data:t}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} }
-    if(!tid) return pop("Could not save item — try again.","error");
-    const {data:saved}=await dbAddTakeoffItem(tid,{
+    if(!tid){ const {data:t,error:tErr}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} else { return pop("Could not save: "+(tErr||"unknown error"),"error"); } }
+    const {data:saved,error:iErr}=await dbAddTakeoffItem(tid,{
       layer_id:newItem.layerId!=null?String(newItem.layerId):null,
       type:newItem.type, label:newItem.label, qty:parseFloat(newItem.qty)||0,
       unit:newItem.unit, source:"manual",
     });
-    if(saved) setItems(prev=>[...prev,{...saved,layerId:newItem.layerId}]);
+    if(!saved) return pop("Could not save item: "+(iErr||"unknown error"),"error");
+    setItems(prev=>[...prev,{...saved,layerId:newItem.layerId}]);
     setNewItem({type:"area",label:"",qty:0,unit:"m²",layerId:activeLayer});
     setShowAddItem(false); pop("Item added.");
   }
@@ -3229,13 +3229,13 @@ ${EXTRACT_SCHEMA}`;
     const label=`${pickRoom.trim()} — ${c.type} ${c.config} ${c.width}mm`;
     const cab={unit:"",room:pickRoom.trim(),type:c.type,config:c.config,width:c.width};
     let tid=takeoffId;
-    if(!tid){ const {data:t}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} }
-    if(!tid) return pop("Could not save item — try again.","error");
-    const {data:saved}=await dbAddTakeoffItem(tid,{
+    if(!tid){ const {data:t,error:tErr}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} else { return pop("Could not save: "+(tErr||"unknown error"),"error"); } }
+    const {data:saved,error:iErr}=await dbAddTakeoffItem(tid,{
       layer_id:cabLayer!=null?String(cabLayer):null,
       type:"count", label, qty, unit:"ea", source:"library", cab,
     });
-    if(saved) setItems(prev=>[...prev,{...saved,layerId:cabLayer,cab}]);
+    if(!saved) return pop("Could not save item: "+(iErr||"unknown error"),"error");
+    setItems(prev=>[...prev,{...saved,layerId:cabLayer,cab}]);
     pop(`Added ${qty}× ${c.type} ${c.config} ${c.width}mm to ${pickRoom.trim()}.`);
   }
 
@@ -3288,13 +3288,13 @@ ${EXTRACT_SCHEMA}`;
     // Shared helper: ensure takeoff exists, add item, update local state
     async function persistMeasured(newItem){
       let tid=takeoffId;
-      if(!tid){ const {data:t}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} }
-      if(!tid) return pop("Could not save item — try again.","error");
-      const {data:saved}=await dbAddTakeoffItem(tid,{
+      if(!tid){ const {data:t,error:tErr}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} else { return pop("Could not save: "+(tErr||"unknown error"),"error"); } }
+      const {data:saved,error:iErr}=await dbAddTakeoffItem(tid,{
         layer_id:targetLayer!=null?String(targetLayer):null,
         type:newItem.type, label:newItem.label, qty:newItem.qty, unit:newItem.unit, source:"measured",
       });
-      if(saved) setItems(prev=>[...prev,{...saved,layerId:targetLayer}]);
+      if(!saved) return pop("Could not save item: "+(iErr||"unknown error"),"error");
+      setItems(prev=>[...prev,{...saved,layerId:targetLayer}]);
     }
 
     if(m.tool==="linear") {
