@@ -2232,6 +2232,8 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {id:"estimate", label:"③ Estimate"},
     {id:"quote",    label:"④ Quote"},
     {id:"orderlist",    label:"🧾 Order List"},
+    {id:"production",   label:"🏗️ Production"},
+    {id:"selections",   label:"🎨 Selections"},
     {id:"procurement",  label:"Procurement"},
     {id:"jobcost",      label:"Job Costs"},
     {id:"handover",     label:"Handover"},
@@ -2266,6 +2268,8 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
     {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} variations={variations} onMutate={onMutate} pop={pop}/>}
     {tab==="orderlist"    && <OrderListModule proj={proj} pop={pop}/>}
+    {tab==="production"   && <ProductionModule proj={proj} pop={pop}/>}
+    {tab==="selections"   && <SelectionsModule proj={proj} pop={pop}/>}
     {tab==="procurement"  && <ProcurementModule proj={proj} pop={pop}/>}
     {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} onMutate={onMutate} pop={pop}/>}
     {tab==="handover"  && <HandoverModule proj={proj} onMutate={onMutate} pop={pop}/>}
@@ -2700,6 +2704,20 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
     return ()=>{on=false;};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[proj.id]);
+
+  // ── Auto-load cabinet formula on mount (needed for BOM + library picker)
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const {data:u}=await supabase.auth.getUser();
+        const {data:prof}=await supabase.from("profiles").select("company_id").eq("id",u?.user?.id).single();
+        if(prof?.company_id){
+          const {data:f}=await supabase.from("cabinet_formula").select("*").eq("company_id",prof.company_id).maybeSingle();
+          setLibRules(f||{});
+        }
+      }catch{}
+    })();
+  },[]);
 
   // ── Fetch this month's AI usage for the usage indicator
   useEffect(()=>{
@@ -3562,7 +3580,7 @@ ${EXTRACT_SCHEMA}`;
       <Btn v="pri" onClick={openPicker}>+ Library Item</Btn>
       <Btn v="gho" onClick={()=>{setNewItem({type:"count",label:"",qty:1,unit:"ea",layerId:activeLayer,level:"Ground Floor",unitType:"",unitCount:1});setShowAddItem(true);}}>+ Manual Item</Btn>
       {items.length>0&&<div style={{display:"flex",gap:3,background:T.bg,borderRadius:6,padding:2,border:`1px solid ${T.border}`}}>
-        {[["list","≡ List"],["matrix","⊞ Matrix"],["types","⊟ Types"]].map(([m,l])=>
+        {[["list","≡ List"],["matrix","⊞ Matrix"],["types","⊟ Types"],["bom","📋 BOM"]].map(([m,l])=>
           <div key={m} onClick={()=>setViewMode(m)} style={{
             padding:"4px 10px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:600,
             background:viewMode===m?T.card:T.bg,color:viewMode===m?T.text:T.muted,
@@ -4132,6 +4150,153 @@ ${EXTRACT_SCHEMA}`;
                           })}
                           {td2(<span style={{fontFamily:T.mono,fontWeight:900,fontSize:13,color:T.accent}}>{parseFloat(cats2.reduce((s,c)=>s+displayTypes.reduce((ss,t)=>ss+getCount(c,t),0),0).toFixed(2))}</span>,{textAlign:"center"})}
                         </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>;
+              })()
+            : viewMode==="bom"
+            ? (()=>{
+                // ── Bill of Materials: aggregate material quantities from cabinet formula
+                const bomItems=items.filter(i=>i.cab?.type);
+                const noFormulaMsg = !libRules
+                  ? <Card><div style={{color:T.muted,fontSize:13,padding:12}}>Loading formula… if this persists, set up your Cabinet Formula in Rate Library.</div></Card>
+                  : bomItems.length===0
+                  ? <Card><div style={{color:T.muted,fontSize:13,padding:12}}>No cabinet library items in this takeoff. Add items using the Library Picker to generate a BOM.</div></Card>
+                  : null;
+                if(noFormulaMsg) return noFormulaMsg;
+
+                // Compute quantities per item
+                const hingesPerDoor=libRules.hinges_per_door??2;
+                const byScope={}; // jcat → {unitType → {carcassM2,frontM2,hinges,drawers,count}}
+                const allUnitTypes=new Set();
+                bomItems.forEach(item=>{
+                  const {doors,drawers}=parseCabConfig(item.cab.config||"");
+                  const priced=priceCabinet({type:item.cab.type,width:item.cab.width||600,doors,drawers},libRules,{});
+                  const qty=item.qty||1;
+                  const ut=itemUnitType(item)||"(unassigned)";
+                  const jcat=joineryCategory(item);
+                  allUnitTypes.add(ut);
+                  if(!byScope[jcat]) byScope[jcat]={};
+                  if(!byScope[jcat][ut]) byScope[jcat][ut]={carcassM2:0,frontM2:0,hinges:0,drawers:0,count:0};
+                  byScope[jcat][ut].carcassM2 += (priced.carcassM2||0)*qty;
+                  byScope[jcat][ut].frontM2    += (priced.frontM2||0)*qty;
+                  byScope[jcat][ut].hinges     += doors*hingesPerDoor*qty;
+                  byScope[jcat][ut].drawers    += drawers*qty;
+                  byScope[jcat][ut].count      += qty;
+                });
+                const unitTypeCols=UNIT_TYPES.filter(t=>allUnitTypes.has(t))
+                  .concat([...allUnitTypes].filter(t=>!UNIT_TYPES.includes(t)));
+                const jcatDisplay=["Kitchens","Laundry","Robes & WIR","Linen & Storage","Vanity Units","Island Units",
+                  "Benchtops","Splashbacks","Panels & Fillers","Base Cabinets","Wall Cabinets","Tall Cabinets","Other"]
+                  .filter(c=>byScope[c]).concat(Object.keys(byScope).filter(c=>!["Kitchens","Laundry","Robes & WIR","Linen & Storage","Vanity Units","Island Units","Benchtops","Splashbacks","Panels & Fillers","Base Cabinets","Wall Cabinets","Tall Cabinets","Other"].includes(c)));
+
+                // grand totals
+                const grand={carcassM2:0,frontM2:0,hinges:0,drawers:0,count:0};
+                const grandByUT={};
+                unitTypeCols.forEach(ut=>{ grandByUT[ut]={carcassM2:0,frontM2:0,hinges:0,drawers:0,count:0}; });
+                Object.values(byScope).forEach(utMap=>{
+                  Object.entries(utMap).forEach(([ut,d])=>{
+                    grand.carcassM2+=d.carcassM2; grand.frontM2+=d.frontM2; grand.hinges+=d.hinges; grand.drawers+=d.drawers; grand.count+=d.count;
+                    if(grandByUT[ut]){ grandByUT[ut].carcassM2+=d.carcassM2; grandByUT[ut].frontM2+=d.frontM2; grandByUT[ut].hinges+=d.hinges; grandByUT[ut].drawers+=d.drawers; grandByUT[ut].count+=d.count; }
+                  });
+                });
+
+                const fmtQ=(n,dec=2)=>parseFloat(n.toFixed(dec))||"—";
+                const thB=(c,s={},k)=><th key={k} style={{padding:"7px 10px",fontSize:10,fontWeight:700,color:T.faint,textTransform:"uppercase",letterSpacing:"0.05em",background:T.bg,...s}}>{c}</th>;
+                const tdB=(c,s={},k)=><td key={k} style={{padding:"6px 10px",fontSize:12,...s}}>{c}</td>;
+                const MAT_ROWS=[
+                  {key:"carcassM2",label:"Carcass Board",unit:"m²",dec:2,color:"#f59e0b"},
+                  {key:"frontM2",  label:"Door/Drawer Fronts",unit:"m²",dec:2,color:"#7c3aed"},
+                  {key:"hinges",   label:"Door Hinges",unit:"ea",dec:0,color:"#3b82f6"},
+                  {key:"drawers",  label:"Drawer Runners",unit:"ea",dec:0,color:"#06b6d4"},
+                  {key:"count",    label:"Cabinets",unit:"ea",dec:0,color:"#22c55e"},
+                ];
+
+                return <Card sx={{padding:0,overflow:"hidden"}}>
+                  <div style={{padding:"11px 16px",borderBottom:`1px solid ${T.border}`,
+                    display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                    <div>
+                      <span style={{fontWeight:700,fontSize:13}}>Bill of Materials</span>
+                      <span style={{color:T.faint,fontSize:11,marginLeft:8}}>{bomItems.length} cabinet items · {unitTypeCols.length} unit type{unitTypeCols.length!==1?"s":""} · {jcatDisplay.length} joinery scope{jcatDisplay.length!==1?"s":""}</span>
+                    </div>
+                    <Btn sm v="grn" onClick={()=>setShowPushModal(true)}>→ Push to Estimate</Btn>
+                  </div>
+
+                  {/* ── Grand summary strip ─ */}
+                  <div style={{padding:"10px 16px",borderBottom:`1px solid ${T.border}`,background:T.bg,display:"flex",gap:24,flexWrap:"wrap"}}>
+                    {MAT_ROWS.map(mr=>(
+                      <div key={mr.key} style={{display:"flex",flexDirection:"column",alignItems:"flex-start"}}>
+                        <span style={{fontSize:10,color:T.faint,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>{mr.label}</span>
+                        <span style={{fontFamily:T.mono,fontWeight:800,fontSize:16,color:mr.color}}>
+                          {fmtQ(grand[mr.key],mr.dec)} <span style={{fontSize:11,fontWeight:400,color:T.muted}}>{mr.unit}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── Per scope breakdown ─ */}
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead><tr>
+                        {thB("Joinery Scope / Material",{textAlign:"left",width:"30%"})}
+                        {thB("Unit",{textAlign:"center",width:50})}
+                        {unitTypeCols.map(ut=>thB(ut,{textAlign:"center",minWidth:80},ut))}
+                        {thB("Total",{textAlign:"center",minWidth:70,color:T.text})}
+                      </tr></thead>
+                      <tbody>
+                        {jcatDisplay.map(jcat=>{
+                          const utMap=byScope[jcat];
+                          const color=JCAT_COLORS[jcat]||"#6b7280";
+                          // scope header
+                          const scopeTotal={carcassM2:0,frontM2:0,hinges:0,drawers:0,count:0};
+                          unitTypeCols.forEach(ut=>{ const d=utMap[ut]; if(d){ Object.keys(scopeTotal).forEach(k=>scopeTotal[k]+=d[k]); } });
+                          return <Fragment key={jcat}>
+                            <tr style={{background:`${color}15`}}>
+                              <td colSpan={unitTypeCols.length+3} style={{padding:"6px 10px"}}>
+                                <Row gap={7}>
+                                  <span style={{width:9,height:9,borderRadius:2,background:color,display:"inline-block",flexShrink:0}}/>
+                                  <span style={{fontWeight:800,fontSize:11,color,textTransform:"uppercase",letterSpacing:"0.06em"}}>{jcat}</span>
+                                  <span style={{color:T.faint,fontSize:11}}>({scopeTotal.count} cabs)</span>
+                                </Row>
+                              </td>
+                            </tr>
+                            {MAT_ROWS.map(mr=>{
+                              const rowTotal=unitTypeCols.reduce((s,ut)=>s+(utMap[ut]?.[mr.key]||0),0);
+                              if(rowTotal===0) return null;
+                              return <tr key={mr.key} style={{borderTop:`1px solid ${T.border}44`}}>
+                                {tdB(<span style={{paddingLeft:18,color:T.muted}}>{mr.label}</span>)}
+                                {tdB(<span style={{color:T.faint,fontStyle:"italic"}}>{mr.unit}</span>,{textAlign:"center"})}
+                                {unitTypeCols.map(ut=>{
+                                  const v=utMap[ut]?.[mr.key]||0;
+                                  return <td key={ut} style={{padding:"5px 10px",textAlign:"center",
+                                    color:v>0?color:T.faint,fontFamily:v>0?T.mono:"inherit",fontWeight:v>0?600:400,fontSize:12}}>
+                                    {v>0?fmtQ(v,mr.dec):"—"}
+                                  </td>;
+                                })}
+                                {tdB(<span style={{fontFamily:T.mono,fontWeight:700,color:T.text}}>{fmtQ(rowTotal,mr.dec)}</span>,{textAlign:"center"})}
+                              </tr>;
+                            })}
+                          </Fragment>;
+                        })}
+                        {/* Grand total rows */}
+                        <tr style={{borderTop:`2px solid ${T.border}`,background:T.bg}}>
+                          <td colSpan={unitTypeCols.length+3} style={{padding:"6px 10px",fontWeight:700,fontSize:11,color:T.text,textTransform:"uppercase",letterSpacing:"0.06em"}}>PROJECT TOTALS</td>
+                        </tr>
+                        {MAT_ROWS.map(mr=>(
+                          <tr key={`grand-${mr.key}`} style={{borderTop:`1px solid ${T.border}44`,background:`${T.bg}88`}}>
+                            {tdB(<span style={{paddingLeft:18,fontWeight:700,color:T.text}}>{mr.label}</span>)}
+                            {tdB(<span style={{color:T.faint,fontStyle:"italic"}}>{mr.unit}</span>,{textAlign:"center"})}
+                            {unitTypeCols.map(ut=>{
+                              const v=grandByUT[ut]?.[mr.key]||0;
+                              return <td key={ut} style={{padding:"6px 10px",textAlign:"center",
+                                fontFamily:T.mono,fontWeight:v>0?800:400,fontSize:12,color:v>0?mr.color:T.faint}}>
+                                {v>0?fmtQ(v,mr.dec):"—"}
+                              </td>;
+                            })}
+                            {tdB(<span style={{fontFamily:T.mono,fontWeight:900,fontSize:13,color:mr.color}}>{fmtQ(grand[mr.key],mr.dec)}</span>,{textAlign:"center"})}
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   </div>
@@ -5894,6 +6059,274 @@ function HandoverModule({proj, onMutate, pop}) {
           </div>
         </Card>
       </div>
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRODUCTION MODULE — Level × Unit Type status grid (factory → site tracking)
+// ═══════════════════════════════════════════════════════════════════════════
+const PROD_STATUSES=[
+  {key:"pending",   label:"Pending",    color:"#6b7280"},
+  {key:"cutting",   label:"Cutting",    color:"#d97706"},
+  {key:"assembled", label:"Assembled",  color:"#7c3aed"},
+  {key:"qc",        label:"QC Check",   color:"#2563eb"},
+  {key:"dispatched",label:"Dispatched", color:"#0891b2"},
+  {key:"installed", label:"Installed",  color:"#16a34a"},
+];
+function nextProdStatus(key){ const i=PROD_STATUSES.findIndex(s=>s.key===key); return PROD_STATUSES[(i+1)%PROD_STATUSES.length].key; }
+
+function ProductionModule({proj, pop}) {
+  const [status, setStatus] = useState({});    // {"TypeA|Level3": "assembled"}
+  const [notes,  setNotes]  = useState({});    // {"TypeA|Level3": "note text"}
+  const [editNote, setEditNote] = useState(null); // cell key being noted
+  const [noteVal, setNoteVal] = useState("");
+  const storeKey = `qf_prod_${proj.id}`;
+  const notesKey = `qf_prodnotes_${proj.id}`;
+
+  useEffect(()=>{
+    try{ const s=localStorage.getItem(storeKey); if(s) setStatus(JSON.parse(s)); }catch{}
+    try{ const n=localStorage.getItem(notesKey); if(n) setNotes(JSON.parse(n)); }catch{}
+  },[proj.id]);
+
+  function cycleStatus(ut,lvl){
+    const k=`${ut}|${lvl}`;
+    const next=nextProdStatus(status[k]||"pending");
+    const updated={...status,[k]:next};
+    setStatus(updated);
+    try{ localStorage.setItem(storeKey,JSON.stringify(updated)); }catch{}
+  }
+  function saveNote(k){
+    const updated={...notes,[k]:noteVal.trim()};
+    setNotes(updated);
+    try{ localStorage.setItem(notesKey,JSON.stringify(updated)); }catch{}
+    setEditNote(null); setNoteVal("");
+  }
+
+  // Build matrix axes from takeoff items synced into proj
+  const takeoffItems=proj.takeoffItems||[];
+  const allTypes=[...new Set(takeoffItems.map(i=>i.cab?.unitType).filter(Boolean))];
+  const allLevels=[...new Set(takeoffItems.map(i=>i.cab?.level||"Ground Floor"))];
+  const typeSorted=UNIT_TYPES.filter(t=>allTypes.includes(t)).concat(allTypes.filter(t=>!UNIT_TYPES.includes(t)));
+  const levelSorted=BUILDING_LEVELS.filter(l=>allLevels.includes(l)).concat(allLevels.filter(l=>!BUILDING_LEVELS.includes(l)));
+
+  // Count items per cell for the mini summary
+  const cellItems={};
+  takeoffItems.forEach(i=>{
+    const ut=i.cab?.unitType; const lvl=i.cab?.level||"Ground Floor";
+    if(!ut) return;
+    const k=`${ut}|${lvl}`;
+    cellItems[k]=(cellItems[k]||0)+(i.qty||1);
+  });
+
+  // Status summary counts
+  const statusCounts={};
+  PROD_STATUSES.forEach(s=>{ statusCounts[s.key]=0; });
+  const totalCells=typeSorted.length*levelSorted.length;
+  typeSorted.forEach(ut=>levelSorted.forEach(lvl=>{
+    const k=`${ut}|${lvl}`;
+    if(!cellItems[k]) return; // skip empty cells
+    statusCounts[status[k]||"pending"]++;
+  }));
+  const filledCells=Object.values(statusCounts).reduce((s,n)=>s+n,0);
+
+  if(takeoffItems.length===0 || typeSorted.length===0){
+    return <div>
+      <Hdr sub="Track production status for each unit type across building levels.">Production Tracking</Hdr>
+      <Card><div style={{color:T.muted,fontSize:13,padding:12}}>
+        No takeoff items with Unit Types assigned. Go to Takeoff → add items via Library Picker, select a Unit Type for each item, then return here.
+      </div></Card>
+    </div>;
+  }
+
+  return <div>
+    <Hdr sub="Click any cell to cycle its status. Right-click to add a note.">Production Tracking</Hdr>
+
+    {/* Status legend + progress summary */}
+    <Card sx={{marginBottom:14}}>
+      <Row gap={6} sx={{flexWrap:"wrap",justifyContent:"space-between",alignItems:"center"}}>
+        <Row gap={10} sx={{flexWrap:"wrap"}}>
+          {PROD_STATUSES.map(s=>(
+            <Row key={s.key} gap={5}>
+              <span style={{width:10,height:10,borderRadius:2,background:s.color,display:"inline-block",flexShrink:0}}/>
+              <span style={{fontSize:12,color:T.muted}}>{s.label}</span>
+              <span style={{fontSize:12,fontFamily:T.mono,fontWeight:700,color:s.color}}>{statusCounts[s.key]||0}</span>
+            </Row>
+          ))}
+        </Row>
+        <div style={{fontSize:11,color:T.faint}}>
+          {statusCounts["installed"]||0} of {filledCells} cells installed
+          {filledCells>0&&<span style={{marginLeft:8,color:T.green,fontWeight:700}}>
+            {Math.round(((statusCounts["installed"]||0)/filledCells)*100)}%
+          </span>}
+        </div>
+      </Row>
+      {filledCells>0&&<div style={{height:5,background:T.border,borderRadius:3,marginTop:10,overflow:"hidden"}}>
+        {PROD_STATUSES.map((s,si)=>{
+          const pct=(statusCounts[s.key]||0)/filledCells*100;
+          const left=PROD_STATUSES.slice(0,si).reduce((sum,ss)=>sum+(statusCounts[ss.key]||0)/filledCells*100,0);
+          return pct>0?<div key={s.key} style={{position:"absolute",left:`${left}%`,width:`${pct}%`,height:"100%",background:s.color,transition:"width 0.3s"}}/>:null;
+        })}
+        <div style={{position:"relative",height:"100%"}}>{PROD_STATUSES.map((s,si)=>{
+          const pct=(statusCounts[s.key]||0)/filledCells*100;
+          const left=PROD_STATUSES.slice(0,si).reduce((sum,ss)=>sum+(statusCounts[ss.key]||0)/filledCells*100,0);
+          return pct>0?<div key={s.key} style={{position:"absolute",left:`${left}%`,width:`${pct}%`,height:"100%",background:s.color}}/>:null;
+        })}</div>
+      </div>}
+    </Card>
+
+    {/* Production grid */}
+    <Card sx={{padding:0,overflow:"hidden"}}>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead><tr style={{background:T.bg}}>
+            <th style={{padding:"8px 12px",fontSize:11,fontWeight:700,color:T.faint,textAlign:"left",minWidth:130}}>Level</th>
+            {typeSorted.map(ut=>(
+              <th key={ut} style={{padding:"8px 10px",fontSize:11,fontWeight:700,color:T.text,textAlign:"center",minWidth:110}}>
+                {ut}
+              </th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {levelSorted.map(lvl=>{
+              const hasAny=typeSorted.some(ut=>cellItems[`${ut}|${lvl}`]);
+              if(!hasAny) return null;
+              return <tr key={lvl} style={{borderTop:`1px solid ${T.border}`}}>
+                <td style={{padding:"8px 12px",fontWeight:600,color:T.text,fontSize:12,background:T.bg}}>{lvl}</td>
+                {typeSorted.map(ut=>{
+                  const k=`${ut}|${lvl}`;
+                  const cnt=cellItems[k];
+                  if(!cnt) return <td key={ut} style={{padding:"8px 10px",textAlign:"center",color:T.faint,fontSize:11}}>—</td>;
+                  const st=status[k]||"pending";
+                  const stInfo=PROD_STATUSES.find(s=>s.key===st)||PROD_STATUSES[0];
+                  const note=notes[k];
+                  return <td key={ut} style={{padding:"6px 8px",textAlign:"center"}}>
+                    <div
+                      onClick={()=>cycleStatus(ut,lvl)}
+                      onContextMenu={e=>{e.preventDefault();setEditNote(k);setNoteVal(notes[k]||"");}}
+                      title={note?`Note: ${note}`:`${cnt} items — click to advance, right-click to note`}
+                      style={{cursor:"pointer",borderRadius:6,padding:"5px 8px",
+                        background:`${stInfo.color}18`,border:`1.5px solid ${stInfo.color}55`,
+                        display:"inline-flex",flexDirection:"column",alignItems:"center",gap:2,
+                        minWidth:90,transition:"all 0.15s",userSelect:"none"}}>
+                      <span style={{fontWeight:700,fontSize:11,color:stInfo.color}}>{stInfo.label}</span>
+                      <span style={{fontSize:10,color:T.faint}}>{cnt} item{cnt!==1?"s":""}</span>
+                      {note&&<span style={{fontSize:9,color:T.muted,fontStyle:"italic",maxWidth:86,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📝 {note}</span>}
+                    </div>
+                  </td>;
+                })}
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+
+    {/* Note editor popover */}
+    {editNote&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:9999,
+      display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setEditNote(null)}>
+      <div onClick={e=>e.stopPropagation()} style={{background:T.card,borderRadius:10,
+        width:360,border:`1px solid ${T.border}`,boxShadow:"0 16px 48px rgba(0,0,0,0.4)",padding:20}}>
+        <div style={{fontWeight:700,marginBottom:10}}>Note — {editNote.replace("|"," / ")}</div>
+        <textarea value={noteVal} onChange={e=>setNoteVal(e.target.value)} rows={3}
+          style={{width:"100%",borderRadius:6,border:`1px solid ${T.border}`,padding:8,
+            background:T.bg,color:T.text,fontSize:13,resize:"vertical"}}/>
+        <Row gap={8} sx={{marginTop:10}}>
+          <Btn v="pri" sm onClick={()=>saveNote(editNote)}>Save</Btn>
+          <Btn sm onClick={()=>setEditNote(null)}>Cancel</Btn>
+          {notes[editNote]&&<Btn sm v="red" onClick={()=>{saveNote(editNote);setNoteVal("");const u={...notes};delete u[editNote];setNotes(u);try{localStorage.setItem(notesKey,JSON.stringify(u));}catch{}}}>Clear</Btn>}
+        </Row>
+      </div>
+    </div>}
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SELECTIONS MODULE — per unit type material finish choices
+// ═══════════════════════════════════════════════════════════════════════════
+const SEL_FIELDS=[
+  {key:"carcass",    label:"Carcass Board",   placeholder:"e.g. Laminex Chalk 16mm HMR"},
+  {key:"fronts",     label:"Door/Drawer Fronts",placeholder:"e.g. Polytec Driftwood PVC Wrap"},
+  {key:"benchtop",   label:"Benchtop",         placeholder:"e.g. Caesarstone Pure White 20mm"},
+  {key:"handle",     label:"Handle / Hardware",placeholder:"e.g. Brushed nickel bar 128mm"},
+  {key:"kickboard",  label:"Kickboard",         placeholder:"e.g. Match carcass"},
+  {key:"notes",      label:"Notes",             placeholder:"Special instructions…"},
+];
+const SEL_SCOPES=["Kitchens","Laundry","Robes & WIR","Linen & Storage","Vanity Units","Other"];
+
+function SelectionsModule({proj, pop}) {
+  const storeKey=`qf_sel_${proj.id}`;
+  // selections[unitType][scope][fieldKey] = string
+  const [sel, setSel] = useState({});
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(()=>{
+    try{ const s=localStorage.getItem(storeKey); if(s) setSel(JSON.parse(s)); }catch{}
+  },[proj.id]);
+
+  function setField(ut,scope,field,val){
+    setSel(prev=>{
+      const n={...prev,[ut]:{...prev[ut],[scope]:{...(prev[ut]||{})[scope],[field]:val}}};
+      try{ localStorage.setItem(storeKey,JSON.stringify(n)); }catch{}
+      return n;
+    });
+    setDirty(true);
+  }
+
+  // Build unit types from takeoff items
+  const takeoffItems=proj.takeoffItems||[];
+  const usedScopes=[...new Set(takeoffItems.map(i=>joineryCategory(i)).filter(s=>SEL_SCOPES.includes(s)))];
+  const usedTypes=[...new Set(takeoffItems.map(i=>i.cab?.unitType).filter(Boolean))];
+  const typesSorted=UNIT_TYPES.filter(t=>usedTypes.includes(t)).concat(usedTypes.filter(t=>!UNIT_TYPES.includes(t)));
+  const scopesSorted=SEL_SCOPES.filter(s=>usedScopes.includes(s));
+
+  if(typesSorted.length===0){
+    return <div>
+      <Hdr sub="Record finish selections per unit type and joinery scope.">Selections</Hdr>
+      <Card><div style={{color:T.muted,fontSize:13,padding:12}}>
+        No unit types in this takeoff yet. Add items in the Takeoff tab with Unit Types assigned, then selections will appear here automatically.
+      </div></Card>
+    </div>;
+  }
+
+  return <div>
+    <Hdr sub="Record material and finish selections per unit type. Selections are saved to this browser automatically.">Selections</Hdr>
+    {dirty&&<div style={{marginBottom:12,padding:"8px 14px",borderRadius:6,
+      background:`${T.yellow}18`,border:`1px solid ${T.yellow}44`,fontSize:12,color:T.yellow}}>
+      Changes saved automatically to this browser.
+    </div>}
+    {typesSorted.map(ut=>(
+      <Card key={ut} sx={{marginBottom:16}}>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:12,color:T.accent}}>{ut}</div>
+        {(scopesSorted.length>0?scopesSorted:["General"]).map(scope=>(
+          <div key={scope} style={{marginBottom:14}}>
+            <div style={{fontWeight:600,fontSize:11,color:JCAT_COLORS[scope]||T.faint,
+              textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8,
+              paddingBottom:4,borderBottom:`1px solid ${T.border}`}}>
+              {scope}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:8}}>
+              {SEL_FIELDS.map(f=>(
+                <div key={f.key}>
+                  <div style={{fontSize:11,color:T.faint,marginBottom:3}}>{f.label}</div>
+                  <input
+                    value={sel[ut]?.[scope]?.[f.key]||""}
+                    onChange={e=>setField(ut,scope,f.key,e.target.value)}
+                    placeholder={f.placeholder}
+                    style={{width:"100%",padding:"6px 9px",borderRadius:5,
+                      border:`1px solid ${T.border}`,background:T.bg,
+                      color:T.text,fontSize:12,outline:"none",
+                      boxSizing:"border-box"}}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </Card>
+    ))}
+    <div style={{fontSize:11,color:T.faint,marginTop:4}}>
+      Tip: selections are stored in this browser. Export to PDF via the Quote tab once complete.
     </div>
   </div>;
 }
