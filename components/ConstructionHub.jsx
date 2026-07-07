@@ -3949,8 +3949,8 @@ ${EXTRACT_SCHEMA}`;
                   bycat[jcat].push(it);
                 });
                 const cats=catOrder.filter(c=>bycat[c]);
-                const td=(content,style={})=><td style={{padding:"6px 10px",fontSize:12,...style}}>{content}</td>;
-                const th=(content,style={})=><th style={{padding:"6px 10px",fontSize:11,fontWeight:600,color:T.faint,...style}}>{content}</th>;
+                const td=(content,style={},key=undefined)=><td key={key} style={{padding:"6px 10px",fontSize:12,...style}}>{content}</td>;
+                const th=(content,style={},key=undefined)=><th key={key} style={{padding:"6px 10px",fontSize:11,fontWeight:600,color:T.faint,...style}}>{content}</th>;
                 return <Card sx={{padding:0,overflow:"hidden"}}>
                   <div style={{padding:"11px 16px",borderBottom:`1px solid ${T.border}`,
                     display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
@@ -3964,7 +3964,7 @@ ${EXTRACT_SCHEMA}`;
                     <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                       <thead><tr style={{background:T.bg}}>
                         {th("Joinery Type / Item",{width:"40%",textAlign:"left"})}
-                        {allLevels.map(l=>th(l,{textAlign:"center",minWidth:90,key:l}))}
+                        {allLevels.map(l=>th(l,{textAlign:"center",minWidth:90},l))}
                         {th("Total",{textAlign:"center",minWidth:60,color:T.text})}
                         {th("Unit",{textAlign:"left",minWidth:50})}
                       </tr></thead>
