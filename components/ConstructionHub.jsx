@@ -3974,7 +3974,7 @@ ${EXTRACT_SCHEMA}`;
                           const color=JCAT_COLORS[cat]||"#6b7280";
                           // Subtotals per level for this category (may mix units — show separately)
                           const unitGroups=[...new Set(catItems.map(i=>i.unit||"ea"))];
-                          return <React.Fragment key={cat}>
+                          return <Fragment key={cat}>
                             {/* Category header row */}
                             <tr style={{background:`${color}18`}}>
                               <td colSpan={allLevels.length+3} style={{padding:"7px 10px"}}>
@@ -4018,7 +4018,7 @@ ${EXTRACT_SCHEMA}`;
                                 {td(<span style={{color,fontWeight:700,fontSize:11}}>{unit}</span>)}
                               </tr>;
                             })}
-                          </React.Fragment>;
+                          </Fragment>;
                         })}
                         {/* Grand total row */}
                         <tr style={{borderTop:`2px solid ${T.border}`,background:T.bg}}>
