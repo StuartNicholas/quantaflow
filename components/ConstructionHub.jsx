@@ -2669,11 +2669,13 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
   const [loadingTakeoff, setLoadingTakeoff] = useState(true);
   const [creditsExhausted, setCreditsExhausted] = useState(null); // {used,limit}
   const [aiUsage, setAiUsage] = useState(null); // {used,limit} for this month
-  const [viewMode, setViewMode] = useState("list"); // "list" | "matrix" | "types"
+  const [viewMode, setViewMode] = useState("list"); // "list" | "matrix" | "types" | "bom"
   const [pickLevel, setPickLevel] = useState("Ground Floor");
   const [pickUnitType, setPickUnitType] = useState("");
   const [showPushModal, setShowPushModal] = useState(false);
   const [pushSel, setPushSel] = useState("detailed");
+  const [expandedItems, setExpandedItems] = useState(new Set()); // items with open finishes breakdown
+  const [schemeData, setSchemeData] = useState({});             // loaded from qf_schemes_*
 
   const log = (msg, type="info") => setALog(l=>[...l,{msg,type,ts:new Date().toLocaleTimeString()}]);
 
@@ -2704,6 +2706,28 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
     return ()=>{on=false;};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[proj.id]);
+
+  // ── Load scheme data from localStorage on mount (for finishes display in list)
+  useEffect(()=>{
+    try{ const s=localStorage.getItem(`qf_schemes_${proj.id}`); if(s) setSchemeData(JSON.parse(s)); }catch{}
+  },[proj.id]);
+
+  // ── Toggle finishes breakdown expansion for a list item
+  function toggleItemExpand(id){
+    setExpandedItems(prev=>{ const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
+  }
+
+  // ── Resolve finish specs for an item (AI-set finishes → scheme lookup → null)
+  function resolveItemFinishes(item){
+    if(item.cab?.finishes && Object.values(item.cab.finishes).some(v=>v)) return item.cab.finishes;
+    const schemeName=item.cab?.scheme;
+    if(!schemeName||!(schemeData?.schemes?.length)) return null;
+    const scheme=schemeData.schemes.find(s=>s.name===schemeName);
+    if(!scheme) return null;
+    const room=item.cab?.room;
+    const roomKey=room?SCHEME_ROOMS.find(r=>r.toLowerCase().startsWith(room.toLowerCase().split(" ")[0])):null;
+    return (roomKey&&scheme.rooms?.[roomKey])||Object.values(scheme.rooms||{})[0]||null;
+  }
 
   // ── Auto-load cabinet formula on mount (needed for BOM + library picker)
   useEffect(()=>{
@@ -2929,7 +2953,7 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
         const prompt=`Score each drawing sheet for construction takeoff. Active trades: ${activeTrades.map(t=>t.label).join(", ")}.
 Prioritise: ${scanFocusDesc}.
 Score 3=highly relevant schedule/plan for selected trades, 2=useful general dims/annotations, 1=low value unrelated services, 0=title/photo/blank.
-${cabinetryActive?"IMPORTANT: score=3 for any kitchen plan/elevation, bathroom elevation, wardrobe detail, cabinet schedule, ensuite detail, joinery millwork sheet.":""}
+${cabinetryActive?"IMPORTANT: score=3 for any kitchen plan/elevation, bathroom elevation, wardrobe detail, cabinet schedule, ensuite detail, joinery millwork sheet, finishes schedule, material schedule, colour schedule, finish legend.":""}
 ${joineryActive?"IMPORTANT: score=3 for window schedule, door schedule, sliding door schedule, joinery schedule pages.":""}
 Pages: ${idxs.map(x=>x+1).join(",")}. JSON only: {"pages":[{"page":1,"score":3,"type":"floor plan with kitchen layout"}]}`;
         try {
@@ -2951,7 +2975,7 @@ Pages: ${idxs.map(x=>x+1).join(",")}. JSON only: {"pages":[{"page":1,"score":3,"
       if(skipped.length) log(`Skipped: pages ${skipped.join(", ")}`);
 
       // ── PHASE 2: extract at 175dpi, 4 per batch
-      const EXTRACT_SCHEMA=`{"buildingType":"","confidence":"high/medium/low","scale":"","storeys":0,"floorArea":0,"wallLength":0,"roofArea":0,"windows":0,"doors":0,"slidingDoors":0,"windowSchedule":[{"ref":"","size":"","type":"","spec":"","qty":0,"headHeight":"","sillHeight":""}],"slidingDoorSchedule":[{"ref":"","size":"","type":"","panels":0,"spec":"","qty":0}],"doorSchedule":[{"ref":"","size":"","frameType":"","headHeight":"","frl":"","hardware":"","spec":"","qty":0}],"cabinetryUnits":[{"unit":"e.g. Unit 1 or Apartment 1 or (blank if single dwelling)","rooms":[{"room":"e.g. Kitchen / Butlers / Laundry / Bathroom / Ensuite / Master WIR / Bed 2 Robe / TV Unit","cabinets":[{"type":"Base/Overhead/Tall/Panel/Hardware/Appliance","config":"e.g. 2 Door, 3 Drawer, 1 Door, End Panel, Kickboard, Wall Panel, Walk Brackets","width":0,"qty":0,"notes":""}],"benchtop":{"material":"e.g. stone/laminate/20mm reconstituted stone","linearMetres":0},"splashback":{"material":"","area":0}}]}],"rooms":[{"name":"","area":0}],"notes":"","dims":[]}`;
+      const EXTRACT_SCHEMA=`{"buildingType":"","confidence":"high/medium/low","scale":"","storeys":0,"floorArea":0,"wallLength":0,"roofArea":0,"windows":0,"doors":0,"slidingDoors":0,"windowSchedule":[{"ref":"","size":"","type":"","spec":"","qty":0,"headHeight":"","sillHeight":""}],"slidingDoorSchedule":[{"ref":"","size":"","type":"","panels":0,"spec":"","qty":0}],"doorSchedule":[{"ref":"","size":"","frameType":"","headHeight":"","frl":"","hardware":"","spec":"","qty":0}],"finishesSchedule":[{"schemeName":"e.g. Light or Dark or Scheme A or 1","carcass":"e.g. Laminex Chalk 16mm HMR","fronts":"e.g. Polytec Driftwood PVC Wrap","benchtop":"e.g. Caesarstone Pure White 20mm","handle":"e.g. Brushed nickel bar 128mm","kickboard":"e.g. match carcass","notes":""}],"roomSchemes":{"Kitchen":"scheme name","Bathroom":"scheme name"},"cabinetryUnits":[{"unit":"e.g. Unit 1 or Apartment 1 or (blank if single dwelling)","rooms":[{"room":"e.g. Kitchen / Butlers / Laundry / Bathroom / Ensuite / Master WIR / Bed 2 Robe / TV Unit","scheme":"scheme name if room is annotated","cabinets":[{"type":"Base/Overhead/Tall/Panel/Hardware/Appliance","config":"e.g. 2 Door, 3 Drawer, 1 Door, End Panel, Kickboard, Wall Panel, Walk Brackets","width":0,"qty":0,"notes":"","finish":"scheme name or finish code if annotated on this specific cabinet"}],"benchtop":{"material":"e.g. stone/laminate/20mm reconstituted stone","linearMetres":0},"splashback":{"material":"","area":0}}]}],"rooms":[{"name":"","area":0}],"notes":"","dims":[]}`;
 
       const EXTRACT=`You are an expert cabinetmaker and quantity surveyor reading architectural CAD drawings to produce a CABINET-BY-CABINET joinery takeoff.
 Active trades: ${activeTrades.map(t=>t.label).join(", ")}.
@@ -2978,6 +3002,12 @@ READ KITCHEN AND BATHROOM ELEVATIONS CAREFULLY — each cabinet face in an eleva
 STANDARD CABINET SIZES (use to sanity-check widths): Base cabinets H720×D560, Overhead cabinets H720×D320, Tall cabinets H2400×D560. Widths come in 50mm increments from 300 to 1200mm — snap estimated widths to the nearest 50mm.
 
 MULTI-UNIT REPLICATION: If the drawings show one TYPICAL apartment layout that repeats (e.g. "Units 1-4 similar" or floor plans showing identical apartments), still output a SEPARATE unit entry for each actual unit, replicating the cabinet list. If you can only identify the typical layout but not the unit count, use unit name "Typical Unit" and note the repetition in notes.
+
+FINISHES SCHEDULE — SEARCH EVERY PAGE: Look for any material schedule, colour schedule, finish schedule, or legend/key table on ANY page. These commonly appear as a table or reference box with columns like: Scheme name (e.g. "Scheme A", "Light", "Dark", "Option 1", or a number/letter code) | Carcass Board | Door/Drawer Fronts | Benchtop/Stone | Handle/Hardware | Kickboard. Extract EVERY scheme you find into "finishesSchedule". If materials are noted globally (not split by scheme), create one scheme entry named "Project Finishes".
+
+SCHEME ROOM ANNOTATIONS: Look for room annotations on floor plans that reference a colour scheme or finish option (e.g. hatching, "SCH A", "Option 2", "Dark Kit" text on the plan, or a colour-coded room legend). Capture these in "roomSchemes" as {"Kitchen":"Light","Bathroom":"Dark"}. Leave "roomSchemes" empty if all rooms share the same scheme.
+
+CABINET FINISH TAGS: If individual cabinet elevations show finish codes, material abbreviations, or scheme letters written against specific cabinets (e.g. "A", "B", "FP", "D1 Driftwood", "SC-2"), capture in that cabinet's "finish" field. This is how multi-scheme kitchens (e.g. island in a different colour) are identified.
 
 If you genuinely cannot read individual cabinets, estimate them from the run length (e.g. a 3600mm kitchen run ≈ 6 base cabinets at 600mm).`:""}
 ${joineryActive?`JOINERY — READ EVERY SCHEDULE ROW: window ref/size/type/spec/qty, door ref/size/frame/FRL/hardware, sliding door ref/size/panels/spec`:""}
@@ -3110,6 +3140,30 @@ ${EXTRACT_SCHEMA}`;
         cabUnits.forEach(u=>log(`  ${u.unit}: ${(u.rooms||[]).map(r=>`${r.room} (${(r.cabinets||[]).length})`).join(", ")}`));
       }
 
+      // ── Auto-populate Schemes from AI-detected finishes schedule
+      if(cabinetryActive && (merged.finishesSchedule||[]).length>0){
+        try{
+          const schKey=`qf_schemes_${proj.id}`;
+          const existing=JSON.parse(localStorage.getItem(schKey)||"{}");
+          if(!(existing.schemes||[]).length){
+            const autoSchemes=(merged.finishesSchedule||[]).map((fs,i)=>({
+              id:`ai${Date.now()}${i}`,
+              name:fs.schemeName||`Scheme ${String.fromCharCode(65+i)}`,
+              rooms:Object.fromEntries(SCHEME_ROOMS.map(r=>[r,{
+                carcass:fs.carcass||"",fronts:fs.fronts||"",
+                benchtop:fs.benchtop||"",handle:fs.handle||"",
+                kickboard:fs.kickboard||"",notes:fs.notes||""
+              }]))
+            }));
+            const hasMulti=autoSchemes.length>1;
+            const hasRoomSch=Object.keys(merged.roomSchemes||{}).length>0;
+            const mode=hasMulti?(hasRoomSch?"byUnit":"byUnitType"):"single";
+            localStorage.setItem(schKey,JSON.stringify({...SCHEME_DEFAULTS,...existing,mode,schemes:autoSchemes}));
+            log(`✓ ${autoSchemes.length} colour scheme${autoSchemes.length!==1?"s":""} auto-detected: ${autoSchemes.map(s=>s.name).join(", ")}. Review in the Schemes tab.`,"success");
+          }
+        }catch{}
+      }
+
       // ── Build layers + items
       const now=Date.now();
       const newLayers=[];
@@ -3132,16 +3186,26 @@ ${EXTRACT_SCHEMA}`;
 
       // Cabinetry: ONE TAKEOFF ITEM PER CABINET LINE — exactly like the quote spreadsheet
       // Label format: "Unit 1 · Kitchen — Base 3 Drawer 900mm"
+      const aiSchemeByName=Object.fromEntries((merged.finishesSchedule||[]).map(fs=>([
+        (fs.schemeName||"").toLowerCase().trim(),
+        {carcass:fs.carcass||"",fronts:fs.fronts||"",benchtop:fs.benchtop||"",handle:fs.handle||"",kickboard:fs.kickboard||"",notes:fs.notes||""}
+      ])));
+      const aiRoomSchemes=merged.roomSchemes||{};
+      const aiDefaultScheme=(merged.finishesSchedule||[])[0]?.schemeName||null;
       let cid=now+1000;
       cabUnits.forEach(u=>{
         (u.rooms||[]).forEach(rm=>{
           (rm.cabinets||[]).forEach(c=>{
             const widthStr=c.width>0?` ${c.width}mm`:"";
+            const aiCabSchemeName=c.finish||aiRoomSchemes[rm.room]||aiDefaultScheme||null;
+            const aiCabFinishes=aiCabSchemeName?aiSchemeByName[(aiCabSchemeName||"").toLowerCase().trim()]||null:null;
             newItems.push({id:cid++,layerId:now+5,type:"count",
               label:`${u.unit} · ${rm.room} — ${c.type} ${c.config}${widthStr}`,
               qty:c.qty||1,unit:"ea",source:"ai",
               notes:c.notes||"",
-              cab:{unit:u.unit,room:rm.room,type:c.type,config:c.config,width:c.width||0}});
+              cab:{unit:u.unit,room:rm.room,type:c.type,config:c.config,width:c.width||0,
+                scheme:aiCabSchemeName||undefined,
+                finishes:aiCabFinishes||undefined}});
           });
           if((rm.benchtop?.linearMetres||0)>0)
             newItems.push({id:cid++,layerId:now+5,type:"length",
@@ -3202,6 +3266,9 @@ ${EXTRACT_SCHEMA}`;
       // Sync into proj so OrderListModule / EstimateModule can still read these fields
       onMutate(p=>({...p, takeoffLayers:newLayers, takeoffItems:syncItems, aiSummary:newAiSummary}));
       log(`✓ ${newItems.length} takeoff items created (${totalCabLines} cabinetry lines). Push to Estimate when ready.`,"success");
+
+      // Refresh scheme data in case AI auto-populated Schemes
+      try{ const s=localStorage.getItem(`qf_schemes_${proj.id}`); if(s) setSchemeData(JSON.parse(s)); }catch{}
 
     } catch(e) {
       if(e.code==="limit_reached"){
@@ -4317,34 +4384,59 @@ ${EXTRACT_SCHEMA}`;
                     {items.map(item=>{
                       const layer=layers.find(l=>l.id===item.layerId);
                       const lvl=itemLevel(item);
+                      const ut=itemUnitType(item);
                       const jcolor=JCAT_COLORS[joineryCategory(item)]||T.faint;
-                      return <tr key={item.id} style={{borderTop:`1px solid ${T.border}`}}>
-                        <td style={{padding:"8px 10px"}}>
-                          {layer&&<Row gap={5}>
-                            <span style={{width:8,height:8,borderRadius:"50%",background:layer.color,display:"inline-block"}}/>
-                            <span style={{color:T.muted,fontSize:11}}>{layer.name}</span>
-                          </Row>}
-                        </td>
-                        <td style={{padding:"8px 10px"}}>
-                          <span style={{fontSize:11,color:jcolor,fontWeight:600}}>{lvl}</span>
-                        </td>
-                        <td style={{padding:"8px 10px"}}>
-                          <Bdg color={item.type==="area"?T.yellow:item.type==="length"?T.blue:T.green} sm>{item.type}</Bdg>
-                        </td>
-                        <td style={{padding:"8px 10px",color:T.text,fontWeight:600}}>{item.label}</td>
-                        <td style={{padding:"8px 10px",fontFamily:T.mono,color:T.accent,fontWeight:700}}>{item.qty}</td>
-                        <td style={{padding:"8px 10px",color:T.muted}}>{item.unit}</td>
-                        <td style={{padding:"8px 10px"}}>
-                          <Bdg color={item.source==="ai"?T.teal:T.faint} sm>{item.source||"manual"}</Bdg>
-                        </td>
-                        <td style={{padding:"8px 10px"}}>
-                          <span style={{cursor:"pointer",color:T.red,fontSize:13}}
-                            onClick={async()=>{
-                              await dbDeleteTakeoffItem(item.id);
-                              setItems(prev=>prev.filter(x=>x.id!==item.id));
-                            }}>✕</span>
-                        </td>
-                      </tr>;
+                      const finishes=resolveItemFinishes(item);
+                      const hasFin=!!(finishes&&Object.values(finishes).some(v=>v));
+                      const expanded=expandedItems.has(item.id);
+                      const FKEYS=[{k:"carcass",l:"Carcass"},{k:"fronts",l:"Fronts"},{k:"benchtop",l:"Benchtop"},{k:"handle",l:"Handle"},{k:"kickboard",l:"Kickboard"},{k:"notes",l:"Notes"}];
+                      return <Fragment key={item.id}>
+                        <tr style={{borderTop:`1px solid ${T.border}`}}>
+                          <td style={{padding:"8px 10px"}}>
+                            {layer&&<Row gap={5}>
+                              <span style={{width:8,height:8,borderRadius:"50%",background:layer.color,display:"inline-block"}}/>
+                              <span style={{color:T.muted,fontSize:11}}>{layer.name}</span>
+                            </Row>}
+                          </td>
+                          <td style={{padding:"8px 10px"}}>
+                            <div style={{fontSize:11,color:jcolor,fontWeight:600}}>{lvl}</div>
+                            {ut&&<div style={{fontSize:10,color:T.faint,marginTop:2}}>{ut}</div>}
+                          </td>
+                          <td style={{padding:"8px 10px"}}>
+                            <Bdg color={item.type==="area"?T.yellow:item.type==="length"?T.blue:T.green} sm>{item.type}</Bdg>
+                          </td>
+                          <td style={{padding:"8px 10px",color:T.text,fontWeight:600}}>
+                            <Row gap={6} align="center">
+                              <span>{item.label}</span>
+                              {hasFin&&<span title="View finishes breakdown" onClick={()=>toggleItemExpand(item.id)}
+                                style={{cursor:"pointer",fontSize:13,opacity:expanded?1:0.55}}>🎨</span>}
+                              {item.cab?.scheme&&<span style={{fontSize:10,background:T.border,color:T.muted,padding:"1px 5px",borderRadius:4}}>{item.cab.scheme}</span>}
+                            </Row>
+                          </td>
+                          <td style={{padding:"8px 10px",fontFamily:T.mono,color:T.accent,fontWeight:700}}>{item.qty}</td>
+                          <td style={{padding:"8px 10px",color:T.muted}}>{item.unit}</td>
+                          <td style={{padding:"8px 10px"}}>
+                            <Bdg color={item.source==="ai"?T.teal:T.faint} sm>{item.source||"manual"}</Bdg>
+                          </td>
+                          <td style={{padding:"8px 10px"}}>
+                            <span style={{cursor:"pointer",color:T.red,fontSize:13}}
+                              onClick={async()=>{
+                                await dbDeleteTakeoffItem(item.id);
+                                setItems(prev=>prev.filter(x=>x.id!==item.id));
+                              }}>✕</span>
+                          </td>
+                        </tr>
+                        {expanded&&hasFin&&<tr style={{background:T.bg,borderTop:"none"}}>
+                          <td colSpan={8} style={{padding:"0 16px 10px 36px"}}>
+                            <div style={{display:"flex",flexWrap:"wrap",gap:8,paddingTop:6}}>
+                              {FKEYS.map(({k,l})=>finishes[k]?<div key={k} style={{fontSize:11,background:T.card,border:`1px solid ${T.border}`,borderRadius:6,padding:"4px 8px"}}>
+                                <span style={{color:T.faint,marginRight:4}}>{l}:</span>
+                                <span style={{color:T.text,fontWeight:600}}>{finishes[k]}</span>
+                              </div>:null)}
+                            </div>
+                          </td>
+                        </tr>}
+                      </Fragment>;
                     })}
                   </tbody>
                 </table>
@@ -6249,6 +6341,8 @@ const SCHEME_FIELDS=[
   {key:"notes",     label:"Notes",               ph:"Special instructions…"},
 ];
 const SCHEME_DEFAULTS={mode:"single",schemes:[],units:[],utSchemes:{}};
+const SC_COLORS=["#f59e0b","#3b82f6","#22c55e","#a78bfa","#ec4899","#14b8a6","#f97316","#64748b"];
+const schemeColor=(idx)=>SC_COLORS[idx%SC_COLORS.length];
 
 function SchemesModule({proj, pop}) {
   const storeKey=`qf_schemes_${proj.id}`;
@@ -6284,9 +6378,7 @@ function SchemesModule({proj, pop}) {
   const usedTypes=[...new Set(takeoffItems.map(i=>i.cab?.unitType).filter(Boolean))];
   const utSorted=UNIT_TYPES.filter(t=>usedTypes.includes(t)).concat(usedTypes.filter(t=>!UNIT_TYPES.includes(t)));
 
-  // Palette of colours for scheme chips
-  const SC_COLORS=["#f59e0b","#3b82f6","#22c55e","#a78bfa","#ec4899","#14b8a6","#f97316","#64748b"];
-  const schemeColor=(idx)=>SC_COLORS[idx%SC_COLORS.length];
+
 
   const MODE_OPTS=[
     {key:"single",     label:"Single scheme",      desc:"One set of finishes for the whole project"},
