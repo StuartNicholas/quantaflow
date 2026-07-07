@@ -453,36 +453,43 @@ const TRADES = {
 const TRADE_KEYS = Object.keys(TRADES);
 
 // ── TAKEOFF MATRIX — building levels + joinery categories ────────────────────
-const BUILDING_LEVELS = ["Ground Floor","Level 1","Level 2","Level 3","Basement","Mezzanine","Other"];
+const BUILDING_LEVELS = [
+  "Basement 4","Basement 3","Basement 2","Basement 1","Mezzanine","Ground Floor",
+  "Level 1","Level 2","Level 3","Level 4","Level 5","Level 6","Level 7","Level 8","Level 9","Level 10",
+  "Level 11","Level 12","Level 13","Level 14","Level 15","Level 16","Level 17","Level 18","Level 19","Level 20",
+  "Level 21","Level 22","Level 23","Level 24","Level 25","Level 26","Level 27","Level 28","Level 29","Level 30",
+  "Roof","Other"
+];
+const UNIT_TYPES = [
+  "Type A","Type B","Type C","Type D","Type E","Type F","Type G","Type H",
+  "Type I","Type J","Type K","Type L","Type M","Type N","Type O","Type P",
+  "Type Q","Type R","Type S","Type T","Type U","BBQ Area","Common Area","Lobby","Amenities","Other"
+];
 const JCAT_COLORS = {
-  "Base Cabinets":"#f59e0b","Wall Cabinets":"#3b82f6","Tall Cabinets":"#22c55e",
-  "Vanity Units":"#a78bfa","Island Units":"#14b8a6","Robes":"#f97316",
-  "Benchtops":"#ec4899","Splashbacks":"#06b6d4","Panels & Fillers":"#64748b","Other":"#6b7280"
+  "Kitchens":"#f59e0b","Laundry":"#3b82f6","Robes & WIR":"#22c55e",
+  "Linen & Storage":"#a78bfa","Vanity Units":"#14b8a6","Island Units":"#f97316",
+  "Benchtops":"#ec4899","Splashbacks":"#06b6d4","Panels & Fillers":"#64748b",
+  "Base Cabinets":"#eab308","Wall Cabinets":"#60a5fa","Tall Cabinets":"#4ade80","Other":"#6b7280"
 };
 function joineryCategory(item) {
   const t = item.cab?.type || "";
-  if(t.includes("Benchtop")) return "Benchtops";
-  if(t.includes("Splashback")) return "Splashbacks";
-  if(t.includes("Base")) return "Base Cabinets";
-  if(t.includes("Wall")) return "Wall Cabinets";
-  if(t.includes("Tall")||t.includes("Pantry")) return "Tall Cabinets";
-  if(t.includes("Vanity")) return "Vanity Units";
-  if(t.includes("Island")) return "Island Units";
-  if(t.includes("Robe")||t.includes("Wardrobe")) return "Robes";
-  if(t.includes("Panel")||t.includes("Filler")) return "Panels & Fillers";
   const lb = (item.label||"").toLowerCase();
-  if(lb.includes("benchtop")||lb.includes("bench top")) return "Benchtops";
-  if(lb.includes("splashback")) return "Splashbacks";
-  if(lb.includes("base cab")||lb.includes("lower cab")) return "Base Cabinets";
-  if(lb.includes("wall cab")||lb.includes("upper cab")) return "Wall Cabinets";
-  if(lb.includes("tall cab")||lb.includes("pantry")) return "Tall Cabinets";
-  if(lb.includes("vanity")) return "Vanity Units";
-  if(lb.includes("island")) return "Island Units";
-  if(lb.includes("robe")||lb.includes("wardrobe")) return "Robes";
-  if(lb.includes("panel")||lb.includes("filler")) return "Panels & Fillers";
+  if(t.includes("Benchtop")||lb.includes("benchtop")||lb.includes("bench top")) return "Benchtops";
+  if(t.includes("Splashback")||lb.includes("splashback")) return "Splashbacks";
+  if(lb.includes("kitchen")||t.includes("Kitchen")) return "Kitchens";
+  if(lb.includes("laundry")||t.includes("Laundry")) return "Laundry";
+  if(lb.includes("robe")||lb.includes("wir")||lb.includes("walk-in")||lb.includes("wardrobe")||t.includes("Robe")||t.includes("Wardrobe")) return "Robes & WIR";
+  if(lb.includes("linen")||lb.includes("pantry")||lb.includes("storage")||t.includes("Pantry")) return "Linen & Storage";
+  if(lb.includes("vanity")||t.includes("Vanity")) return "Vanity Units";
+  if(lb.includes("island")||t.includes("Island")) return "Island Units";
+  if(lb.includes("panel")||lb.includes("filler")||t.includes("Panel")||t.includes("Filler")) return "Panels & Fillers";
+  if(t.includes("Base")||lb.includes("base cab")||lb.includes("lower cab")) return "Base Cabinets";
+  if(t.includes("Wall")||lb.includes("wall cab")||lb.includes("upper cab")) return "Wall Cabinets";
+  if(t.includes("Tall")||lb.includes("tall cab")) return "Tall Cabinets";
   return "Other";
 }
 function itemLevel(item) { return item.cab?.level || "Ground Floor"; }
+function itemUnitType(item) { return item.cab?.unitType || ""; }
 
 // ── CALCULATIONS ─────────────────────────────────────────────────────────────
 function calc(p) {
@@ -2658,8 +2665,9 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
   const [loadingTakeoff, setLoadingTakeoff] = useState(true);
   const [creditsExhausted, setCreditsExhausted] = useState(null); // {used,limit}
   const [aiUsage, setAiUsage] = useState(null); // {used,limit} for this month
-  const [viewMode, setViewMode] = useState("list"); // "list" | "matrix"
+  const [viewMode, setViewMode] = useState("list"); // "list" | "matrix" | "types"
   const [pickLevel, setPickLevel] = useState("Ground Floor");
+  const [pickUnitType, setPickUnitType] = useState("");
   const [showPushModal, setShowPushModal] = useState(false);
   const [pushSel, setPushSel] = useState("detailed");
 
@@ -3210,11 +3218,11 @@ ${EXTRACT_SCHEMA}`;
       layer_id:newItem.layerId!=null?String(newItem.layerId):null,
       type:newItem.type, label:newItem.label, qty:parseFloat(newItem.qty)||0,
       unit:newItem.unit, source:"manual",
-      cab:{level:newItem.level||"Ground Floor"},
+      cab:{level:newItem.level||"Ground Floor",unitType:newItem.unitType||"",unitCount:parseInt(newItem.unitCount)||1},
     });
     if(!saved) return pop("Could not save item: "+(iErr||"unknown error"),"error");
     setItems(prev=>[...prev,{...saved,layerId:newItem.layerId}]);
-    setNewItem({type:"area",label:"",qty:0,unit:"m²",layerId:activeLayer,level:"Ground Floor"});
+    setNewItem({type:"area",label:"",qty:0,unit:"m²",layerId:activeLayer,level:"Ground Floor",unitType:"",unitCount:1});
     setShowAddItem(false); pop("Item added.");
   }
 
@@ -3264,7 +3272,7 @@ ${EXTRACT_SCHEMA}`;
     const qty=Math.max(1, parseInt(pickQty)||1);
     const cabLayer=layers.find(l=>/cabinet/i.test(l.name))?.id||activeLayer||null;
     const label=`${pickRoom.trim()} — ${c.type} ${c.config} ${c.width}mm`;
-    const cab={unit:"",room:pickRoom.trim(),type:c.type,config:c.config,width:c.width,level:pickLevel};
+    const cab={unit:"",room:pickRoom.trim(),type:c.type,config:c.config,width:c.width,level:pickLevel,unitType:pickUnitType};
     let tid=takeoffId;
     if(!tid){ const {data:t,error:tErr}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} else { return pop("Could not save: "+(tErr||"unknown error"),"error"); } }
     const {data:saved,error:iErr}=await dbAddTakeoffItem(tid,{
@@ -3552,9 +3560,9 @@ ${EXTRACT_SCHEMA}`;
       {pdfMeta&&<Btn v="blu" onClick={()=>openMeasure(currentPage)}>📐 Measure p{currentPage+1}</Btn>}
       <Btn v="gho" onClick={addLayer}>+ Layer</Btn>
       <Btn v="pri" onClick={openPicker}>+ Library Item</Btn>
-      <Btn v="gho" onClick={()=>{setNewItem({type:"count",label:"",qty:1,unit:"ea",layerId:activeLayer,level:"Ground Floor"});setShowAddItem(true);}}>+ Manual Item</Btn>
+      <Btn v="gho" onClick={()=>{setNewItem({type:"count",label:"",qty:1,unit:"ea",layerId:activeLayer,level:"Ground Floor",unitType:"",unitCount:1});setShowAddItem(true);}}>+ Manual Item</Btn>
       {items.length>0&&<div style={{display:"flex",gap:3,background:T.bg,borderRadius:6,padding:2,border:`1px solid ${T.border}`}}>
-        {[["list","≡ List"],["matrix","⊞ Matrix"]].map(([m,l])=>
+        {[["list","≡ List"],["matrix","⊞ Matrix"],["types","⊟ Types"]].map(([m,l])=>
           <div key={m} onClick={()=>setViewMode(m)} style={{
             padding:"4px 10px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:600,
             background:viewMode===m?T.card:T.bg,color:viewMode===m?T.text:T.muted,
@@ -3857,6 +3865,8 @@ ${EXTRACT_SCHEMA}`;
                   <Inp label="Room" value={pickRoom} onChange={setPickRoom} placeholder="e.g. Kitchen" sx={{width:140,marginBottom:0}}/>
                   <Sel label="Level" value={pickLevel} onChange={setPickLevel}
                     options={BUILDING_LEVELS.map(l=>({value:l,label:l}))} sx={{width:140,marginBottom:0}}/>
+                  <Sel label="Unit Type" value={pickUnitType} onChange={setPickUnitType}
+                    options={[{value:"",label:"— None —"},...UNIT_TYPES.map(u=>({value:u,label:u}))]} sx={{width:130,marginBottom:0}}/>
                   <Inp label="Qty" value={pickQty} onChange={setPickQty} type="number" mono sx={{width:70,marginBottom:0}}/>
                   <div style={{flex:1,minWidth:180}}>
                     <div style={{fontSize:11,color:T.faint,marginBottom:4}}>Search library</div>
@@ -3905,6 +3915,12 @@ ${EXTRACT_SCHEMA}`;
             <Sel label="Building Level" value={newItem.level||"Ground Floor"}
               onChange={v=>setNewItem(x=>({...x,level:v}))}
               options={BUILDING_LEVELS.map(l=>({value:l,label:l}))}/>
+            <Sel label="Unit Type" value={newItem.unitType||""}
+              onChange={v=>setNewItem(x=>({...x,unitType:v}))}
+              options={[{value:"",label:"— None —"},...UNIT_TYPES.map(u=>({value:u,label:u}))]}/>
+            <Inp label="Unit Count" value={newItem.unitCount||1}
+              onChange={v=>setNewItem(x=>({...x,unitCount:v}))} type="number" mono
+              sx={{width:90}}/>
             <Sel label="Layer" value={newItem.layerId||""}
               onChange={v=>setNewItem(x=>({...x,layerId:parseInt(v)||null}))}
               options={[{value:"",label:"No layer"},...layers.map(l=>({value:l.id,label:l.name}))]}/>
@@ -3938,10 +3954,9 @@ ${EXTRACT_SCHEMA}`;
                 // Build pivot: joinery category → items → levels
                 const allLevels=[...new Set(items.map(i=>itemLevel(i)))];
                 // Sort levels in canonical order
-                const levelOrder=["Ground Floor","Basement","Mezzanine","Level 1","Level 2","Level 3","Other"];
-                allLevels.sort((a,b)=>{const ai=levelOrder.indexOf(a),bi=levelOrder.indexOf(b);return(ai<0?99:ai)-(bi<0?99:bi);});
+                allLevels.sort((a,b)=>{const ai=BUILDING_LEVELS.indexOf(a),bi=BUILDING_LEVELS.indexOf(b);return(ai<0?99:ai)-(bi<0?99:bi);});
                 // Group by joinery category
-                const catOrder=["Base Cabinets","Wall Cabinets","Tall Cabinets","Vanity Units","Island Units","Robes","Benchtops","Splashbacks","Panels & Fillers","Other"];
+                const catOrder=["Kitchens","Laundry","Robes & WIR","Linen & Storage","Vanity Units","Island Units","Benchtops","Splashbacks","Panels & Fillers","Base Cabinets","Wall Cabinets","Tall Cabinets","Other"];
                 const bycat={};
                 items.forEach(it=>{
                   const jcat=joineryCategory(it);
@@ -4046,6 +4061,80 @@ ${EXTRACT_SCHEMA}`;
                       ))}
                     </div>;
                   })()}
+                </Card>;
+              })()
+            : viewMode==="types"
+            ? (()=>{
+                // Unit Type × Joinery Category matrix (Box Matrix style)
+                const allTypes=[...new Set(items.map(i=>itemUnitType(i)).filter(Boolean))];
+                const typeSorted=UNIT_TYPES.filter(t=>allTypes.includes(t)).concat(allTypes.filter(t=>!UNIT_TYPES.includes(t)));
+                const hasNoType=items.some(i=>!itemUnitType(i));
+                const displayTypes=[...typeSorted,...(hasNoType?["— Unassigned —"]:[])];
+                const jcatOrder2=["Kitchens","Laundry","Robes & WIR","Linen & Storage","Vanity Units","Island Units","Benchtops","Splashbacks","Panels & Fillers","Base Cabinets","Wall Cabinets","Tall Cabinets","Other"];
+                const bycat2={};
+                items.forEach(it=>{
+                  const jcat=joineryCategory(it);
+                  if(!bycat2[jcat]) bycat2[jcat]=[];
+                  bycat2[jcat].push(it);
+                });
+                const cats2=jcatOrder2.filter(c=>bycat2[c]).concat(Object.keys(bycat2).filter(c=>!jcatOrder2.includes(c)));
+                const td2=(content,style={},key=undefined)=><td key={key} style={{padding:"5px 8px",fontSize:11,...style}}>{content}</td>;
+                const th2=(content,style={},key=undefined)=><th key={key} style={{padding:"5px 8px",fontSize:10,fontWeight:700,color:T.faint,letterSpacing:"0.04em",...style}}>{content}</th>;
+                const getCount=(cat,unitType)=>{
+                  const its=bycat2[cat]||[];
+                  if(unitType==="— Unassigned —") return its.filter(i=>!itemUnitType(i)).reduce((s,i)=>s+(i.qty||0),0);
+                  return its.filter(i=>itemUnitType(i)===unitType).reduce((s,i)=>s+(i.qty||0),0);
+                };
+                return <Card sx={{padding:0,overflow:"hidden"}}>
+                  <div style={{padding:"11px 16px",borderBottom:`1px solid ${T.border}`,
+                    display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                    <div>
+                      <span style={{fontWeight:700,fontSize:13}}>Unit Type Matrix</span>
+                      <span style={{color:T.faint,fontSize:11,marginLeft:8}}>{items.length} items · {displayTypes.length} unit type{displayTypes.length!==1?"s":""}· {cats2.length} joinery scope{cats2.length!==1?"s":""}</span>
+                    </div>
+                    <Btn sm v="grn" onClick={()=>setShowPushModal(true)}>→ Push to Estimate</Btn>
+                  </div>
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                      <thead><tr style={{background:T.bg}}>
+                        {th2("Joinery Scope",{width:"35%",textAlign:"left",fontSize:11,color:T.text})}
+                        {displayTypes.map(t=>th2(t,{textAlign:"center",minWidth:80,color:T.text},t))}
+                        {th2("Total",{textAlign:"center",minWidth:60,color:T.text})}
+                      </tr></thead>
+                      <tbody>
+                        {cats2.map(cat=>{
+                          const color=JCAT_COLORS[cat]||"#6b7280";
+                          const rowTotal=displayTypes.reduce((s,t)=>s+getCount(cat,t),0);
+                          if(rowTotal===0) return null;
+                          const units=[...new Set((bycat2[cat]||[]).map(i=>i.unit||"ea"))];
+                          return <tr key={cat} style={{borderTop:`1px solid ${T.border}55`}}>
+                            {td2(<Row gap={6}>
+                              <span style={{width:9,height:9,borderRadius:2,background:color,display:"inline-block",flexShrink:0,marginTop:1}}/>
+                              <span style={{fontWeight:700,color,fontSize:11}}>{cat}</span>
+                              {units.length===1&&<span style={{color:T.faint,fontSize:10}}>({units[0]})</span>}
+                            </Row>)}
+                            {displayTypes.map(t=>{
+                              const n=getCount(cat,t);
+                              return <td key={t} style={{padding:"5px 8px",textAlign:"center",
+                                background:n>0?`${color}12`:"transparent",
+                                color:n>0?color:T.faint,fontFamily:T.mono,fontWeight:n>0?700:400,fontSize:12}}>
+                                {n>0?parseFloat(n.toFixed(2)):"—"}
+                              </td>;
+                            })}
+                            {td2(<span style={{fontFamily:T.mono,fontWeight:800,color:T.accent}}>{parseFloat(rowTotal.toFixed(2))}</span>,{textAlign:"center"})}
+                          </tr>;
+                        })}
+                        <tr style={{borderTop:`2px solid ${T.border}`,background:T.bg}}>
+                          {td2(<span style={{fontWeight:800,color:T.text,fontSize:11}}>TOTAL</span>)}
+                          {displayTypes.map(t=>{
+                            const col=cats2.reduce((s,c)=>s+getCount(c,t),0);
+                            return <td key={t} style={{padding:"5px 8px",textAlign:"center",fontFamily:T.mono,fontWeight:800,fontSize:12,color:T.accent}}>{col>0?parseFloat(col.toFixed(2)):"—"}</td>;
+                          })}
+                          {td2(<span style={{fontFamily:T.mono,fontWeight:900,fontSize:13,color:T.accent}}>{parseFloat(cats2.reduce((s,c)=>s+displayTypes.reduce((ss,t)=>ss+getCount(c,t),0),0).toFixed(2))}</span>,{textAlign:"center"})}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
                 </Card>;
               })()
             : <Card sx={{padding:0,overflow:"hidden"}}>
@@ -4334,8 +4423,8 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
   // Build grouping based on estView for the internal estimate table
   function buildEstGroups() {
     const all = proj.lineItems||[];
-    const levelOrder=["Ground Floor","Basement","Mezzanine","Level 1","Level 2","Level 3","Other"];
-    const jcatOrder=["Base Cabinets","Wall Cabinets","Tall Cabinets","Vanity Units","Island Units","Robes","Benchtops","Splashbacks","Panels & Fillers","Other"];
+    const levelOrder=BUILDING_LEVELS;
+    const jcatOrder=["Kitchens","Laundry","Robes & WIR","Linen & Storage","Vanity Units","Island Units","Benchtops","Splashbacks","Panels & Fillers","Base Cabinets","Wall Cabinets","Tall Cabinets","Other"];
     if(estView==="joinery") {
       const g={};
       all.forEach(li=>{const jc=joineryCategory(li);if(!g[jc])g[jc]=[];g[jc].push(li);});
@@ -4669,8 +4758,8 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
 
     {(()=>{
       const lineAmt=li=>(li.qty||0)*(li.rate||0)*(1+((li.margin_pct??marginPct??0)/100));
-      const levelOrder=["Ground Floor","Basement","Mezzanine","Level 1","Level 2","Level 3","Other"];
-      const jcatOrder=["Base Cabinets","Wall Cabinets","Tall Cabinets","Vanity Units","Island Units","Robes","Benchtops","Splashbacks","Panels & Fillers","Other"];
+      const levelOrder=BUILDING_LEVELS;
+      const jcatOrder=["Kitchens","Laundry","Robes & WIR","Linen & Storage","Vanity Units","Island Units","Benchtops","Splashbacks","Panels & Fillers","Base Cabinets","Wall Cabinets","Tall Cabinets","Other"];
       const UNIT_LABELS={"ea":"Supply & Install","lm":"Lineal Metres","m²":"Square Metres","m³":"Cubic Metres","set":"Lump Sum"};
       const hdrStyle={fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
         textTransform:"uppercase",letterSpacing:"0.05em",color:"#b45309",
@@ -4690,18 +4779,51 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
         const ord=jcatOrder.filter(c=>g[c]).concat(Object.keys(g).filter(c=>!jcatOrder.includes(c)));
         sections=ord.map(c=>({key:c, hdr:c, mode:"summary", rows:[{desc:c, qty:g[c].count, unit:"items", total:g[c].total}]}));
       } else if(quoteView==="unit") {
-        // Summary: one row per unit type, total only
+        // Murcia-style: group by apartment unit type × level range, one summary row per group
+        // e.g. "Unit Type A — Level 3-15 (Total 10) $162,529"
         const g={};
-        (items||[]).forEach(li=>{const u=li.unit||"ea";if(!g[u])g[u]={total:0,qty:0};g[u].total+=lineAmt(li);g[u].qty+=li.qty||0;});
-        sections=Object.entries(g).map(([u,d])=>({
-          key:u, hdr:UNIT_LABELS[u]||u, mode:"summary",
-          rows:[{desc:UNIT_LABELS[u]?`${UNIT_LABELS[u]} (${u})`:u, qty:parseFloat(d.qty.toFixed(2)), unit:u, total:d.total}]
-        }));
+        (items||[]).forEach(li=>{
+          const ut=li.cab?.unitType||"Unassigned";
+          const lvl=li.cab?.level||"Ground Floor";
+          const key=`${ut}__${lvl}`;
+          if(!g[key]) g[key]={unitType:ut,level:lvl,total:0,count:0,items:[]};
+          g[key].total+=lineAmt(li); g[key].count++; g[key].items.push(li);
+        });
+        // sort by UNIT_TYPES order then by BUILDING_LEVELS order
+        const utOrder=UNIT_TYPES;
+        const lvlOrder=BUILDING_LEVELS;
+        const sorted=Object.values(g).sort((a,b)=>{
+          const ui=(utOrder.indexOf(a.unitType)>=0?utOrder.indexOf(a.unitType):999)-(utOrder.indexOf(b.unitType)>=0?utOrder.indexOf(b.unitType):999);
+          if(ui!==0) return ui;
+          return (lvlOrder.indexOf(a.level)>=0?lvlOrder.indexOf(a.level):999)-(lvlOrder.indexOf(b.level)>=0?lvlOrder.indexOf(b.level):999);
+        });
+        sections=sorted.map(gr=>{
+          const hdr=gr.unitType==="Unassigned"
+            ? `${gr.level} — Unassigned Unit Type`
+            : `${gr.unitType} — ${gr.level}`;
+          return {key:`${gr.unitType}__${gr.level}`, hdr, mode:"summary", rows:[{desc:hdr, qty:gr.count, unit:"items", total:gr.total}]};
+        });
       } else if(quoteView==="unit-individual") {
-        // Detail: all items, grouped under unit-type header
+        // Detail: every item listed, grouped under unit-type + level header
         const g={};
-        (items||[]).forEach(li=>{const u=li.unit||"ea";if(!g[u])g[u]=[];g[u].push(li);});
-        sections=Object.entries(g).map(([u,its])=>({key:u, hdr:`${UNIT_LABELS[u]||u} — ${u}`, mode:"detail", items:its}));
+        (items||[]).forEach(li=>{
+          const ut=li.cab?.unitType||"Unassigned";
+          const lvl=li.cab?.level||"Ground Floor";
+          const key=`${ut}__${lvl}`;
+          if(!g[key]) g[key]={unitType:ut,level:lvl,items:[]};
+          g[key].items.push(li);
+        });
+        const utOrder2=UNIT_TYPES; const lvlOrder2=BUILDING_LEVELS;
+        const sorted2=Object.values(g).sort((a,b)=>{
+          const ui=(utOrder2.indexOf(a.unitType)>=0?utOrder2.indexOf(a.unitType):999)-(utOrder2.indexOf(b.unitType)>=0?utOrder2.indexOf(b.unitType):999);
+          if(ui!==0) return ui;
+          return (lvlOrder2.indexOf(a.level)>=0?lvlOrder2.indexOf(a.level):999)-(lvlOrder2.indexOf(b.level)>=0?lvlOrder2.indexOf(b.level):999);
+        });
+        sections=sorted2.map(gr=>({
+          key:`${gr.unitType}__${gr.level}`,
+          hdr:gr.unitType==="Unassigned"?`${gr.level} — Unassigned`:`${gr.unitType} — ${gr.level}`,
+          mode:"detail", items:gr.items
+        }));
       } else if(quoteView==="level") {
         // Detail: all items, grouped under building level header
         const g={};
