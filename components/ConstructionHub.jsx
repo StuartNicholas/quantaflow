@@ -55,7 +55,8 @@ function useLS(key, init) {
   return [s, setS];
 }
 
-const T = {
+// ── THEME SYSTEM ─────────────────────────────────────────────────────────────
+const BASE_T = {
   bg:"#07090c", panel:"#0d1117", card:"#111820", card2:"#161f2a",
   border:"#1c2838", borderHi:"#263548",
   accent:"#f59e0b", accentDim:"rgba(245,158,11,0.1)", accentBrd:"rgba(245,158,11,0.28)",
@@ -65,10 +66,41 @@ const T = {
   yellow:"#eab308", yellowDim:"rgba(234,179,8,0.1)",
   purple:"#8b5cf6", purpleDim:"rgba(139,92,246,0.1)",
   teal:"#14b8a6", tealDim:"rgba(20,184,166,0.1)",
-  text:"#dde6f0", muted:"#63748a", faint:"#283444",
+  text:"#dde6f0", muted:"#7a8fa5", faint:"#4d6478",
   font:"system-ui,'Segoe UI',Helvetica,sans-serif",
   mono:"'JetBrains Mono','Courier New',monospace",
 };
+// T is mutable so App can apply company theme prefs on every render
+let T = {...BASE_T};
+
+function hexRgba(hex,a){
+  try{const h=(hex||"").replace("#","");const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);return `rgba(${r},${g},${b},${a})`;}
+  catch{return `rgba(0,0,0,${a})`;}
+}
+function buildT(prefs={}){
+  const accent=prefs.accent||BASE_T.accent;
+  return{...BASE_T,...(prefs.overrides||{}),accent,accentDim:hexRgba(accent,0.10),accentBrd:hexRgba(accent,0.28)};
+}
+
+const THEME_PRESETS=[
+  // ── Brand colours
+  {id:"amber",   cat:"brand",  name:"Amber",           accent:"#f59e0b", desc:"Default — warm gold"},
+  {id:"blue",    cat:"brand",  name:"Blue",             accent:"#3b82f6", desc:"Corporate & clean"},
+  {id:"teal",    cat:"brand",  name:"Teal",             accent:"#14b8a6", desc:"Modern & minimal"},
+  {id:"violet",  cat:"brand",  name:"Violet",           accent:"#8b5cf6", desc:"Creative & distinctive"},
+  {id:"rose",    cat:"brand",  name:"Rose",             accent:"#f43f5e", desc:"Bold & energetic"},
+  {id:"emerald", cat:"brand",  name:"Emerald",          accent:"#10b981", desc:"Calm & professional"},
+  // ── Colourblind / accessibility
+  {id:"cb_rg",   cat:"a11y",  name:"Red-Green safe",   accent:"#2563eb",
+    desc:"Deuteranopia / Protanopia — affects ~8% of men. Blue accent stays visible.",
+    overrides:{green:"#0ea5e9",greenDim:"rgba(14,165,233,0.1)"}},
+  {id:"cb_by",   cat:"a11y",  name:"Blue-Yellow safe",  accent:"#e11d48",
+    desc:"Tritanopia. Red-pink accent avoids the blue-yellow confusion zone.",
+    overrides:{blue:"#10b981",blueDim:"rgba(16,185,129,0.1)"}},
+  {id:"hc",      cat:"a11y",  name:"High Contrast",     accent:"#fbbf24",
+    desc:"Maximum readability. Brighter text and border contrast for low vision.",
+    overrides:{text:"#ffffff",muted:"#b8ccd8",faint:"#7a95a8",border:"#2d4460",borderHi:"#3d5a7a"}},
+];
 
 // ── DATA SCHEMA ──────────────────────────────────────────────────────────────
 const mkProject = (o={}) => ({
@@ -736,6 +768,118 @@ class SetupErrorBoundary extends Component {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ── THEME PANEL ──────────────────────────────────────────────────────────────
+function ThemePanel({prefs, onChange, onClose}){
+  const accent=prefs.accent||BASE_T.accent;
+  const activeId=THEME_PRESETS.find(p=>p.accent===accent&&JSON.stringify(p.overrides||{})===JSON.stringify(prefs.overrides||{}))?.id;
+  const brandPresets=THEME_PRESETS.filter(p=>p.cat==="brand");
+  const a11yPresets=THEME_PRESETS.filter(p=>p.cat==="a11y");
+  const S={
+    label:{fontSize:10,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:8},
+    section:{marginBottom:22},
+  };
+  return <div style={{position:"fixed",inset:0,zIndex:9998}} onClick={onClose}>
+    <div onClick={e=>e.stopPropagation()} style={{
+      position:"fixed",top:0,right:0,bottom:0,width:340,
+      background:T.panel,borderLeft:`1px solid ${T.border}`,
+      display:"flex",flexDirection:"column",
+      boxShadow:"-12px 0 40px rgba(0,0,0,0.5)"}}>
+
+      {/* Header */}
+      <div style={{padding:"16px 20px",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+        <span style={{fontSize:18}}>🎨</span>
+        <div>
+          <div style={{fontWeight:800,fontSize:15,color:T.text}}>Appearance</div>
+          <div style={{fontSize:11,color:T.faint}}>Changes apply instantly across the app</div>
+        </div>
+        <span onClick={onClose} style={{marginLeft:"auto",cursor:"pointer",color:T.muted,fontSize:20,lineHeight:1}}>✕</span>
+      </div>
+
+      <div style={{flex:1,overflowY:"auto",padding:"18px 20px"}}>
+
+        {/* ── Brand colour picker */}
+        <div style={S.section}>
+          <div style={S.label}>Company Brand Colour</div>
+          <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:T.bg,borderRadius:8,border:`1px solid ${T.border}`}}>
+            <div style={{position:"relative"}}>
+              <input type="color" value={accent}
+                onInput={e=>onChange({...prefs,accent:e.target.value,overrides:{}})}
+                style={{width:44,height:40,borderRadius:6,border:`2px solid ${T.border}`,
+                  background:"none",cursor:"pointer",padding:2,display:"block"}}/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:T.mono,fontSize:14,fontWeight:700,color:T.text}}>{accent.toUpperCase()}</div>
+              <div style={{fontSize:11,color:T.faint,marginTop:1}}>Click the swatch to open colour picker</div>
+            </div>
+            {/* Live preview chip */}
+            <div style={{padding:"6px 12px",borderRadius:6,background:hexRgba(accent,0.12),
+              border:`1.5px solid ${hexRgba(accent,0.4)}`,color:accent,fontWeight:700,fontSize:12}}>
+              Preview
+            </div>
+          </div>
+        </div>
+
+        {/* ── Brand presets */}
+        <div style={S.section}>
+          <div style={S.label}>Quick Presets</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+            {brandPresets.map(p=>{
+              const active=activeId===p.id;
+              return <div key={p.id} onClick={()=>onChange({...prefs,accent:p.accent,overrides:{}})}
+                style={{padding:"10px 8px",borderRadius:8,cursor:"pointer",textAlign:"center",
+                  border:`2px solid ${active?p.accent:T.border}`,
+                  background:active?hexRgba(p.accent,0.10):T.bg,
+                  transition:"all 0.12s"}}>
+                <div style={{width:28,height:28,borderRadius:"50%",background:p.accent,margin:"0 auto 6px",
+                  boxShadow:active?`0 0 0 3px ${hexRgba(p.accent,0.3)}`:"none",transition:"box-shadow 0.12s"}}/>
+                <div style={{fontSize:12,fontWeight:active?700:500,color:active?p.accent:T.text}}>{p.name}</div>
+                <div style={{fontSize:10,color:T.faint,marginTop:1,lineHeight:1.3}}>{p.desc}</div>
+              </div>;
+            })}
+          </div>
+        </div>
+
+        {/* ── Colourblind / accessibility */}
+        <div style={S.section}>
+          <div style={S.label}>Colourblind & Accessibility</div>
+          <div style={{fontSize:11,color:T.faint,marginBottom:10,lineHeight:1.5}}>
+            These presets adjust the accent and key status colours so the app remains clear for users with colour vision deficiencies.
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:7}}>
+            {a11yPresets.map(p=>{
+              const active=activeId===p.id;
+              return <div key={p.id} onClick={()=>onChange({...prefs,accent:p.accent,overrides:p.overrides||{}})}
+                style={{padding:"11px 14px",borderRadius:8,cursor:"pointer",
+                  border:`2px solid ${active?p.accent:T.border}`,
+                  background:active?hexRgba(p.accent,0.10):T.bg,
+                  display:"flex",alignItems:"flex-start",gap:12,transition:"all 0.12s"}}>
+                <div style={{width:22,height:22,borderRadius:"50%",background:p.accent,flexShrink:0,marginTop:1,
+                  boxShadow:active?`0 0 0 3px ${hexRgba(p.accent,0.3)}`:"none"}}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,fontWeight:active?700:600,color:active?p.accent:T.text}}>{p.name}</div>
+                  <div style={{fontSize:10,color:T.faint,marginTop:2,lineHeight:1.4}}>{p.desc}</div>
+                </div>
+                {active&&<span style={{color:p.accent,fontWeight:700,fontSize:14,flexShrink:0}}>✓</span>}
+              </div>;
+            })}
+          </div>
+        </div>
+
+        {/* ── Reset */}
+        {Object.keys(prefs).length>0&&<button onClick={()=>onChange({})}
+          style={{width:"100%",padding:"10px 0",borderRadius:7,marginTop:4,
+            background:"transparent",border:`1px solid ${T.border}`,
+            color:T.muted,cursor:"pointer",fontSize:12,fontWeight:600,
+            transition:"border-color 0.12s"}}
+          onMouseEnter={e=>e.target.style.borderColor=T.text}
+          onMouseLeave={e=>e.target.style.borderColor=T.border}>
+          Reset to default (Amber)
+        </button>}
+      </div>
+    </div>
+  </div>;
+}
+
 // APP ROOT
 // ═══════════════════════════════════════════════════════════════════════════
 export default function App() {
@@ -761,6 +905,9 @@ export default function App() {
   const [pendingJoinRequest, setPendingJoinRequest] = useState(null);  // pending request row or null
   const [userRole,           setUserRole]           = useState("owner");
   const [pendingTeamCount,   setPendingTeamCount]   = useState(0);     // pending join requests (owner only)
+  const [themePrefs, setThemePrefs] = useState(()=>{ try{return JSON.parse(localStorage.getItem("qf_theme")||"{}");}catch{return{};} });
+  const [showThemePanel, setShowThemePanel] = useState(false);
+  function saveTheme(p){ setThemePrefs(p); try{ localStorage.setItem("qf_theme",JSON.stringify(p)); }catch{} }
 
   // Friendly display name: saved profile name → auth metadata → email prefix.
   const displayName = profileName
@@ -1115,6 +1262,9 @@ export default function App() {
     {id:"settings",  icon:"⚙",label:"Settings"},
   ];
 
+  // Apply company theme on every render so all child components see current T
+  T = buildT(themePrefs);
+
   if(!mounted) return null;
 
   return (
@@ -1217,6 +1367,16 @@ export default function App() {
             <div style={{fontSize:13,fontWeight:700,color:T.text}}>{displayName}</div>
             <div style={{fontSize:11,color:T.faint}}>{company?.name||"Your company"}</div>
           </div>
+          {/* Appearance / theme button */}
+          <div onClick={()=>setShowThemePanel(v=>!v)} title="Appearance"
+            style={{width:34,height:34,borderRadius:"50%",background:T.bg,
+              border:`1px solid ${T.border}`,color:T.muted,display:"flex",
+              alignItems:"center",justifyContent:"center",fontSize:16,cursor:"pointer",
+              transition:"border-color 0.15s,color 0.15s"}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.color=T.accent;}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.color=T.muted;}}>
+            🎨
+          </div>
           <div onClick={()=>setNav("settings")} title="Account & settings"
             style={{width:34,height:34,borderRadius:"50%",background:T.accentDim,
               border:`1px solid ${T.accentBrd}`,color:T.accent,display:"flex",
@@ -1224,6 +1384,9 @@ export default function App() {
             {(displayName||"U").slice(0,1).toUpperCase()}
           </div>
         </div>
+
+        {/* Theme panel */}
+        {showThemePanel&&<ThemePanel prefs={themePrefs} onChange={p=>{saveTheme(p);}} onClose={()=>setShowThemePanel(false)}/>}
 
         {clientImport&&<div style={{background:T.blueDim,border:`1px solid ${T.blue}55`,borderRadius:7,
           padding:"10px 16px",marginBottom:14,fontSize:13,color:T.blue,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
