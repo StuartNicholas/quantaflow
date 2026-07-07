@@ -452,6 +452,38 @@ const TRADES = {
 
 const TRADE_KEYS = Object.keys(TRADES);
 
+// ── TAKEOFF MATRIX — building levels + joinery categories ────────────────────
+const BUILDING_LEVELS = ["Ground Floor","Level 1","Level 2","Level 3","Basement","Mezzanine","Other"];
+const JCAT_COLORS = {
+  "Base Cabinets":"#f59e0b","Wall Cabinets":"#3b82f6","Tall Cabinets":"#22c55e",
+  "Vanity Units":"#a78bfa","Island Units":"#14b8a6","Robes":"#f97316",
+  "Benchtops":"#ec4899","Splashbacks":"#06b6d4","Panels & Fillers":"#64748b","Other":"#6b7280"
+};
+function joineryCategory(item) {
+  const t = item.cab?.type || "";
+  if(t.includes("Benchtop")) return "Benchtops";
+  if(t.includes("Splashback")) return "Splashbacks";
+  if(t.includes("Base")) return "Base Cabinets";
+  if(t.includes("Wall")) return "Wall Cabinets";
+  if(t.includes("Tall")||t.includes("Pantry")) return "Tall Cabinets";
+  if(t.includes("Vanity")) return "Vanity Units";
+  if(t.includes("Island")) return "Island Units";
+  if(t.includes("Robe")||t.includes("Wardrobe")) return "Robes";
+  if(t.includes("Panel")||t.includes("Filler")) return "Panels & Fillers";
+  const lb = (item.label||"").toLowerCase();
+  if(lb.includes("benchtop")||lb.includes("bench top")) return "Benchtops";
+  if(lb.includes("splashback")) return "Splashbacks";
+  if(lb.includes("base cab")||lb.includes("lower cab")) return "Base Cabinets";
+  if(lb.includes("wall cab")||lb.includes("upper cab")) return "Wall Cabinets";
+  if(lb.includes("tall cab")||lb.includes("pantry")) return "Tall Cabinets";
+  if(lb.includes("vanity")) return "Vanity Units";
+  if(lb.includes("island")) return "Island Units";
+  if(lb.includes("robe")||lb.includes("wardrobe")) return "Robes";
+  if(lb.includes("panel")||lb.includes("filler")) return "Panels & Fillers";
+  return "Other";
+}
+function itemLevel(item) { return item.cab?.level || "Ground Floor"; }
+
 // ── CALCULATIONS ─────────────────────────────────────────────────────────────
 function calc(p) {
   const sub = (p.lineItems||[]).reduce((s,li) =>
@@ -2626,6 +2658,10 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
   const [loadingTakeoff, setLoadingTakeoff] = useState(true);
   const [creditsExhausted, setCreditsExhausted] = useState(null); // {used,limit}
   const [aiUsage, setAiUsage] = useState(null); // {used,limit} for this month
+  const [viewMode, setViewMode] = useState("list"); // "list" | "matrix"
+  const [pickLevel, setPickLevel] = useState("Ground Floor");
+  const [showPushModal, setShowPushModal] = useState(false);
+  const [pushSel, setPushSel] = useState("detailed");
 
   const log = (msg, type="info") => setALog(l=>[...l,{msg,type,ts:new Date().toLocaleTimeString()}]);
 
@@ -3174,10 +3210,11 @@ ${EXTRACT_SCHEMA}`;
       layer_id:newItem.layerId!=null?String(newItem.layerId):null,
       type:newItem.type, label:newItem.label, qty:parseFloat(newItem.qty)||0,
       unit:newItem.unit, source:"manual",
+      cab:{level:newItem.level||"Ground Floor"},
     });
     if(!saved) return pop("Could not save item: "+(iErr||"unknown error"),"error");
     setItems(prev=>[...prev,{...saved,layerId:newItem.layerId}]);
-    setNewItem({type:"area",label:"",qty:0,unit:"m²",layerId:activeLayer});
+    setNewItem({type:"area",label:"",qty:0,unit:"m²",layerId:activeLayer,level:"Ground Floor"});
     setShowAddItem(false); pop("Item added.");
   }
 
@@ -3227,7 +3264,7 @@ ${EXTRACT_SCHEMA}`;
     const qty=Math.max(1, parseInt(pickQty)||1);
     const cabLayer=layers.find(l=>/cabinet/i.test(l.name))?.id||activeLayer||null;
     const label=`${pickRoom.trim()} — ${c.type} ${c.config} ${c.width}mm`;
-    const cab={unit:"",room:pickRoom.trim(),type:c.type,config:c.config,width:c.width};
+    const cab={unit:"",room:pickRoom.trim(),type:c.type,config:c.config,width:c.width,level:pickLevel};
     let tid=takeoffId;
     if(!tid){ const {data:t,error:tErr}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} else { return pop("Could not save: "+(tErr||"unknown error"),"error"); } }
     const {data:saved,error:iErr}=await dbAddTakeoffItem(tid,{
@@ -3339,8 +3376,8 @@ ${EXTRACT_SCHEMA}`;
     return "Click to add points";
   }
 
-  // Fix: map takeoff items to correct estimate categories using layer name + label content
-  async function pushToEstimate() {
+  // Map takeoff items to estimate categories using layer name + label content
+  async function pushToEstimate(detailLevel="detailed") {
     const layerMap={};
     layers.forEach(l=>{ layerMap[l.id]=l.name.toLowerCase(); });
     function guessCategory(item) {
@@ -3366,7 +3403,7 @@ ${EXTRACT_SCHEMA}`;
       return "Other";
     }
 
-    // Load the project's cabinet pricing context (formula rules + chosen rates) once.
+    // Load cabinet pricing context once (formula rules + chosen rates).
     let pricing=null;
     try{
       const { data:u }=await supabase.auth.getUser();
@@ -3374,9 +3411,9 @@ ${EXTRACT_SCHEMA}`;
       if(prof?.company_id) pricing=await loadCabinetPricing(prof.company_id, proj.id);
     }catch{}
 
-    const toAdd=items.map(ti=>{
+    // Build the detailed item list with rates first — then compress based on detailLevel.
+    const detailed=items.map(ti=>{
       let rate=0;
-      // Price real cabinet lines (not benchtop/splashback) via the parametric formula
       if(ti.cab && pricing?.ready && pricing.rules &&
          ti.cab.type!=="Benchtop" && ti.cab.type!=="Splashback"){
         const {doors,drawers}=parseCabConfig(ti.cab.config);
@@ -3387,13 +3424,53 @@ ${EXTRACT_SCHEMA}`;
       return {
         id:uid(),
         category:guessCategory(ti),
+        jcat:joineryCategory(ti),
+        lvl:itemLevel(ti),
         description:ti.label+(ti.notes?` (${ti.notes})`:""),
-        qty:ti.qty,unit:ti.unit,rate,margin:proj.margin||20,source:"takeoff",
-        cab:ti.cab||undefined,
+        qty:ti.qty, unit:ti.unit||"ea", rate,
+        margin:proj.margin||20, source:"takeoff", cab:ti.cab||undefined,
       };
     });
 
-    // Persist to Supabase (source of truth), then update in-memory + roll up total.
+    let toAdd=detailed;
+
+    if(detailLevel==="medium") {
+      // One line per joinery-category + unit combination, qty summed, rate averaged
+      const groups={};
+      detailed.forEach(d=>{
+        const key=`${d.jcat}||${d.unit}`;
+        if(!groups[key]) groups[key]={category:d.category,jcat:d.jcat,unit:d.unit,qty:0,totalValue:0,count:0};
+        groups[key].qty+=d.qty;
+        groups[key].totalValue+=d.rate*d.qty;
+        groups[key].count++;
+      });
+      toAdd=Object.values(groups).map(g=>({
+        id:uid(),
+        category:g.category,
+        description:g.jcat,
+        qty:parseFloat(g.qty.toFixed(2)), unit:g.unit,
+        rate:g.qty>0?parseFloat((g.totalValue/g.qty).toFixed(2)):0,
+        margin:proj.margin||20, source:"takeoff",
+      }));
+    } else if(detailLevel==="high") {
+      // One line per trade category, qty=count of items, rate=sum of all priced values
+      const cats={};
+      detailed.forEach(d=>{
+        if(!cats[d.category]) cats[d.category]={category:d.category,count:0,totalValue:0};
+        cats[d.category].count+=d.qty;
+        cats[d.category].totalValue+=d.rate*d.qty;
+      });
+      toAdd=Object.values(cats).map(g=>({
+        id:uid(),
+        category:g.category,
+        description:g.category,
+        qty:1, unit:"set",
+        rate:parseFloat(g.totalValue.toFixed(2)),
+        margin:proj.margin||20, source:"takeoff",
+      }));
+    }
+
+    // Persist to Supabase, then update in-memory + roll up total.
     let withIds=toAdd;
     try{
       const { data:est }=await dbGetEstimate(proj.id);
@@ -3411,11 +3488,13 @@ ${EXTRACT_SCHEMA}`;
       try{ dbUpdateProjectQuoteValue(proj.id, calc(np).total); }catch{}
       return np;
     });
+    setShowPushModal(false);
     const priced=toAdd.filter(x=>x.rate>0).length;
+    const lineWord=toAdd.length===1?"line":"lines";
     if(!pricing?.ready)
-      pop(`${toAdd.length} items pushed. Set the Cabinet Preset to auto-price cabinets.`,"info");
+      pop(`${toAdd.length} ${lineWord} pushed to Estimate. Set Cabinet Preset to auto-price.`,"info");
     else
-      pop(`${toAdd.length} items pushed — ${priced} cabinets auto-priced from your catalogue.`);
+      pop(`${toAdd.length} ${lineWord} pushed — ${priced} auto-priced from your catalogue.`);
   }
 
   const ai = aiSummary;
@@ -3469,11 +3548,18 @@ ${EXTRACT_SCHEMA}`;
         {analyzing?`⏳ Analysing… ${progress.done}/${progress.total||"?"}`
           :`⬡ AI Extract — ${pdfMeta.numPages} pages · ${tradeScope}`}
       </Btn>}
-      {items.length>0&&<Btn v="grn" onClick={pushToEstimate}>→ Push {items.length} items to Estimate</Btn>}
+      {items.length>0&&<Btn v="grn" onClick={()=>setShowPushModal(true)}>→ Push {items.length} items to Estimate</Btn>}
       {pdfMeta&&<Btn v="blu" onClick={()=>openMeasure(currentPage)}>📐 Measure p{currentPage+1}</Btn>}
       <Btn v="gho" onClick={addLayer}>+ Layer</Btn>
       <Btn v="pri" onClick={openPicker}>+ Library Item</Btn>
-      <Btn v="gho" onClick={()=>{setNewItem({type:"count",label:"",qty:1,unit:"ea",layerId:activeLayer});setShowAddItem(true);}}>+ Manual Item</Btn>
+      <Btn v="gho" onClick={()=>{setNewItem({type:"count",label:"",qty:1,unit:"ea",layerId:activeLayer,level:"Ground Floor"});setShowAddItem(true);}}>+ Manual Item</Btn>
+      {items.length>0&&<div style={{display:"flex",gap:3,background:T.bg,borderRadius:6,padding:2,border:`1px solid ${T.border}`}}>
+        {[["list","≡ List"],["matrix","⊞ Matrix"]].map(([m,l])=>
+          <div key={m} onClick={()=>setViewMode(m)} style={{
+            padding:"4px 10px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:600,
+            background:viewMode===m?T.card:T.bg,color:viewMode===m?T.text:T.muted,
+            transition:"all 0.15s"}}>{l}</div>)}
+      </div>}
       {aiUsage&&<div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6,fontSize:11}}>
         {aiUsage.limit===-1?(
           <span style={{color:T.green}}>∞ Unlimited AI credits</span>
@@ -3768,9 +3854,11 @@ ${EXTRACT_SCHEMA}`;
                   Every item comes from your library — this keeps quotes to company standard. Type any words in any order (e.g. “base 900”, “3 drawer”). Can't find it? Add it to your library first.
                 </div>
                 <Row gap={8} sx={{marginBottom:10,flexWrap:"wrap",alignItems:"flex-end"}}>
-                  <Inp label="Room" value={pickRoom} onChange={setPickRoom} placeholder="e.g. Kitchen" sx={{width:160,marginBottom:0}}/>
-                  <Inp label="Qty" value={pickQty} onChange={setPickQty} type="number" mono sx={{width:80,marginBottom:0}}/>
-                  <div style={{flex:1,minWidth:200}}>
+                  <Inp label="Room" value={pickRoom} onChange={setPickRoom} placeholder="e.g. Kitchen" sx={{width:140,marginBottom:0}}/>
+                  <Sel label="Level" value={pickLevel} onChange={setPickLevel}
+                    options={BUILDING_LEVELS.map(l=>({value:l,label:l}))} sx={{width:140,marginBottom:0}}/>
+                  <Inp label="Qty" value={pickQty} onChange={setPickQty} type="number" mono sx={{width:70,marginBottom:0}}/>
+                  <div style={{flex:1,minWidth:180}}>
                     <div style={{fontSize:11,color:T.faint,marginBottom:4}}>Search library</div>
                     <input value={pickSearch} onChange={e=>setPickSearch(e.target.value)} placeholder="Type to filter… e.g. base 2 door 900" autoFocus
                       style={{width:"100%",background:T.card,border:`1px solid ${T.border}`,borderRadius:5,padding:"8px 11px",color:T.text,fontSize:13,outline:"none",fontFamily:T.font}}/>
@@ -3810,10 +3898,13 @@ ${EXTRACT_SCHEMA}`;
               onChange={v=>setNewItem(x=>({...x,type:v,unit:v==="area"?"m²":v==="length"?"lm":"ea"}))}
               options={[{value:"area",label:"Area (m²)"},{value:"length",label:"Length (lm)"},{value:"count",label:"Count (ea)"}]}/>
             <Inp label="Label / Description" value={newItem.label}
-              onChange={v=>setNewItem(x=>({...x,label:v}))} placeholder="e.g. Ground Floor Slab"
+              onChange={v=>setNewItem(x=>({...x,label:v}))} placeholder="e.g. Kitchen Base 1 Door 600"
               sx={{gridColumn:"2/-1"}}/>
             <Inp label="Quantity" value={newItem.qty} onChange={v=>setNewItem(x=>({...x,qty:v}))} type="number" mono/>
             <Sel label="Unit" value={newItem.unit} onChange={v=>setNewItem(x=>({...x,unit:v}))} options={UNITS}/>
+            <Sel label="Building Level" value={newItem.level||"Ground Floor"}
+              onChange={v=>setNewItem(x=>({...x,level:v}))}
+              options={BUILDING_LEVELS.map(l=>({value:l,label:l}))}/>
             <Sel label="Layer" value={newItem.layerId||""}
               onChange={v=>setNewItem(x=>({...x,layerId:parseInt(v)||null}))}
               options={[{value:"",label:"No layer"},...layers.map(l=>({value:l.id,label:l.name}))]}/>
@@ -3840,54 +3931,216 @@ ${EXTRACT_SCHEMA}`;
           </Row>
         </Card>}
 
-        {/* ── Takeoff items table */}
+        {/* ── Takeoff items — List or Matrix view */}
         {items.length>0
-          ? <Card sx={{padding:0,overflow:"hidden"}}>
-              <div style={{padding:"11px 16px",borderBottom:`1px solid ${T.border}`,
-                display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div style={{fontWeight:700,fontSize:13}}>Takeoff Items ({items.length})</div>
-                <Btn sm v="grn" onClick={pushToEstimate}>→ Push to Estimate</Btn>
-              </div>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead><tr style={{background:T.bg,color:T.faint,fontSize:11,textAlign:"left"}}>
-                  {["Layer","Type","Description","Qty","Unit","Source",""].map(h=>
-                    <th key={h} style={{padding:"6px 10px",fontWeight:600}}>{h}</th>)}
-                </tr></thead>
-                <tbody>
-                  {items.map(item=>{
-                    const layer=layers.find(l=>l.id===item.layerId);
-                    return <tr key={item.id} style={{borderTop:`1px solid ${T.border}`}}>
-                      <td style={{padding:"8px 10px"}}>
-                        {layer&&<Row gap={5}>
-                          <span style={{width:8,height:8,borderRadius:"50%",background:layer.color,display:"inline-block"}}/>
-                          <span style={{color:T.muted,fontSize:11}}>{layer.name}</span>
-                        </Row>}
-                      </td>
-                      <td style={{padding:"8px 10px"}}>
-                        <Bdg color={item.type==="area"?T.yellow:item.type==="length"?T.blue:T.green} sm>{item.type}</Bdg>
-                      </td>
-                      <td style={{padding:"8px 10px",color:T.text,fontWeight:600}}>{item.label}</td>
-                      <td style={{padding:"8px 10px",fontFamily:T.mono,color:T.accent,fontWeight:700}}>{item.qty}</td>
-                      <td style={{padding:"8px 10px",color:T.muted}}>{item.unit}</td>
-                      <td style={{padding:"8px 10px"}}>
-                        <Bdg color={item.source==="ai"?T.teal:T.faint} sm>{item.source||"manual"}</Bdg>
-                      </td>
-                      <td style={{padding:"8px 10px"}}>
-                        <span style={{cursor:"pointer",color:T.red,fontSize:13}}
-                          onClick={async()=>{
-                            await dbDeleteTakeoffItem(item.id);
-                            setItems(prev=>prev.filter(x=>x.id!==item.id));
-                          }}>✕</span>
-                      </td>
-                    </tr>;
-                  })}
-                </tbody>
-              </table>
-            </Card>
+          ? viewMode==="matrix"
+            ? (()=>{
+                // Build pivot: joinery category → items → levels
+                const allLevels=[...new Set(items.map(i=>itemLevel(i)))];
+                // Sort levels in canonical order
+                const levelOrder=["Ground Floor","Basement","Mezzanine","Level 1","Level 2","Level 3","Other"];
+                allLevels.sort((a,b)=>{const ai=levelOrder.indexOf(a),bi=levelOrder.indexOf(b);return(ai<0?99:ai)-(bi<0?99:bi);});
+                // Group by joinery category
+                const catOrder=["Base Cabinets","Wall Cabinets","Tall Cabinets","Vanity Units","Island Units","Robes","Benchtops","Splashbacks","Panels & Fillers","Other"];
+                const bycat={};
+                items.forEach(it=>{
+                  const jcat=joineryCategory(it);
+                  if(!bycat[jcat]) bycat[jcat]=[];
+                  bycat[jcat].push(it);
+                });
+                const cats=catOrder.filter(c=>bycat[c]);
+                const td=(content,style={})=><td style={{padding:"6px 10px",fontSize:12,...style}}>{content}</td>;
+                const th=(content,style={})=><th style={{padding:"6px 10px",fontSize:11,fontWeight:600,color:T.faint,...style}}>{content}</th>;
+                return <Card sx={{padding:0,overflow:"hidden"}}>
+                  <div style={{padding:"11px 16px",borderBottom:`1px solid ${T.border}`,
+                    display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                    <div>
+                      <span style={{fontWeight:700,fontSize:13}}>Project Takeoff Matrix</span>
+                      <span style={{color:T.faint,fontSize:11,marginLeft:8}}>{items.length} items · {cats.length} joinery types · {allLevels.length} level{allLevels.length!==1?"s":""}</span>
+                    </div>
+                    <Btn sm v="grn" onClick={()=>setShowPushModal(true)}>→ Push to Estimate</Btn>
+                  </div>
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead><tr style={{background:T.bg}}>
+                        {th("Joinery Type / Item",{width:"40%",textAlign:"left"})}
+                        {allLevels.map(l=>th(l,{textAlign:"center",minWidth:90,key:l}))}
+                        {th("Total",{textAlign:"center",minWidth:60,color:T.text})}
+                        {th("Unit",{textAlign:"left",minWidth:50})}
+                      </tr></thead>
+                      <tbody>
+                        {cats.map(cat=>{
+                          const catItems=bycat[cat];
+                          const color=JCAT_COLORS[cat]||"#6b7280";
+                          // Subtotals per level for this category (may mix units — show separately)
+                          const unitGroups=[...new Set(catItems.map(i=>i.unit||"ea"))];
+                          return <React.Fragment key={cat}>
+                            {/* Category header row */}
+                            <tr style={{background:`${color}18`}}>
+                              <td colSpan={allLevels.length+3} style={{padding:"7px 10px"}}>
+                                <div style={{display:"flex",alignItems:"center",gap:7}}>
+                                  <span style={{width:10,height:10,borderRadius:2,background:color,display:"inline-block",flexShrink:0}}/>
+                                  <span style={{fontWeight:800,fontSize:12,color,textTransform:"uppercase",letterSpacing:"0.06em"}}>{cat}</span>
+                                  <span style={{color:T.faint,fontSize:11}}>({catItems.length} items)</span>
+                                </div>
+                              </td>
+                            </tr>
+                            {/* Item rows */}
+                            {catItems.map(item=>{
+                              const lvl=itemLevel(item);
+                              return <tr key={item.id} style={{borderTop:`1px solid ${T.border}55`}}>
+                                {td(<span style={{paddingLeft:18,color:T.text}}>{item.label}</span>)}
+                                {allLevels.map(l=>{
+                                  const match=l===lvl;
+                                  return <td key={l} style={{padding:"6px 10px",textAlign:"center",
+                                    background:match?`${color}10`:"transparent",
+                                    color:match?color:T.faint,fontFamily:T.mono,fontWeight:match?700:400,fontSize:12}}>
+                                    {match?item.qty:"—"}
+                                  </td>;
+                                })}
+                                {td(<span style={{fontFamily:T.mono,fontWeight:700,color:T.accent}}>{item.qty}</span>,{textAlign:"center"})}
+                                {td(<span style={{color:T.muted}}>{item.unit||"ea"}</span>)}
+                              </tr>;
+                            })}
+                            {/* Subtotal rows — one per unit type */}
+                            {unitGroups.map(unit=>{
+                              const uItems=catItems.filter(i=>(i.unit||"ea")===unit);
+                              const total=uItems.reduce((s,i)=>s+(i.qty||0),0);
+                              return <tr key={`sub-${cat}-${unit}`} style={{borderTop:`1px solid ${color}33`,background:`${color}08`}}>
+                                {td(<span style={{paddingLeft:18,fontWeight:700,color,fontSize:11}}>▸ Subtotal ({unit})</span>)}
+                                {allLevels.map(l=>{
+                                  const sub=uItems.filter(i=>itemLevel(i)===l).reduce((s,i)=>s+(i.qty||0),0);
+                                  return <td key={l} style={{padding:"5px 10px",textAlign:"center",fontFamily:T.mono,fontWeight:700,fontSize:11,color:sub>0?color:T.faint}}>
+                                    {sub>0?sub:"—"}
+                                  </td>;
+                                })}
+                                {td(<span style={{fontFamily:T.mono,fontWeight:800,color}}>{parseFloat(total.toFixed(2))}</span>,{textAlign:"center"})}
+                                {td(<span style={{color,fontWeight:700,fontSize:11}}>{unit}</span>)}
+                              </tr>;
+                            })}
+                          </React.Fragment>;
+                        })}
+                        {/* Grand total row */}
+                        <tr style={{borderTop:`2px solid ${T.border}`,background:T.bg}}>
+                          {td(<span style={{fontWeight:800,color:T.text,fontSize:12}}>GRAND TOTAL</span>)}
+                          {allLevels.map(l=>{
+                            const sub=items.filter(i=>itemLevel(i)===l).reduce((s,i)=>s+(i.qty||0),0);
+                            return <td key={l} style={{padding:"7px 10px",textAlign:"center",fontFamily:T.mono,fontWeight:800,fontSize:13,color:T.accent}}>{parseFloat(sub.toFixed(2))}</td>;
+                          })}
+                          {td(<span style={{fontFamily:T.mono,fontWeight:800,fontSize:14,color:T.accent}}>{parseFloat(items.reduce((s,i)=>s+(i.qty||0),0).toFixed(2))}</span>,{textAlign:"center"})}
+                          {td("")}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  {/* Unit summary strip */}
+                  {(()=>{
+                    const byUnit={};
+                    items.forEach(i=>{const u=i.unit||"ea";byUnit[u]=(byUnit[u]||0)+(i.qty||0);});
+                    return <div style={{padding:"8px 16px",borderTop:`1px solid ${T.border}`,display:"flex",gap:16,flexWrap:"wrap"}}>
+                      {Object.entries(byUnit).map(([u,q])=>(
+                        <span key={u} style={{fontSize:11,color:T.muted}}>
+                          <span style={{fontFamily:T.mono,fontWeight:700,color:T.accent}}>{parseFloat(q.toFixed(2))}</span>
+                          {" "}<span style={{color:T.faint}}>{u}</span>
+                        </span>
+                      ))}
+                    </div>;
+                  })()}
+                </Card>;
+              })()
+            : <Card sx={{padding:0,overflow:"hidden"}}>
+                <div style={{padding:"11px 16px",borderBottom:`1px solid ${T.border}`,
+                  display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{fontWeight:700,fontSize:13}}>Takeoff Items ({items.length})</div>
+                  <Btn sm v="grn" onClick={()=>setShowPushModal(true)}>→ Push to Estimate</Btn>
+                </div>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead><tr style={{background:T.bg,color:T.faint,fontSize:11,textAlign:"left"}}>
+                    {["Layer","Level","Type","Description","Qty","Unit","Source",""].map(h=>
+                      <th key={h} style={{padding:"6px 10px",fontWeight:600}}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {items.map(item=>{
+                      const layer=layers.find(l=>l.id===item.layerId);
+                      const lvl=itemLevel(item);
+                      const jcolor=JCAT_COLORS[joineryCategory(item)]||T.faint;
+                      return <tr key={item.id} style={{borderTop:`1px solid ${T.border}`}}>
+                        <td style={{padding:"8px 10px"}}>
+                          {layer&&<Row gap={5}>
+                            <span style={{width:8,height:8,borderRadius:"50%",background:layer.color,display:"inline-block"}}/>
+                            <span style={{color:T.muted,fontSize:11}}>{layer.name}</span>
+                          </Row>}
+                        </td>
+                        <td style={{padding:"8px 10px"}}>
+                          <span style={{fontSize:11,color:jcolor,fontWeight:600}}>{lvl}</span>
+                        </td>
+                        <td style={{padding:"8px 10px"}}>
+                          <Bdg color={item.type==="area"?T.yellow:item.type==="length"?T.blue:T.green} sm>{item.type}</Bdg>
+                        </td>
+                        <td style={{padding:"8px 10px",color:T.text,fontWeight:600}}>{item.label}</td>
+                        <td style={{padding:"8px 10px",fontFamily:T.mono,color:T.accent,fontWeight:700}}>{item.qty}</td>
+                        <td style={{padding:"8px 10px",color:T.muted}}>{item.unit}</td>
+                        <td style={{padding:"8px 10px"}}>
+                          <Bdg color={item.source==="ai"?T.teal:T.faint} sm>{item.source||"manual"}</Bdg>
+                        </td>
+                        <td style={{padding:"8px 10px"}}>
+                          <span style={{cursor:"pointer",color:T.red,fontSize:13}}
+                            onClick={async()=>{
+                              await dbDeleteTakeoffItem(item.id);
+                              setItems(prev=>prev.filter(x=>x.id!==item.id));
+                            }}>✕</span>
+                        </td>
+                      </tr>;
+                    })}
+                  </tbody>
+                </table>
+              </Card>
           : !pdfMeta&&<div style={{color:T.faint,fontSize:13,padding:"20px 0"}}>
               Upload a PDF and run AI Extract, or add items manually.
             </div>
         }
+
+        {/* ── Push to Estimate — detail level modal */}
+        {showPushModal&&(()=>{
+          const PUSH_LEVELS=[
+            {key:"high",    label:"High Level",  sub:"One line per trade category (e.g. Cabinetry — 1 set)",         icon:"⬛"},
+            {key:"medium",  label:"Medium Level", sub:"Grouped by joinery type + unit (e.g. Base Cabinets — 10 ea)",  icon:"▦"},
+            {key:"detailed",label:"Full Detail",  sub:"Every item as its own line — complete project breakdown",       icon:"▤"},
+          ];
+          return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:9999,
+            display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowPushModal(false)}>
+            <div onClick={e=>e.stopPropagation()} style={{
+              background:T.card,borderRadius:12,width:480,maxWidth:"95vw",
+              border:`1px solid ${T.border}`,boxShadow:"0 24px 60px rgba(0,0,0,0.5)"}}>
+              <div style={{padding:"18px 22px",borderBottom:`1px solid ${T.border}`}}>
+                <div style={{fontWeight:800,fontSize:16,marginBottom:2}}>Push to Estimate</div>
+                <div style={{color:T.muted,fontSize:12}}>Choose how much detail to send to the Estimate tab.</div>
+              </div>
+              <div style={{padding:"16px 22px",display:"flex",flexDirection:"column",gap:10}}>
+                {PUSH_LEVELS.map(lv=>(
+                  <div key={lv.key} onClick={()=>setPushSel(lv.key)} style={{
+                    padding:"12px 16px",borderRadius:8,cursor:"pointer",
+                    border:`2px solid ${pushSel===lv.key?T.accent:T.border}`,
+                    background:pushSel===lv.key?`${T.accent}10`:T.bg,
+                    transition:"all 0.15s"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{fontSize:18}}>{lv.icon}</span>
+                      <div style={{flex:1}}>
+                        <div style={{fontWeight:700,fontSize:13,color:pushSel===lv.key?T.accent:T.text}}>{lv.label}</div>
+                        <div style={{color:T.muted,fontSize:11,marginTop:2}}>{lv.sub}</div>
+                      </div>
+                      {pushSel===lv.key&&<span style={{color:T.accent,fontWeight:800}}>✓</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{padding:"14px 22px",borderTop:`1px solid ${T.border}`,display:"flex",gap:8,justifyContent:"flex-end"}}>
+                <Btn v="gho" onClick={()=>setShowPushModal(false)}>Cancel</Btn>
+                <Btn v="grn" onClick={()=>pushToEstimate(pushSel)}>Push {items.length} items →</Btn>
+              </div>
+            </div>
+          </div>;
+        })()}
 
         {/* ── Analysis log */}
         {aLog.length>0&&<Card sx={{marginTop:12,padding:12}}>
