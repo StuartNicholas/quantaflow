@@ -2676,6 +2676,12 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
   const [pushSel, setPushSel] = useState("detailed");
   const [expandedItems, setExpandedItems] = useState(new Set()); // items with open finishes breakdown
   const [schemeData, setSchemeData] = useState({});             // loaded from qf_schemes_*
+  const [pickUnit, setPickUnit] = useState("");                  // unit number in library picker
+  const [unitReg, setUnitReg] = useState({units:[]});           // building unit register
+  const [showUnitReg, setShowUnitReg] = useState(false);        // toggle register editor in picker
+  const [editOvr, setEditOvr] = useState(null);                 // {unitId, level:"", type:""} being added
+  const [showCopyModal, setShowCopyModal] = useState(false);    // copy-to-building modal
+  const [copyTargets, setCopyTargets] = useState(new Set());    // "level|unitNum" keys checked in copy modal
 
   const log = (msg, type="info") => setALog(l=>[...l,{msg,type,ts:new Date().toLocaleTimeString()}]);
 
@@ -2711,6 +2717,33 @@ function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
   useEffect(()=>{
     try{ const s=localStorage.getItem(`qf_schemes_${proj.id}`); if(s) setSchemeData(JSON.parse(s)); }catch{}
   },[proj.id]);
+
+  // ── Load unit register from localStorage on mount
+  useEffect(()=>{
+    try{ const s=localStorage.getItem(`qf_unitreg_${proj.id}`); if(s) setUnitReg(JSON.parse(s)); }catch{}
+  },[proj.id]);
+
+  // ── Auto-resolve unit type when pickUnit or pickLevel changes
+  useEffect(()=>{
+    if(!pickUnit) return;
+    const u=(unitReg.units||[]).find(u=>u.number===pickUnit);
+    if(u){ const t=u.overrides?.[pickLevel]||u.defaultType||""; if(t) setPickUnitType(t); }
+  },[pickUnit, pickLevel, unitReg]);
+
+  function saveUnitReg(reg){ setUnitReg(reg); try{ localStorage.setItem(`qf_unitreg_${proj.id}`,JSON.stringify(reg)); }catch{} }
+  function resolveRegType(unitNumber, level){
+    const u=(unitReg.units||[]).find(u=>u.number===unitNumber); if(!u) return "";
+    return u.overrides?.[level]||u.defaultType||"";
+  }
+  function addRegUnit(){ const id=`ru${Date.now()}`; saveUnitReg({...unitReg,units:[...(unitReg.units||[]),{id,number:"",defaultType:"Type A",overrides:{}}]}); }
+  function removeRegUnit(id){ saveUnitReg({...unitReg,units:(unitReg.units||[]).filter(u=>u.id!==id)}); }
+  function updateRegUnit(id,field,val){ saveUnitReg({...unitReg,units:(unitReg.units||[]).map(u=>u.id===id?{...u,[field]:val}:u)}); }
+  function addRegOverride(unitId,level,type){
+    if(!level) return;
+    saveUnitReg({...unitReg,units:(unitReg.units||[]).map(u=>u.id===unitId?{...u,overrides:{...(u.overrides||{}),[level]:type||u.defaultType}}:u)});
+    setEditOvr(null);
+  }
+  function removeRegOverride(unitId,level){ saveUnitReg({...unitReg,units:(unitReg.units||[]).map(u=>u.id===unitId?{...u,overrides:Object.fromEntries(Object.entries(u.overrides||{}).filter(([l])=>l!==level))}:u)}); }
 
   // ── Toggle finishes breakdown expansion for a list item
   function toggleItemExpand(id){
@@ -3356,8 +3389,9 @@ ${EXTRACT_SCHEMA}`;
     if(!pickRoom.trim()){ pop("Enter a room first (e.g. Kitchen) — it drives room pricing.","error"); return; }
     const qty=Math.max(1, parseInt(pickQty)||1);
     const cabLayer=layers.find(l=>/cabinet/i.test(l.name))?.id||activeLayer||null;
-    const label=`${pickRoom.trim()} — ${c.type} ${c.config} ${c.width}mm`;
-    const cab={unit:"",room:pickRoom.trim(),type:c.type,config:c.config,width:c.width,level:pickLevel,unitType:pickUnitType};
+    const unitPfx=pickUnit?`Unit ${pickUnit} · `:"";
+    const label=`${unitPfx}${pickRoom.trim()} — ${c.type} ${c.config} ${c.width}mm`;
+    const cab={unit:pickUnit||"",room:pickRoom.trim(),type:c.type,config:c.config,width:c.width,level:pickLevel,unitType:pickUnitType};
     let tid=takeoffId;
     if(!tid){ const {data:t,error:tErr}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} else { return pop("Could not save: "+(tErr||"unknown error"),"error"); } }
     const {data:saved,error:iErr}=await dbAddTakeoffItem(tid,{
@@ -3366,7 +3400,34 @@ ${EXTRACT_SCHEMA}`;
     });
     if(!saved) return pop("Could not save item: "+(iErr||"unknown error"),"error");
     setItems(prev=>[...prev,{...saved,layerId:cabLayer,cab}]);
-    pop(`Added ${qty}× ${c.type} ${c.config} ${c.width}mm to ${pickRoom.trim()}.`);
+    pop(`Added ${qty}× ${c.type} ${c.config} ${c.width}mm to ${unitPfx||""}${pickRoom.trim()}.`);
+  }
+
+  async function copyToBuilding(targets){
+    // targets = [{unit, level}] — replicate all items for pickUnit+pickRoom to these destinations
+    const sourceItems=items.filter(i=>i.cab?.unit===pickUnit&&i.cab?.room===pickRoom.trim());
+    if(!sourceItems.length){ pop("No items found for this unit + room to copy.","error"); return; }
+    let tid=takeoffId;
+    if(!tid){ const {data:t,error:tErr}=await dbEnsureTakeoff(proj.id); if(t){tid=t.id;setTakeoffId(tid);} else { return pop("Could not save: "+(tErr||"unknown error"),"error"); } }
+    const cabLayer=layers.find(l=>/cabinet/i.test(l.name))?.id||activeLayer||null;
+    const added=[];
+    for(const tgt of targets){
+      const resolvedType=resolveRegType(tgt.unit, tgt.level)||tgt.unitType||pickUnitType;
+      for(const src of sourceItems){
+        const unitPfx=tgt.unit?`Unit ${tgt.unit} · `:"";
+        const baseLabel=(src.label||"").replace(new RegExp(`^Unit ${pickUnit} · `),"");
+        const newLabel=`${unitPfx}${baseLabel}`;
+        const newCab={...src.cab, unit:tgt.unit, level:tgt.level, unitType:resolvedType};
+        const {data:saved}=await dbAddTakeoffItem(tid,{
+          layer_id:cabLayer!=null?String(cabLayer):null,
+          type:"count", label:newLabel, qty:src.qty, unit:"ea", source:"library", cab:newCab,
+        });
+        if(saved) added.push({...saved,layerId:cabLayer,cab:newCab});
+      }
+    }
+    setItems(prev=>[...prev,...added]);
+    setShowCopyModal(false);
+    pop(`Copied ${sourceItems.length} items × ${targets.length} destinations = ${added.length} items added.`,"success");
   }
 
   // ── On-plan measurement ─────────────────────────────────────────────────
@@ -3933,8 +3994,93 @@ ${EXTRACT_SCHEMA}`;
           <Row gap={8} sx={{alignItems:"center",marginBottom:10}}>
             <div style={{fontWeight:700,fontSize:13}}>Add from your library</div>
             <Bdg color={T.accent}>{tradeScope}</Bdg>
+            <Btn sm v="gho" onClick={()=>setShowUnitReg(v=>!v)} sx={{marginLeft:8}}>
+              {showUnitReg?"▲ Building Register":"⚙ Building Register"}
+            </Btn>
+            {pickUnit&&pickRoom.trim()&&items.some(i=>i.cab?.unit===pickUnit&&i.cab?.room===pickRoom.trim())&&
+              <Btn sm v="pur" onClick={()=>{
+                const all=[];
+                (unitReg.units||[]).forEach(u=>{
+                  const lvls=[...(new Set(items.map(i=>i.cab?.level||"Ground Floor"))),...Object.keys(u.overrides||{})];
+                  const uniqueLvls=[...new Set([pickLevel,...BUILDING_LEVELS.filter(l=>items.some(i=>i.cab?.level===l))])];
+                  uniqueLvls.forEach(l=>{ if(u.number!==pickUnit||l!==pickLevel) all.push(`${l}|${u.number}`); });
+                });
+                setCopyTargets(new Set(all));
+                setShowCopyModal(true);
+              }}>🏗 Copy to building</Btn>}
             <div style={{marginLeft:"auto"}}><Btn sm v="gho" onClick={()=>setShowPicker(false)}>Done</Btn></div>
           </Row>
+
+          {/* ── Building unit register editor */}
+          {showUnitReg&&<div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:7,padding:12,marginBottom:12}}>
+            <Row gap={8} sx={{marginBottom:8,alignItems:"center"}}>
+              <div style={{fontWeight:600,fontSize:12,color:T.text}}>Building Unit Register</div>
+              <div style={{fontSize:11,color:T.faint,flex:1}}>Define unit numbers and their type per floor. Level overrides let you change a unit's type on specific floors.</div>
+              <Btn sm v="gho" onClick={addRegUnit}>+ Add unit</Btn>
+            </Row>
+            {!(unitReg.units||[]).length&&<div style={{color:T.faint,fontSize:12,padding:"6px 0"}}>No units defined yet. Click "+ Add unit" to start building your register.</div>}
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                {(unitReg.units||[]).length>0&&<thead>
+                  <tr style={{color:T.faint}}>
+                    <th style={{textAlign:"left",padding:"4px 8px",fontWeight:600}}>Unit #</th>
+                    <th style={{textAlign:"left",padding:"4px 8px",fontWeight:600}}>Default Type</th>
+                    <th style={{textAlign:"left",padding:"4px 8px",fontWeight:600}}>Floor Overrides</th>
+                    <th style={{width:24}}></th>
+                  </tr>
+                </thead>}
+                <tbody>
+                  {(unitReg.units||[]).map(u=>(
+                    <tr key={u.id} style={{borderTop:`1px solid ${T.border}`}}>
+                      <td style={{padding:"6px 8px",verticalAlign:"top"}}>
+                        <input value={u.number} onChange={e=>updateRegUnit(u.id,"number",e.target.value)}
+                          placeholder="e.g. 101"
+                          style={{width:80,background:T.card,border:`1px solid ${T.border}`,borderRadius:4,padding:"4px 7px",color:T.text,fontSize:12,fontFamily:T.mono}}/>
+                      </td>
+                      <td style={{padding:"6px 8px",verticalAlign:"top"}}>
+                        <select value={u.defaultType} onChange={e=>updateRegUnit(u.id,"defaultType",e.target.value)}
+                          style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:4,padding:"4px 7px",color:T.text,fontSize:12}}>
+                          {UNIT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </td>
+                      <td style={{padding:"6px 8px",verticalAlign:"top"}}>
+                        <div style={{display:"flex",flexWrap:"wrap",gap:4,alignItems:"center"}}>
+                          {Object.entries(u.overrides||{}).map(([lvl,typ])=>(
+                            <span key={lvl} style={{fontSize:11,background:`${T.accent}22`,color:T.accent,padding:"2px 6px",borderRadius:4,cursor:"pointer",display:"flex",gap:4,alignItems:"center"}}
+                              title="Click to remove">
+                              <span>{lvl}: {typ}</span>
+                              <span onClick={()=>removeRegOverride(u.id,lvl)} style={{opacity:0.6,marginLeft:2}}>×</span>
+                            </span>
+                          ))}
+                          {editOvr?.unitId===u.id
+                            ?<span style={{display:"flex",gap:4,alignItems:"center"}}>
+                              <select value={editOvr.level} onChange={e=>setEditOvr(v=>({...v,level:e.target.value}))}
+                                style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:4,padding:"3px 5px",color:T.text,fontSize:11}}>
+                                <option value="">— Level —</option>
+                                {BUILDING_LEVELS.map(l=><option key={l} value={l}>{l}</option>)}
+                              </select>
+                              <select value={editOvr.type} onChange={e=>setEditOvr(v=>({...v,type:e.target.value}))}
+                                style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:4,padding:"3px 5px",color:T.text,fontSize:11}}>
+                                {UNIT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+                              </select>
+                              <span onClick={()=>addRegOverride(u.id,editOvr.level,editOvr.type)}
+                                style={{cursor:"pointer",color:T.green,fontWeight:700,fontSize:13}}>✓</span>
+                              <span onClick={()=>setEditOvr(null)}
+                                style={{cursor:"pointer",color:T.faint,fontSize:13}}>✕</span>
+                            </span>
+                            :<span onClick={()=>setEditOvr({unitId:u.id,level:"",type:u.defaultType})}
+                              style={{fontSize:11,color:T.faint,cursor:"pointer",padding:"2px 6px",borderRadius:4,border:`1px dashed ${T.border}`}}>+ floor override</span>}
+                        </div>
+                      </td>
+                      <td style={{padding:"6px 8px",verticalAlign:"top",textAlign:"center"}}>
+                        <span onClick={()=>removeRegUnit(u.id)} style={{cursor:"pointer",color:T.red,fontSize:13}}>✕</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>}
 
           {!cabinetryInScope
             ? <div style={{color:T.muted,fontSize:13,padding:"8px 0"}}>
@@ -3947,7 +4093,19 @@ ${EXTRACT_SCHEMA}`;
                   Every item comes from your library — this keeps quotes to company standard. Type any words in any order (e.g. “base 900”, “3 drawer”). Can't find it? Add it to your library first.
                 </div>
                 <Row gap={8} sx={{marginBottom:10,flexWrap:"wrap",alignItems:"flex-end"}}>
-                  <Inp label="Room" value={pickRoom} onChange={setPickRoom} placeholder="e.g. Kitchen" sx={{width:140,marginBottom:0}}/>
+                  <div style={{marginBottom:0}}>
+                    <div style={{fontSize:11,color:T.faint,marginBottom:4}}>Unit #</div>
+                    <input value={pickUnit} onChange={e=>setPickUnit(e.target.value)} placeholder="e.g. 101"
+                      list="reg-units-list"
+                      style={{width:90,background:T.card,border:`1px solid ${T.border}`,borderRadius:5,padding:"8px 11px",color:T.text,fontSize:13,outline:"none",fontFamily:T.mono}}/>
+                    <datalist id="reg-units-list">
+                      {(unitReg.units||[]).map(u=><option key={u.id} value={u.number}/>)}
+                    </datalist>
+                    {pickUnit&&<div style={{fontSize:10,color:T.accent,marginTop:2}}>
+                      {resolveRegType(pickUnit,pickLevel)||pickUnitType||"type unregistered"}
+                    </div>}
+                  </div>
+                  <Inp label="Room" value={pickRoom} onChange={setPickRoom} placeholder="e.g. Kitchen" sx={{width:130,marginBottom:0}}/>
                   <Sel label="Level" value={pickLevel} onChange={setPickLevel}
                     options={BUILDING_LEVELS.map(l=>({value:l,label:l}))} sx={{width:140,marginBottom:0}}/>
                   <Sel label="Unit Type" value={pickUnitType} onChange={setPickUnitType}
@@ -4483,6 +4641,83 @@ ${EXTRACT_SCHEMA}`;
               <div style={{padding:"14px 22px",borderTop:`1px solid ${T.border}`,display:"flex",gap:8,justifyContent:"flex-end"}}>
                 <Btn v="gho" onClick={()=>setShowPushModal(false)}>Cancel</Btn>
                 <Btn v="grn" onClick={()=>pushToEstimate(pushSel)}>Push {items.length} items →</Btn>
+              </div>
+            </div>
+          </div>;
+        })()}
+
+        {/* ── Copy to building modal */}
+        {showCopyModal&&(()=>{
+          const regUnits=unitReg.units||[];
+          if(!regUnits.length) return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}}
+            onClick={()=>setShowCopyModal(false)}>
+            <div style={{background:T.card,borderRadius:12,padding:24,maxWidth:420}} onClick={e=>e.stopPropagation()}>
+              <div style={{fontWeight:700,marginBottom:8}}>No units in register</div>
+              <div style={{color:T.muted,fontSize:13,marginBottom:12}}>Set up your building register first using the "⚙ Building Register" button in the picker header.</div>
+              <Btn v="gho" onClick={()=>setShowCopyModal(false)}>Close</Btn>
+            </div>
+          </div>;
+          // Build the matrix: rows = levels present in register (from items + overrides), cols = units
+          const allLevels=[...new Set([
+            pickLevel,
+            ...items.map(i=>i.cab?.level||"Ground Floor"),
+            ...regUnits.flatMap(u=>Object.keys(u.overrides||{}))
+          ])].sort((a,b)=>{const ai=BUILDING_LEVELS.indexOf(a),bi=BUILDING_LEVELS.indexOf(b);return(ai<0?99:ai)-(bi<0?99:bi);});
+          const sourceItems=items.filter(i=>i.cab?.unit===pickUnit&&i.cab?.room===pickRoom.trim());
+          const confirmedTargets=[...copyTargets].map(k=>{const [lvl,...rest]=k.split("|");const un=rest.join("|");return{level:lvl,unit:un,unitType:resolveRegType(un,lvl)};});
+          return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+            onClick={()=>setShowCopyModal(false)}>
+            <div onClick={e=>e.stopPropagation()} style={{background:T.card,borderRadius:12,width:700,maxWidth:"98vw",maxHeight:"90vh",display:"flex",flexDirection:"column",border:`1px solid ${T.border}`,boxShadow:"0 24px 60px rgba(0,0,0,0.5)"}}>
+              <div style={{padding:"18px 22px",borderBottom:`1px solid ${T.border}`}}>
+                <div style={{fontWeight:800,fontSize:16,marginBottom:2}}>🏗 Copy to building</div>
+                <div style={{color:T.muted,fontSize:12}}>Replicate {sourceItems.length} item{sourceItems.length!==1?"s":""} from Unit {pickUnit} · {pickRoom.trim()} to selected units and levels. The unit type is resolved from your building register.</div>
+              </div>
+              <div style={{flex:1,overflowY:"auto",padding:"12px 22px"}}>
+                <Row gap={8} sx={{marginBottom:10}}>
+                  <Btn sm v="gho" onClick={()=>{const all=new Set();regUnits.forEach(u=>allLevels.forEach(l=>{if(u.number!==pickUnit||l!==pickLevel)all.add(`${l}|${u.number}`);}));setCopyTargets(all);}}>Select all</Btn>
+                  <Btn sm v="gho" onClick={()=>setCopyTargets(new Set())}>Clear all</Btn>
+                  <Btn sm v="gho" onClick={()=>{const same=new Set();const srcType=resolveRegType(pickUnit,pickLevel)||pickUnitType;regUnits.forEach(u=>allLevels.forEach(l=>{if((u.number!==pickUnit||l!==pickLevel)&&(resolveRegType(u.number,l)||u.defaultType)===srcType)same.add(`${l}|${u.number}`);}));setCopyTargets(same);}}>Same unit type only</Btn>
+                </Row>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{borderCollapse:"collapse",fontSize:11,width:"100%"}}>
+                    <thead>
+                      <tr style={{background:T.bg}}>
+                        <th style={{padding:"6px 10px",textAlign:"left",color:T.faint,fontWeight:600,minWidth:100}}>Level</th>
+                        {regUnits.map(u=><th key={u.id} style={{padding:"6px 10px",textAlign:"center",color:T.faint,fontWeight:600,minWidth:80}}>
+                          <div style={{fontFamily:T.mono,color:T.text}}>Unit {u.number}</div>
+                        </th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allLevels.map(lvl=>(
+                        <tr key={lvl} style={{borderTop:`1px solid ${T.border}`}}>
+                          <td style={{padding:"6px 10px",color:T.muted,fontWeight:600}}>{lvl}</td>
+                          {regUnits.map(u=>{
+                            const key=`${lvl}|${u.number}`;
+                            const isSource=u.number===pickUnit&&lvl===pickLevel;
+                            const resolvedType=resolveRegType(u.number,lvl)||u.defaultType;
+                            const checked=copyTargets.has(key);
+                            return <td key={u.id} style={{padding:"6px 10px",textAlign:"center",background:isSource?`${T.accent}12`:""}}>
+                              {isSource
+                                ?<span style={{fontSize:10,color:T.accent,fontWeight:700}}>SOURCE</span>
+                                :<label style={{cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                                  <input type="checkbox" checked={checked} onChange={e=>{setCopyTargets(prev=>{const n=new Set(prev);e.target.checked?n.add(key):n.delete(key);return n;});}}/>
+                                  <span style={{fontSize:10,color:T.faint}}>{resolvedType}</span>
+                                </label>}
+                            </td>;
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div style={{padding:"14px 22px",borderTop:`1px solid ${T.border}`,display:"flex",gap:8,justifyContent:"flex-end",alignItems:"center"}}>
+                <span style={{fontSize:12,color:T.muted,marginRight:"auto"}}>{copyTargets.size} destination{copyTargets.size!==1?"s":""} selected · {sourceItems.length * copyTargets.size} items will be created</span>
+                <Btn v="gho" onClick={()=>setShowCopyModal(false)}>Cancel</Btn>
+                <Btn v="grn" onClick={()=>copyToBuilding(confirmedTargets)} disabled={!copyTargets.size||!sourceItems.length}>
+                  Copy {sourceItems.length}×{copyTargets.size} items →
+                </Btn>
               </div>
             </div>
           </div>;
