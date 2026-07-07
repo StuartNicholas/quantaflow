@@ -2227,14 +2227,14 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
   const sm = STATUS[proj.status]||STATUS.draft;
 
   const TABS = [
-    {id:"takeoff",  label:"① Takeoff"},
-    {id:"preset",   label:"② Cabinet Preset"},
-    {id:"estimate", label:"③ Estimate"},
-    {id:"quote",    label:"④ Quote"},
-    {id:"orderlist",    label:"🧾 Order List"},
-    {id:"production",   label:"🏗️ Production"},
-    {id:"selections",   label:"🎨 Selections"},
-    {id:"procurement",  label:"Procurement"},
+    {id:"takeoff",    label:"① Takeoff"},
+    {id:"schemes",    label:"🎨 Schemes"},
+    {id:"preset",     label:"② Cabinet Preset"},
+    {id:"estimate",   label:"③ Estimate"},
+    {id:"quote",      label:"④ Quote"},
+    {id:"orderlist",  label:"🧾 Order List"},
+    {id:"production", label:"🏗️ Production"},
+    {id:"procurement",label:"Procurement"},
     {id:"jobcost",      label:"Job Costs"},
     {id:"handover",     label:"Handover"},
     {id:"claims",       label:"Claims"},
@@ -2268,8 +2268,8 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
     {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} variations={variations} onMutate={onMutate} pop={pop}/>}
     {tab==="orderlist"    && <OrderListModule proj={proj} pop={pop}/>}
+    {tab==="schemes"      && <SchemesModule proj={proj} pop={pop}/>}
     {tab==="production"   && <ProductionModule proj={proj} pop={pop}/>}
-    {tab==="selections"   && <SelectionsModule proj={proj} pop={pop}/>}
     {tab==="procurement"  && <ProcurementModule proj={proj} pop={pop}/>}
     {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} onMutate={onMutate} pop={pop}/>}
     {tab==="handover"  && <HandoverModule proj={proj} onMutate={onMutate} pop={pop}/>}
@@ -6161,17 +6161,11 @@ function ProductionModule({proj, pop}) {
           </span>}
         </div>
       </Row>
-      {filledCells>0&&<div style={{height:5,background:T.border,borderRadius:3,marginTop:10,overflow:"hidden"}}>
-        {PROD_STATUSES.map((s,si)=>{
+      {filledCells>0&&<div style={{height:5,background:T.border,borderRadius:3,marginTop:10,overflow:"hidden",display:"flex"}}>
+        {PROD_STATUSES.map(s=>{
           const pct=(statusCounts[s.key]||0)/filledCells*100;
-          const left=PROD_STATUSES.slice(0,si).reduce((sum,ss)=>sum+(statusCounts[ss.key]||0)/filledCells*100,0);
-          return pct>0?<div key={s.key} style={{position:"absolute",left:`${left}%`,width:`${pct}%`,height:"100%",background:s.color,transition:"width 0.3s"}}/>:null;
+          return pct>0?<div key={s.key} style={{width:`${pct}%`,height:"100%",background:s.color,transition:"width 0.3s"}}/>:null;
         })}
-        <div style={{position:"relative",height:"100%"}}>{PROD_STATUSES.map((s,si)=>{
-          const pct=(statusCounts[s.key]||0)/filledCells*100;
-          const left=PROD_STATUSES.slice(0,si).reduce((sum,ss)=>sum+(statusCounts[ss.key]||0)/filledCells*100,0);
-          return pct>0?<div key={s.key} style={{position:"absolute",left:`${left}%`,width:`${pct}%`,height:"100%",background:s.color}}/>:null;
-        })}</div>
       </div>}
     </Card>
 
@@ -6242,91 +6236,292 @@ function ProductionModule({proj, pop}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SELECTIONS MODULE — per unit type material finish choices
+// SCHEMES MODULE — colour scheme definitions + unit register
+// Three modes: single project scheme / by unit type / by individual unit + room
 // ═══════════════════════════════════════════════════════════════════════════
-const SEL_FIELDS=[
-  {key:"carcass",    label:"Carcass Board",   placeholder:"e.g. Laminex Chalk 16mm HMR"},
-  {key:"fronts",     label:"Door/Drawer Fronts",placeholder:"e.g. Polytec Driftwood PVC Wrap"},
-  {key:"benchtop",   label:"Benchtop",         placeholder:"e.g. Caesarstone Pure White 20mm"},
-  {key:"handle",     label:"Handle / Hardware",placeholder:"e.g. Brushed nickel bar 128mm"},
-  {key:"kickboard",  label:"Kickboard",         placeholder:"e.g. Match carcass"},
-  {key:"notes",      label:"Notes",             placeholder:"Special instructions…"},
+const SCHEME_ROOMS=["Kitchen","Bathroom","Ensuite","Powder Room","Laundry","WIR / Robe","Linen / Pantry","Living / Other"];
+const SCHEME_FIELDS=[
+  {key:"carcass",   label:"Carcass Board",     ph:"e.g. Laminex Chalk 16mm HMR"},
+  {key:"fronts",    label:"Door / Drawer Fronts",ph:"e.g. Polytec Driftwood PVC"},
+  {key:"benchtop",  label:"Benchtop",            ph:"e.g. Caesarstone Pure White 20mm"},
+  {key:"handle",    label:"Handle / Hardware",   ph:"e.g. Brushed nickel bar 128mm"},
+  {key:"kickboard", label:"Kickboard",            ph:"e.g. Match carcass"},
+  {key:"notes",     label:"Notes",               ph:"Special instructions…"},
 ];
-const SEL_SCOPES=["Kitchens","Laundry","Robes & WIR","Linen & Storage","Vanity Units","Other"];
+const SCHEME_DEFAULTS={mode:"single",schemes:[],units:[],utSchemes:{}};
 
-function SelectionsModule({proj, pop}) {
-  const storeKey=`qf_sel_${proj.id}`;
-  // selections[unitType][scope][fieldKey] = string
-  const [sel, setSel] = useState({});
-  const [dirty, setDirty] = useState(false);
+function SchemesModule({proj, pop}) {
+  const storeKey=`qf_schemes_${proj.id}`;
+  const [data, setData] = useState(SCHEME_DEFAULTS);
+  const [openId, setOpenId] = useState(null); // expanded scheme id
 
   useEffect(()=>{
-    try{ const s=localStorage.getItem(storeKey); if(s) setSel(JSON.parse(s)); }catch{}
+    try{ const s=localStorage.getItem(storeKey); if(s) setData({...SCHEME_DEFAULTS,...JSON.parse(s)}); }catch{}
   },[proj.id]);
 
-  function setField(ut,scope,field,val){
-    setSel(prev=>{
-      const n={...prev,[ut]:{...prev[ut],[scope]:{...(prev[ut]||{})[scope],[field]:val}}};
-      try{ localStorage.setItem(storeKey,JSON.stringify(n)); }catch{}
-      return n;
-    });
-    setDirty(true);
+  function save(next){ setData(next); try{ localStorage.setItem(storeKey,JSON.stringify(next)); }catch{} }
+
+  function addScheme(){
+    const id=`sc${Date.now()}`;
+    const next={...data,schemes:[...data.schemes,{id,name:`Scheme ${data.schemes.length+1}`,rooms:{}}]};
+    save(next); setOpenId(id);
+  }
+  function updScheme(id,fn){ save({...data,schemes:data.schemes.map(s=>s.id===id?fn(s):s)}); }
+  function delScheme(id){ save({...data,schemes:data.schemes.filter(s=>s.id!==id)}); if(openId===id)setOpenId(null); }
+  function setRoomField(schId,room,field,val){
+    updScheme(schId,s=>({...s,rooms:{...s.rooms,[room]:{...(s.rooms[room]||{}),[field]:val}}}));
   }
 
-  // Build unit types from takeoff items
+  // Unit register helpers
+  function addUnit(){
+    const u={id:`u${Date.now()}`,unitNo:"",level:"Ground Floor",unitType:"",scheme:"",roomSchemes:{},upgrade:false,notes:""};
+    save({...data,units:[...data.units,u]});
+  }
+  function updUnit(id,field,val){ save({...data,units:data.units.map(u=>u.id===id?{...u,[field]:val}:u)}); }
+  function delUnit(id){ save({...data,units:data.units.filter(u=>u.id!==id)}); }
+
   const takeoffItems=proj.takeoffItems||[];
-  const usedScopes=[...new Set(takeoffItems.map(i=>joineryCategory(i)).filter(s=>SEL_SCOPES.includes(s)))];
   const usedTypes=[...new Set(takeoffItems.map(i=>i.cab?.unitType).filter(Boolean))];
-  const typesSorted=UNIT_TYPES.filter(t=>usedTypes.includes(t)).concat(usedTypes.filter(t=>!UNIT_TYPES.includes(t)));
-  const scopesSorted=SEL_SCOPES.filter(s=>usedScopes.includes(s));
+  const utSorted=UNIT_TYPES.filter(t=>usedTypes.includes(t)).concat(usedTypes.filter(t=>!UNIT_TYPES.includes(t)));
 
-  if(typesSorted.length===0){
-    return <div>
-      <Hdr sub="Record finish selections per unit type and joinery scope.">Selections</Hdr>
-      <Card><div style={{color:T.muted,fontSize:13,padding:12}}>
-        No unit types in this takeoff yet. Add items in the Takeoff tab with Unit Types assigned, then selections will appear here automatically.
-      </div></Card>
-    </div>;
-  }
+  // Palette of colours for scheme chips
+  const SC_COLORS=["#f59e0b","#3b82f6","#22c55e","#a78bfa","#ec4899","#14b8a6","#f97316","#64748b"];
+  const schemeColor=(idx)=>SC_COLORS[idx%SC_COLORS.length];
+
+  const MODE_OPTS=[
+    {key:"single",     label:"Single scheme",      desc:"One set of finishes for the whole project"},
+    {key:"byUnitType", label:"By unit type",        desc:"Type A gets one look, Type B another"},
+    {key:"byUnit",     label:"By unit (room-level)",desc:"Each apartment assigned individually — rooms can differ"},
+  ];
 
   return <div>
-    <Hdr sub="Record material and finish selections per unit type. Selections are saved to this browser automatically.">Selections</Hdr>
-    {dirty&&<div style={{marginBottom:12,padding:"8px 14px",borderRadius:6,
-      background:`${T.yellow}18`,border:`1px solid ${T.yellow}44`,fontSize:12,color:T.yellow}}>
-      Changes saved automatically to this browser.
-    </div>}
-    {typesSorted.map(ut=>(
-      <Card key={ut} sx={{marginBottom:16}}>
-        <div style={{fontWeight:800,fontSize:14,marginBottom:12,color:T.accent}}>{ut}</div>
-        {(scopesSorted.length>0?scopesSorted:["General"]).map(scope=>(
-          <div key={scope} style={{marginBottom:14}}>
-            <div style={{fontWeight:600,fontSize:11,color:JCAT_COLORS[scope]||T.faint,
-              textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8,
-              paddingBottom:4,borderBottom:`1px solid ${T.border}`}}>
-              {scope}
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:8}}>
-              {SEL_FIELDS.map(f=>(
-                <div key={f.key}>
-                  <div style={{fontSize:11,color:T.faint,marginBottom:3}}>{f.label}</div>
-                  <input
-                    value={sel[ut]?.[scope]?.[f.key]||""}
-                    onChange={e=>setField(ut,scope,f.key,e.target.value)}
-                    placeholder={f.placeholder}
-                    style={{width:"100%",padding:"6px 9px",borderRadius:5,
-                      border:`1px solid ${T.border}`,background:T.bg,
-                      color:T.text,fontSize:12,outline:"none",
-                      boxSizing:"border-box"}}
-                  />
-                </div>
-              ))}
-            </div>
+    <Hdr sub="Define colour schemes, then assign them to unit types or individual apartments room by room.">Colour Schemes</Hdr>
+
+    {/* ── Mode selector ── */}
+    <Card sx={{marginBottom:14}}>
+      <div style={{fontWeight:700,fontSize:12,color:T.faint,marginBottom:10,
+        textTransform:"uppercase",letterSpacing:"0.06em"}}>Project scheme mode</div>
+      <Row gap={8} sx={{flexWrap:"wrap"}}>
+        {MODE_OPTS.map(m=>(
+          <div key={m.key} onClick={()=>save({...data,mode:m.key})} style={{
+            flex:"1 1 160px",padding:"11px 14px",borderRadius:8,cursor:"pointer",
+            border:`2px solid ${data.mode===m.key?T.accent:T.border}`,
+            background:data.mode===m.key?`${T.accent}10`:T.bg,transition:"all 0.15s"}}>
+            <div style={{fontWeight:700,fontSize:12,color:data.mode===m.key?T.accent:T.text}}>{m.label}</div>
+            <div style={{fontSize:11,color:T.muted,marginTop:3}}>{m.desc}</div>
           </div>
         ))}
+      </Row>
+    </Card>
+
+    {/* ── Scheme definitions ── */}
+    <Row sx={{justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+      <span style={{fontWeight:700,fontSize:13}}>
+        {data.mode==="single"?"Project Finishes":"Colour Schemes"}
+      </span>
+      {(data.mode!=="single"||data.schemes.length===0)&&
+        <Btn sm v="pri" onClick={addScheme}>
+          + {data.mode==="single"?"Define finishes":"Add scheme"}
+        </Btn>}
+    </Row>
+
+    {data.schemes.length===0&&<Card sx={{marginBottom:14}}>
+      <div style={{color:T.muted,fontSize:13}}>
+        {data.mode==="single"
+          ?"Click \"Define finishes\" to specify the materials used throughout this project."
+          :"Add colour schemes (e.g. \"Light\", \"Dark\") — you'll assign them to units below."}
+      </div>
+    </Card>}
+
+    {data.schemes.map((scheme,si)=>{
+      const color=schemeColor(si);
+      const roomsConfigured=SCHEME_ROOMS.filter(r=>scheme.rooms[r]&&Object.values(scheme.rooms[r]).some(v=>v)).length;
+      const isOpen=openId===scheme.id;
+      return <Card key={scheme.id} sx={{marginBottom:10,padding:0,overflow:"hidden"}}>
+        {/* Header */}
+        <div style={{padding:"10px 14px",display:"flex",alignItems:"center",gap:10,
+          background:`${color}10`,cursor:"pointer",borderBottom:isOpen?`1px solid ${T.border}`:"none"}}
+          onClick={()=>setOpenId(isOpen?null:scheme.id)}>
+          <span style={{width:12,height:12,borderRadius:3,background:color,flexShrink:0,display:"inline-block"}}/>
+          <input value={scheme.name}
+            onChange={e=>updScheme(scheme.id,s=>({...s,name:e.target.value}))}
+            onClick={e=>e.stopPropagation()}
+            style={{fontWeight:700,fontSize:13,border:"none",background:"transparent",
+              color:color,outline:"none",flex:1,minWidth:80}}/>
+          <span style={{color:T.faint,fontSize:11}}>
+            {roomsConfigured>0?`${roomsConfigured} room${roomsConfigured!==1?"s":""} set`:"no rooms set yet"}
+          </span>
+          <span style={{color:T.faint,fontSize:12}}>{isOpen?"▲":"▼"}</span>
+          <Btn sm v="red" onClick={e=>{e.stopPropagation();delScheme(scheme.id);}}>✕</Btn>
+        </div>
+
+        {/* Room finishes grid */}
+        {isOpen&&<div style={{padding:"14px 16px"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16}}>
+            {SCHEME_ROOMS.map(room=>(
+              <div key={room} style={{border:`1px solid ${T.border}`,borderRadius:7,padding:"10px 12px"}}>
+                <div style={{fontWeight:600,fontSize:11,color:T.text,marginBottom:8,
+                  textTransform:"uppercase",letterSpacing:"0.05em"}}>{room}</div>
+                {SCHEME_FIELDS.map(f=>(
+                  <div key={f.key} style={{marginBottom:6}}>
+                    <div style={{fontSize:10,color:T.faint,marginBottom:2}}>{f.label}</div>
+                    <input value={scheme.rooms[room]?.[f.key]||""}
+                      onChange={e=>setRoomField(scheme.id,room,f.key,e.target.value)}
+                      placeholder={f.ph}
+                      style={{width:"100%",padding:"4px 7px",borderRadius:4,
+                        border:`1px solid ${T.border}`,background:T.bg,
+                        color:T.text,fontSize:11,outline:"none",boxSizing:"border-box"}}/>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>}
+      </Card>;
+    })}
+
+    {/* ── By unit type: assign schemes to types ── */}
+    {data.mode==="byUnitType"&&data.schemes.length>0&&<>
+      <div style={{fontWeight:700,fontSize:13,margin:"16px 0 8px"}}>Assign schemes to unit types</div>
+      <Card>
+        {(utSorted.length>0?utSorted:UNIT_TYPES.slice(0,6)).map(ut=>(
+          <Row key={ut} gap={12} sx={{padding:"7px 0",borderBottom:`1px solid ${T.border}44`,alignItems:"center"}}>
+            <span style={{fontWeight:600,fontSize:12,flex:1}}>{ut}</span>
+            <select value={data.utSchemes[ut]||""}
+              onChange={e=>save({...data,utSchemes:{...data.utSchemes,[ut]:e.target.value}})}
+              style={{border:`1px solid ${T.border}`,borderRadius:5,padding:"4px 8px",
+                background:T.bg,color:T.text,fontSize:12}}>
+              <option value="">— no scheme —</option>
+              {data.schemes.map((s,si)=>(
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+            {data.utSchemes[ut]&&(()=>{
+              const idx=data.schemes.findIndex(s=>s.id===data.utSchemes[ut]);
+              const color=schemeColor(idx);
+              return <span style={{width:10,height:10,borderRadius:2,background:color,display:"inline-block"}}/>;
+            })()}
+          </Row>
+        ))}
       </Card>
-    ))}
-    <div style={{fontSize:11,color:T.faint,marginTop:4}}>
-      Tip: selections are stored in this browser. Export to PDF via the Quote tab once complete.
+    </>}
+
+    {/* ── By unit: unit register ── */}
+    {data.mode==="byUnit"&&<>
+      <Row sx={{justifyContent:"space-between",alignItems:"center",margin:"16px 0 8px"}}>
+        <div>
+          <span style={{fontWeight:700,fontSize:13}}>Unit Register</span>
+          <span style={{color:T.faint,fontSize:11,marginLeft:8}}>{data.units.length} unit{data.units.length!==1?"s":""}</span>
+        </div>
+        <Btn sm v="pri" onClick={addUnit}>+ Add Unit</Btn>
+      </Row>
+
+      {data.units.length===0
+        ?<Card><div style={{color:T.muted,fontSize:13}}>
+            Add each apartment — assign an overall scheme, then override room-by-room if needed.
+          </div></Card>
+        :<Card sx={{padding:0,overflow:"hidden"}}>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{background:T.bg}}>
+                {["Unit No.","Level","Type","Overall Scheme","Room overrides (click to change)","Upgrade","Notes",""].map(h=>(
+                  <th key={h} style={{padding:"7px 10px",fontSize:10,fontWeight:700,color:T.faint,
+                    textAlign:"left",whiteSpace:"nowrap",textTransform:"uppercase",letterSpacing:"0.04em"}}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {data.units.map(u=>{
+                  const globalSchemeIdx=data.schemes.findIndex(s=>s.id===u.scheme);
+                  const globalColor=globalSchemeIdx>=0?schemeColor(globalSchemeIdx):T.border;
+                  return <tr key={u.id} style={{borderTop:`1px solid ${T.border}`}}>
+                    {/* Unit No */}
+                    <td style={{padding:"5px 8px"}}>
+                      <input value={u.unitNo} onChange={e=>updUnit(u.id,"unitNo",e.target.value)}
+                        placeholder="e.g. 501"
+                        style={{width:58,border:`1px solid ${T.border}`,borderRadius:4,
+                          padding:"3px 6px",background:T.bg,color:T.text,fontSize:12}}/>
+                    </td>
+                    {/* Level */}
+                    <td style={{padding:"5px 8px"}}>
+                      <select value={u.level||"Ground Floor"} onChange={e=>updUnit(u.id,"level",e.target.value)}
+                        style={{border:`1px solid ${T.border}`,borderRadius:4,padding:"3px 6px",
+                          background:T.bg,color:T.text,fontSize:11,maxWidth:120}}>
+                        {BUILDING_LEVELS.map(l=><option key={l} value={l}>{l}</option>)}
+                      </select>
+                    </td>
+                    {/* Unit Type */}
+                    <td style={{padding:"5px 8px"}}>
+                      <select value={u.unitType||""} onChange={e=>updUnit(u.id,"unitType",e.target.value)}
+                        style={{border:`1px solid ${T.border}`,borderRadius:4,padding:"3px 6px",
+                          background:T.bg,color:T.text,fontSize:11,maxWidth:100}}>
+                        <option value="">—</option>
+                        {UNIT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </td>
+                    {/* Overall scheme */}
+                    <td style={{padding:"5px 8px"}}>
+                      <Row gap={5} sx={{alignItems:"center"}}>
+                        {globalSchemeIdx>=0&&<span style={{width:9,height:9,borderRadius:2,
+                          background:globalColor,display:"inline-block",flexShrink:0}}/>}
+                        <select value={u.scheme||""} onChange={e=>updUnit(u.id,"scheme",e.target.value)}
+                          style={{border:`1px solid ${u.scheme?globalColor:T.border}`,borderRadius:4,
+                            padding:"3px 6px",background:u.scheme?`${globalColor}12`:T.bg,
+                            color:T.text,fontSize:11,maxWidth:120}}>
+                          <option value="">— none —</option>
+                          {data.schemes.map((s,si)=>(
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                          ))}
+                        </select>
+                      </Row>
+                    </td>
+                    {/* Room overrides */}
+                    <td style={{padding:"5px 8px"}}>
+                      <div style={{display:"flex",gap:3,flexWrap:"wrap",maxWidth:320}}>
+                        {SCHEME_ROOMS.slice(0,6).map(room=>{
+                          const ovIdx=data.schemes.findIndex(s=>s.id===u.roomSchemes?.[room]);
+                          const ovColor=ovIdx>=0?schemeColor(ovIdx):null;
+                          const hasOv=!!u.roomSchemes?.[room];
+                          return <select key={room}
+                            value={u.roomSchemes?.[room]||""}
+                            onChange={e=>updUnit(u.id,"roomSchemes",{...u.roomSchemes,[room]:e.target.value})}
+                            title={`${room} scheme`}
+                            style={{border:`1px solid ${hasOv?ovColor:T.border}`,borderRadius:4,
+                              padding:"2px 4px",background:hasOv?`${ovColor}18`:T.bg,
+                              color:hasOv?ovColor:T.faint,fontSize:10,maxWidth:100}}>
+                            <option value="">{room.split("/")[0].trim()}: inherit</option>
+                            {data.schemes.map((s,si)=>(
+                              <option key={s.id} value={s.id}>{room.split("/")[0].trim()}: {s.name}</option>
+                            ))}
+                          </select>;
+                        })}
+                      </div>
+                    </td>
+                    {/* Upgrade */}
+                    <td style={{padding:"5px 8px",textAlign:"center"}}>
+                      <input type="checkbox" checked={u.upgrade||false}
+                        onChange={e=>updUnit(u.id,"upgrade",e.target.checked)}
+                        title="Upgrade unit"/>
+                    </td>
+                    {/* Notes */}
+                    <td style={{padding:"5px 8px"}}>
+                      <input value={u.notes||""} onChange={e=>updUnit(u.id,"notes",e.target.value)}
+                        placeholder="Notes…"
+                        style={{width:110,border:`1px solid ${T.border}`,borderRadius:4,
+                          padding:"3px 6px",background:T.bg,color:T.text,fontSize:12}}/>
+                    </td>
+                    <td style={{padding:"5px 8px"}}>
+                      <span onClick={()=>delUnit(u.id)} style={{cursor:"pointer",color:T.red,fontSize:13}}>✕</span>
+                    </td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>}
+    </>}
+
+    <div style={{marginTop:14,fontSize:11,color:T.faint}}>
+      Scheme data saves automatically to this browser per project.
     </div>
   </div>;
 }
