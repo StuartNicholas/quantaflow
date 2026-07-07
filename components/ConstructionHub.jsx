@@ -4329,10 +4329,38 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
     setShowAdd(false); pop("Item added.");
   }
 
-  const grouped = CATS.filter(cat=>(proj.lineItems||[]).some(li=>li.category===cat));
+  const [estView, setEstView] = useState("category"); // "category"|"joinery"|"unit"|"level"
+
+  // Build grouping based on estView for the internal estimate table
+  function buildEstGroups() {
+    const all = proj.lineItems||[];
+    const levelOrder=["Ground Floor","Basement","Mezzanine","Level 1","Level 2","Level 3","Other"];
+    const jcatOrder=["Base Cabinets","Wall Cabinets","Tall Cabinets","Vanity Units","Island Units","Robes","Benchtops","Splashbacks","Panels & Fillers","Other"];
+    if(estView==="joinery") {
+      const g={};
+      all.forEach(li=>{const jc=joineryCategory(li);if(!g[jc])g[jc]=[];g[jc].push(li);});
+      return jcatOrder.filter(c=>g[c]).concat(Object.keys(g).filter(c=>!jcatOrder.includes(c)))
+        .map(c=>({key:c, label:c, color:JCAT_COLORS[c]||T.faint, items:g[c]}));
+    }
+    if(estView==="unit") {
+      const g={};
+      all.forEach(li=>{const u=li.unit||"ea";if(!g[u])g[u]=[];g[u].push(li);});
+      return Object.entries(g).map(([u,its])=>({key:u, label:u.toUpperCase(), color:T.blue, items:its}));
+    }
+    if(estView==="level") {
+      const g={};
+      all.forEach(li=>{const lvl=li.cab?.level||"Ground Floor";if(!g[lvl])g[lvl]=[];g[lvl].push(li);});
+      const sorted=levelOrder.filter(l=>g[l]).concat(Object.keys(g).filter(l=>!levelOrder.includes(l)));
+      return sorted.map(l=>({key:l, label:l, color:T.purple, items:g[l]}));
+    }
+    // default: by trade category
+    return CATS.filter(cat=>all.some(li=>li.category===cat))
+      .map(cat=>({key:cat, label:cat, color:T.faint, items:all.filter(li=>li.category===cat)}));
+  }
+  const grouped = buildEstGroups();
 
   return <div>
-    <Row gap={8} sx={{marginBottom:16,flexWrap:"wrap"}}>
+    <Row gap={8} sx={{marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
       <Btn v="pri" onClick={()=>setShowAdd(!showAdd)}>+ Add Item</Btn>
       <Btn v="blu" onClick={()=>setShowRates(!showRates)}>⇥ Rate Library</Btn>
       {(proj.lineItems||[]).length>0&&<Btn v="gho" onClick={saveTemplate}>💾 Save as Template</Btn>}
@@ -4341,6 +4369,13 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
         ? <Btn v="pur" onClick={()=>setShowCabSetup(!showCabSetup)}>🪵 Cabinetry Setup {showCabSetup?"▴":"▾"}</Btn>
         : <Btn v="pur" onClick={initCabConfig}>🪵 Set Up Cabinetry Pricing</Btn>)}
       {cc&&(proj.lineItems||[]).some(li=>li.cab)&&<Btn v="yel" onClick={repriceCabItems}>↻ Re-price Cabinetry</Btn>}
+      {(proj.lineItems||[]).length>0&&<div style={{display:"flex",gap:3,background:T.bg,borderRadius:6,padding:2,border:`1px solid ${T.border}`,marginLeft:"auto"}}>
+        {[["category","Trade"],["joinery","Joinery"],["unit","Unit"],["level","Level"]].map(([m,l])=>
+          <div key={m} onClick={()=>setEstView(m)} style={{
+            padding:"4px 10px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:600,
+            background:estView===m?T.card:T.bg,color:estView===m?T.accent:T.muted,
+            transition:"all 0.15s"}}>{l}</div>)}
+      </div>}
       {(proj.takeoffItems||[]).length>0&&<Btn v="tel" onClick={async()=>{
         const cfg=proj.cabConfig||cabLib||SEED_CABLIB;
         const add=(proj.takeoffItems||[]).map(ti=>{
@@ -4491,13 +4526,12 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
       No line items yet. Add manually, import from Rate Library, or import from Takeoff.
     </Card>}
 
-    {/* Line items by category */}
-    {grouped.map(cat=>{
-      const catItems=(proj.lineItems||[]).filter(li=>li.category===cat);
+    {/* Line items — grouped by current estView */}
+    {grouped.map(({key,label,color,items:catItems})=>{
       const catTotal=catItems.reduce((s,li)=>s+(li.qty||0)*(li.rate||0)*(1+((li.margin||0)/100)),0);
-      return <div key={cat} style={{marginBottom:14}}>
+      return <div key={key} style={{marginBottom:14}}>
         <Row gap={8} sx={{marginBottom:5}}>
-          <div style={{color:T.muted,fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em"}}>{cat}</div>
+          <div style={{color:color||T.muted,fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em"}}>{label}</div>
           <div style={{color:T.faint,fontSize:12,fontFamily:T.mono}}>{$$(catTotal,true)}</div>
         </Row>
         <Card sx={{padding:0,overflow:"hidden"}}>
@@ -4578,7 +4612,7 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
 
 // Shared print-ready quote document. Accepts either a locked version snapshot
 // or a computed draft preview — caller normalises the data shape.
-function QuoteDocument({items, marginPct, overheadPct, gstPct, depositPct, versionNum, issuedAt, proj, company, variations}) {
+function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, depositPct, versionNum, issuedAt, proj, company, variations}) {
   const approvedVars = (variations||[]).filter(v=>v.status==="approved");
   const varTotal = approvedVars.reduce((s,v)=>s+(v.amount||0),0);
   const sub = (items||[]).reduce((s,item)=> s+(item.qty||0)*(item.rate||0)*(1+((item.margin_pct??marginPct??0)/100)), 0);
@@ -4596,8 +4630,6 @@ function QuoteDocument({items, marginPct, overheadPct, gstPct, depositPct, versi
   const expiryStr = issuedAt
     ? new Date(new Date(issuedAt).getTime()+30*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"})
     : new Date(Date.now()+30*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
-  const cats = [...new Set((items||[]).map(i=>i.category).filter(Boolean))];
-
   return <div style={{background:"#fff",color:"#111827",borderRadius:8,padding:"44px 54px",
     maxWidth:840,fontFamily:"Georgia,serif",fontSize:13,lineHeight:1.65,margin:"0 auto",
     boxShadow:"0 4px 40px rgba(0,0,0,0.5)"}}>
@@ -4635,31 +4667,84 @@ function QuoteDocument({items, marginPct, overheadPct, gstPct, depositPct, versi
       {(proj.description||proj.notes)&&<div style={{color:"#6b7280",fontSize:12}}>{proj.description||proj.notes}</div>}
     </div>
 
-    {cats.length===0&&!approvedVars.length&&<div style={{color:"#9ca3af",fontSize:12,padding:"16px 0",textAlign:"center"}}>No line items.</div>}
-    {cats.map(cat=>{
-      const catItems=(items||[]).filter(li=>li.category===cat);
-      return <div key={cat} style={{marginBottom:18}}>
-        <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
-          textTransform:"uppercase",letterSpacing:"0.05em",color:"#b45309",
-          marginBottom:5,paddingBottom:3,borderBottom:"1px solid #e8d8b0"}}>{cat}</div>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-          <thead><tr style={{color:"#9ca3af",textAlign:"left",fontFamily:"system-ui,sans-serif",fontSize:11}}>
-            <th style={{padding:"3px 0",fontWeight:600}}>Description</th>
-            <th style={{padding:"3px 8px",textAlign:"right",fontWeight:600}}>Qty</th>
-            <th style={{padding:"3px 8px",textAlign:"right",fontWeight:600}}>Unit</th>
-            <th style={{padding:"3px 0",textAlign:"right",fontWeight:600}}>Amount</th>
-          </tr></thead>
-          <tbody>{catItems.map((li,i)=><tr key={li.id||i} style={{borderBottom:"1px solid #f0e8d8"}}>
-            <td style={{padding:"5px 0"}}>{li.description}</td>
-            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace"}}>{li.qty}</td>
-            <td style={{padding:"5px 8px",textAlign:"right",color:"#9ca3af"}}>{li.unit}</td>
-            <td style={{padding:"5px 0",textAlign:"right",fontFamily:"monospace",fontWeight:600}}>
-              {$$((li.qty||0)*(li.rate||0)*(1+((li.margin_pct??marginPct??0)/100)))}
-            </td>
-          </tr>)}</tbody>
-        </table>
-      </div>;
-    })}
+    {(()=>{
+      const lineAmt=li=>(li.qty||0)*(li.rate||0)*(1+((li.margin_pct??marginPct??0)/100));
+      const levelOrder=["Ground Floor","Basement","Mezzanine","Level 1","Level 2","Level 3","Other"];
+      const jcatOrder=["Base Cabinets","Wall Cabinets","Tall Cabinets","Vanity Units","Island Units","Robes","Benchtops","Splashbacks","Panels & Fillers","Other"];
+      const UNIT_LABELS={"ea":"Supply & Install","lm":"Lineal Metres","m²":"Square Metres","m³":"Cubic Metres","set":"Lump Sum"};
+      const hdrStyle={fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+        textTransform:"uppercase",letterSpacing:"0.05em",color:"#b45309",
+        marginBottom:5,paddingBottom:3,borderBottom:"1px solid #e8d8b0"};
+      const detailThead=<thead><tr style={{color:"#9ca3af",textAlign:"left",fontFamily:"system-ui,sans-serif",fontSize:11}}>
+        <th style={{padding:"3px 0",fontWeight:600}}>Description</th>
+        <th style={{padding:"3px 8px",textAlign:"right",fontWeight:600}}>Qty</th>
+        <th style={{padding:"3px 8px",textAlign:"right",fontWeight:600}}>Unit</th>
+        <th style={{padding:"3px 0",textAlign:"right",fontWeight:600}}>Amount</th>
+      </tr></thead>;
+
+      let sections=[];
+      if(quoteView==="joinery") {
+        // Summary: one row per joinery type, no per-item detail
+        const g={};
+        (items||[]).forEach(li=>{const jc=joineryCategory(li);if(!g[jc])g[jc]={total:0,count:0};g[jc].total+=lineAmt(li);g[jc].count++;});
+        const ord=jcatOrder.filter(c=>g[c]).concat(Object.keys(g).filter(c=>!jcatOrder.includes(c)));
+        sections=ord.map(c=>({key:c, hdr:c, mode:"summary", rows:[{desc:c, qty:g[c].count, unit:"items", total:g[c].total}]}));
+      } else if(quoteView==="unit") {
+        // Summary: one row per unit type, total only
+        const g={};
+        (items||[]).forEach(li=>{const u=li.unit||"ea";if(!g[u])g[u]={total:0,qty:0};g[u].total+=lineAmt(li);g[u].qty+=li.qty||0;});
+        sections=Object.entries(g).map(([u,d])=>({
+          key:u, hdr:UNIT_LABELS[u]||u, mode:"summary",
+          rows:[{desc:UNIT_LABELS[u]?`${UNIT_LABELS[u]} (${u})`:u, qty:parseFloat(d.qty.toFixed(2)), unit:u, total:d.total}]
+        }));
+      } else if(quoteView==="unit-individual") {
+        // Detail: all items, grouped under unit-type header
+        const g={};
+        (items||[]).forEach(li=>{const u=li.unit||"ea";if(!g[u])g[u]=[];g[u].push(li);});
+        sections=Object.entries(g).map(([u,its])=>({key:u, hdr:`${UNIT_LABELS[u]||u} — ${u}`, mode:"detail", items:its}));
+      } else if(quoteView==="level") {
+        // Detail: all items, grouped under building level header
+        const g={};
+        (items||[]).forEach(li=>{const lvl=li.cab?.level||"Ground Floor";if(!g[lvl])g[lvl]=[];g[lvl].push(li);});
+        const sorted=levelOrder.filter(l=>g[l]).concat(Object.keys(g).filter(l=>!levelOrder.includes(l)));
+        sections=sorted.map(l=>({key:l, hdr:l, mode:"detail", items:g[l]}));
+      } else {
+        // Default: by trade category
+        const cats=[...new Set((items||[]).map(i=>i.category).filter(Boolean))];
+        sections=cats.map(cat=>({key:cat, hdr:cat, mode:"detail", items:(items||[]).filter(li=>li.category===cat)}));
+      }
+
+      if(sections.length===0&&!approvedVars.length)
+        return <div style={{color:"#9ca3af",fontSize:12,padding:"16px 0",textAlign:"center"}}>No line items.</div>;
+
+      return sections.map(sec=>(
+        <div key={sec.key} style={{marginBottom:18}}>
+          <div style={hdrStyle}>{sec.hdr}</div>
+          {sec.mode==="summary" ? (
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <tbody>{sec.rows.map((row,ri)=>(
+                <tr key={ri} style={{borderBottom:"1px solid #f0e8d8"}}>
+                  <td style={{padding:"6px 0"}}>{row.desc}</td>
+                  <td style={{padding:"6px 0",textAlign:"right",fontFamily:"monospace",fontWeight:600,color:"#111827"}}>{$$(row.total)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          ) : (
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              {detailThead}
+              <tbody>{(sec.items||[]).map((li,i)=>(
+                <tr key={li.id||i} style={{borderBottom:"1px solid #f0e8d8"}}>
+                  <td style={{padding:"5px 0"}}>{li.description}</td>
+                  <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace"}}>{li.qty}</td>
+                  <td style={{padding:"5px 8px",textAlign:"right",color:"#9ca3af"}}>{li.unit}</td>
+                  <td style={{padding:"5px 0",textAlign:"right",fontFamily:"monospace",fontWeight:600}}>{$$(lineAmt(li))}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      ));
+    })()}
 
     {approvedVars.length>0&&<div style={{marginBottom:18}}>
       <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
@@ -4735,6 +4820,7 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
   const [gstPct,       setGstPct]       = useState(proj.gst||10);
   const [issueNotes,   setIssueNotes]   = useState("");
   const [busy,         setBusy]         = useState(false);
+  const [quoteView,    setQuoteView]    = useState("category"); // "category"|"joinery"|"unit"|"unit-individual"|"level"
 
   async function reload(keepSel) {
     setLoading(true);
@@ -4875,6 +4961,27 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
       This version was superseded when a newer quote was issued. It is read-only.
     </div>}
 
+    {/* ── Quote view mode selector (screen only — hidden on print) ── */}
+    {docItems.length>0&&<div style={{marginBottom:12,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+      <span style={{fontSize:11,color:T.faint,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em"}}>Quote format:</span>
+      {[
+        {key:"category",       label:"By Trade"},
+        {key:"joinery",        label:"Joinery Types"},
+        {key:"unit",           label:"Unit Types"},
+        {key:"unit-individual",label:"Unit Individuals"},
+        {key:"level",          label:"Level Individuals"},
+      ].map(({key,label})=>(
+        <div key={key} onClick={()=>setQuoteView(key)} style={{
+          padding:"4px 11px",borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:600,
+          background:quoteView===key?T.accent:T.card,
+          color:quoteView===key?"#fff":T.muted,
+          border:`1px solid ${quoteView===key?T.accent:T.border}`,
+          transition:"all 0.15s"}}>
+          {label}
+        </div>
+      ))}
+    </div>}
+
     {/* ── Quote document — always visible ── */}
     {docItems.length===0&&isDraft
       ? <Card><div style={{color:T.faint,fontSize:13,textAlign:"center",padding:24}}>
@@ -4884,6 +4991,7 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
         ? <Card><div style={{color:T.muted,fontSize:13}}>Loading version…</div></Card>
         : <QuoteDocument
             items={docItems}
+            quoteView={quoteView}
             marginPct={docMargin}
             overheadPct={docOverhd}
             gstPct={docGst}
