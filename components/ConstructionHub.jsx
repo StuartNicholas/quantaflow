@@ -2530,7 +2530,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="procurement"  && <ProcurementModule proj={proj} pop={pop}/>}
     {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} onMutate={onMutate} pop={pop}/>}
     {tab==="handover"  && <HandoverModule proj={proj} onMutate={onMutate} pop={pop}/>}
-    {tab==="claims"    && <ClaimsModule proj={proj} c={c} pop={pop}/>}
+    {tab==="claims"    && <ClaimsModule proj={proj} c={c} company={company} pop={pop}/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
   </div>;
 }
@@ -7246,7 +7246,169 @@ function SchemesModule({proj, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // CLAIMS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function ClaimsModule({proj, c, pop}) {
+function ClaimDocument({claim, proj, company, contractTotal, allClaims}) {
+  const items = claim.claim_items||[];
+  const claimExGst = items.reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
+  const gstAmt = claimExGst*0.10;
+  const claimIncGst = claimExGst+gstAmt;
+
+  const prevClaims=(allClaims||[]).filter(cl=>cl.id!==claim.id&&["submitted","approved","paid"].includes(cl.status));
+  const prevExGst=prevClaims.reduce((s,cl)=>s+(cl.claim_items||[]).reduce((s2,i)=>s2+(i.qty||0)*(i.unit_cost||0),0),0);
+  const prevIncGst=prevExGst*1.10;
+
+  const contractHasValue=contractTotal>0;
+  const claimRef=`PC${String(claim.claim_number).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`;
+  const dateStr=(claim.submitted_at?new Date(claim.submitted_at):new Date()).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+  const periodStr=claim.period_end?new Date(claim.period_end).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"}):null;
+
+  const parseUL=desc=>{ const m=(desc||"").match(/^Unit\s+(\S+)\s+·\s+(.+?)\s+—/); return m?{label:`Unit ${m[1].trim()} — ${m[2].trim()}`}:null; };
+  const anyParsed=items.some(i=>parseUL(i.description));
+
+  const hdrStyle={fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+    textTransform:"uppercase",letterSpacing:"0.05em",color:"#1d4ed8",
+    marginBottom:5,paddingBottom:3,borderBottom:"1px solid #bfdbfe"};
+  const rowStyle={display:"flex",justifyContent:"space-between",marginBottom:5};
+  const lblStyle={color:"#6b7280",fontFamily:"system-ui,sans-serif",fontSize:12};
+
+  return <>
+    <style>{`
+      @media print {
+        aside, .no-print { display: none !important; }
+        #qf-root { background: white !important; }
+        main { background: white !important; padding: 0 !important; overflow: visible !important; }
+        body { background: white !important; margin: 0; }
+        #qf-claim-overlay { position: static !important; background: transparent !important; padding: 0 !important; overflow: visible !important; }
+        #qf-claim-document { box-shadow: none !important; border-radius: 0 !important; margin: 0 !important; max-width: 100% !important; padding: 28px 40px !important; }
+      }
+    `}</style>
+    <div id="qf-claim-document" style={{background:"#fff",color:"#111827",borderRadius:8,padding:"44px 54px",
+      maxWidth:840,fontFamily:"Georgia,serif",fontSize:13,lineHeight:1.65,margin:"0 auto",
+      boxShadow:"0 4px 40px rgba(0,0,0,0.5)"}}>
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:28}}>
+        <div>
+          <div style={{fontWeight:900,fontSize:22,color:"#111827",fontFamily:"system-ui,sans-serif",marginBottom:4}}>{company.name}</div>
+          <div style={{color:"#6b7280",fontSize:12,lineHeight:1.75}}>
+            {company.address}<br/>
+            {company.phone} · {company.email}<br/>
+            {company.website}
+            {company.abn&&<><br/>ABN / NZBN: {company.abn}</>}
+          </div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontWeight:900,fontSize:26,color:"#1d4ed8",fontFamily:"system-ui,sans-serif",letterSpacing:"-0.5px"}}>PROGRESS CLAIM</div>
+          <div style={{fontSize:10,color:"#6b7280",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.07em",marginTop:1}}>Tax Invoice</div>
+          <div style={{color:"#6b7280",fontSize:12,marginTop:6,lineHeight:1.75}}>
+            Ref: <strong>{claimRef}</strong><br/>
+            Date: {dateStr}<br/>
+            {periodStr&&<>Period ending: {periodStr}<br/></>}
+          </div>
+        </div>
+      </div>
+      <hr style={{border:"none",borderTop:"2px solid #1d4ed8",marginBottom:24}}/>
+
+      <div style={{marginBottom:20}}>
+        <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
+          color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>Prepared For</div>
+        <div style={{fontWeight:700,fontSize:15}}>{proj.client}</div>
+        <div style={{color:"#6b7280"}}>{proj.address}</div>
+      </div>
+
+      <div style={{marginBottom:22,background:"#faf7f2",borderRadius:6,padding:"12px 18px"}}>
+        <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",marginBottom:3}}>{proj.name}</div>
+        {(proj.description||proj.notes)&&<div style={{color:"#6b7280",fontSize:12}}>{proj.description||proj.notes}</div>}
+        {claim.description&&<div style={{color:"#374151",fontSize:12,marginTop:3,fontStyle:"italic"}}>{claim.description}</div>}
+      </div>
+
+      {anyParsed ? (()=>{
+        const g={};
+        items.forEach(i=>{
+          const ul=parseUL(i.description);
+          const key=ul?ul.label:"Other";
+          if(!g[key])g[key]={label:key,items:[]};
+          g[key].items.push(i);
+        });
+        return Object.values(g).map(grp=>{
+          const grpTotal=grp.items.reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
+          return <div key={grp.label} style={{marginBottom:16}}>
+            <div style={hdrStyle}>{grp.label}</div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <tbody>
+                {grp.items.map((item,idx)=>{
+                  const room=(item.description||"").replace(/^Unit\s+\S+\s+·\s+.+?\s+—\s*/,"");
+                  return <tr key={item.id||idx} style={{borderBottom:"1px solid #f0e8d8"}}>
+                    <td style={{padding:"5px 0",color:"#374151"}}>{room}</td>
+                    <td style={{padding:"5px 0",textAlign:"right",fontFamily:"monospace",fontWeight:600}}>{$$((item.qty||0)*(item.unit_cost||0))}</td>
+                  </tr>;
+                })}
+                <tr style={{borderTop:"1px solid #dbeafe"}}>
+                  <td style={{padding:"6px 0",fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,color:"#6b7280"}}>Unit Total</td>
+                  <td style={{padding:"6px 0",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:"#111827"}}>{$$(grpTotal)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>;
+        });
+      })() : (
+        <div style={{marginBottom:16}}>
+          <div style={hdrStyle}>Claim Items</div>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead><tr style={{color:"#9ca3af",textAlign:"left",fontFamily:"system-ui,sans-serif",fontSize:11}}>
+              <th style={{padding:"3px 0",fontWeight:600}}>Description</th>
+              <th style={{padding:"3px 8px",textAlign:"right",fontWeight:600}}>Qty</th>
+              <th style={{padding:"3px 8px",textAlign:"right",fontWeight:600}}>Unit</th>
+              <th style={{padding:"3px 0",textAlign:"right",fontWeight:600}}>Amount</th>
+            </tr></thead>
+            <tbody>{items.map((item,i)=>(
+              <tr key={item.id||i} style={{borderBottom:"1px solid #f0e8d8"}}>
+                <td style={{padding:"5px 0"}}>{item.description}</td>
+                <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace"}}>{item.qty}</td>
+                <td style={{padding:"5px 8px",textAlign:"right",color:"#9ca3af"}}>{item.unit||"—"}</td>
+                <td style={{padding:"5px 0",textAlign:"right",fontFamily:"monospace",fontWeight:600}}>{$$((item.qty||0)*(item.unit_cost||0))}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={{marginTop:22,borderTop:"2px solid #1d4ed8",paddingTop:16,maxWidth:360,marginLeft:"auto"}}>
+        {contractHasValue&&<>
+          <div style={rowStyle}><span style={lblStyle}>Contract Value (inc. GST)</span><span style={{fontFamily:"monospace"}}>{$$(contractTotal)}</span></div>
+          <div style={rowStyle}><span style={lblStyle}>Previously Claimed (inc. GST)</span><span style={{fontFamily:"monospace"}}>{$$(prevIncGst)}</span></div>
+          <div style={{height:1,background:"#f0e8d8",margin:"5px 0 8px"}}/>
+        </>}
+        <div style={rowStyle}><span style={lblStyle}>This Claim (ex. GST)</span><span style={{fontFamily:"monospace"}}>{$$(claimExGst)}</span></div>
+        <div style={rowStyle}><span style={lblStyle}>GST (10%)</span><span style={{fontFamily:"monospace"}}>{$$(gstAmt)}</span></div>
+        <div style={{display:"flex",justifyContent:"space-between",borderTop:"2px solid #111827",paddingTop:9,marginTop:6}}>
+          <span style={{fontWeight:900,fontFamily:"system-ui,sans-serif",fontSize:15}}>THIS CLAIM (inc. GST)</span>
+          <span style={{fontFamily:"monospace",fontWeight:900,fontSize:17,color:"#1d4ed8"}}>{$$(claimIncGst)}</span>
+        </div>
+        {contractHasValue&&<div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:7,borderTop:"1px dashed #d1d5db"}}>
+          <span style={lblStyle}>Balance Remaining (inc. GST)</span>
+          <span style={{fontFamily:"monospace",fontWeight:700,
+            color:contractTotal-prevIncGst-claimIncGst<0?"#dc2626":"#166534"}}>
+            {$$(Math.max(0,contractTotal-prevIncGst-claimIncGst))}
+          </span>
+        </div>}
+      </div>
+
+      {company.bankAccount&&<div style={{marginTop:22,padding:"10px 14px",background:"#f9fafb",
+        borderRadius:4,fontSize:12,color:"#6b7280",borderLeft:"3px solid #e5e7eb"}}>
+        <strong style={{color:"#111827"}}>Payment Details: </strong>
+        {company.bankName} · {company.bankAccount}
+      </div>}
+
+      <div style={{marginTop:16,fontSize:11,color:"#9ca3af",borderTop:"1px solid #f3f4f6",paddingTop:12,lineHeight:1.7}}>
+        {company.paymentTerms||"Payment due within 14 days of invoice date."}<br/>
+        This is a progress payment claim made under the Building and Construction Industry Security of Payment Act and applicable state or territory legislation.
+        The respondent must pay the claimed amount or provide a payment schedule by the due date.<br/>
+        All pricing in {company.currency||"AUD"}, GST included at 10%.
+      </div>
+    </div>
+  </>;
+}
+
+function ClaimsModule({proj, c, pop, company}) {
   const [claims,      setClaims]      = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [expanded,    setExpanded]    = useState(null);
@@ -7257,6 +7419,7 @@ function ClaimsModule({proj, c, pop}) {
   const [newItem,     setNewItem]     = useState({description:"", qty:1, unit:"", unit_cost:0});
   const [unitReg,     setUnitReg]     = useState({units:[]});
   const [wiz,         setWiz]         = useState(null); // {claimNum, description, periodEnd, selections:Set}
+  const [viewClaim,   setViewClaim]   = useState(null);
 
   async function reload() {
     const { data } = await dbListClaims(proj.id);
@@ -7602,6 +7765,42 @@ function ClaimsModule({proj, c, pop}) {
       </div>
     </Card>}
 
+    {/* ── Claim document overlay ── */}
+    {viewClaim&&company&&<div id="qf-claim-overlay" style={{position:"fixed",inset:0,zIndex:10000,
+      background:"rgba(0,0,0,0.88)",display:"flex",flexDirection:"column"}}>
+      {/* Control bar — hidden on print */}
+      <div className="no-print" style={{background:"#0d1117",padding:"12px 20px",display:"flex",
+        gap:10,alignItems:"center",borderBottom:"1px solid #1c2838",flexShrink:0}}>
+        <div style={{flex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:"#dde6f0"}}>
+            Progress Claim #{viewClaim.claim_number}
+          </span>
+          {viewClaim.description&&<span style={{color:"#7a8fa5",fontSize:12,marginLeft:10}}>
+            {viewClaim.description}
+          </span>}
+        </div>
+        <Btn sm v="gho" onClick={()=>{
+          window.print();
+        }}>⎙ Print / Save as PDF</Btn>
+        <Btn sm v="gho" onClick={()=>{
+          const sub=encodeURIComponent(`Progress Claim #${viewClaim.claim_number} – ${proj.name}`);
+          const body=encodeURIComponent(`Hi ${proj.client||""},\n\nPlease find attached Progress Claim #${viewClaim.claim_number} for the above project.\n\nPlease don't hesitate to contact us if you have any questions.\n\nKind regards`);
+          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
+        }}>✉ Email</Btn>
+        <Btn sm v="gho" onClick={()=>setViewClaim(null)}>✕ Close</Btn>
+      </div>
+      {/* Document scroll area */}
+      <div style={{flex:1,overflowY:"auto",padding:"28px 20px",background:"#07090c"}}>
+        <ClaimDocument
+          claim={viewClaim}
+          proj={proj}
+          company={company}
+          contractTotal={contractVal}
+          allClaims={claims}
+        />
+      </div>
+    </div>}
+
     {claims.map(cl=>{
       const st     = STATUS[cl.status]||STATUS.draft;
       const total  = claimTotal(cl);
@@ -7626,6 +7825,11 @@ function ClaimsModule({proj, c, pop}) {
           </div>
           <Bdg color={st.c}>{st.l}</Bdg>
           <div style={{fontFamily:T.mono,fontWeight:700,fontSize:14,color:T.accent,minWidth:80,textAlign:"right"}}>{$$(total)}</div>
+          <div onClick={e=>{e.stopPropagation();setViewClaim(cl);}}
+            style={{padding:"3px 9px",borderRadius:4,fontSize:11,cursor:"pointer",fontWeight:600,
+              border:`1px solid ${T.blue}55`,color:T.blue,whiteSpace:"nowrap"}}>
+            ⎙ View
+          </div>
           <span style={{color:T.faint,fontSize:11}}>{isOpen?"▲":"▼"}</span>
         </Row>
 
@@ -7687,6 +7891,7 @@ function ClaimsModule({proj, c, pop}) {
               <Btn sm v="gho" onClick={()=>importFromEstimate(cl)}>↓ Import from Estimate</Btn>
             </>}
             {nextBtn&&<Btn sm v={nextV} onClick={()=>advance(cl)}>{nextBtn}</Btn>}
+            <Btn sm v="blu" onClick={()=>setViewClaim(cl)}>⎙ View Document</Btn>
             {cl.status==="draft"&&<Btn sm v="red" onClick={()=>removeClaim(cl)}>Delete</Btn>}
           </Row>
         </div>}
