@@ -1268,7 +1268,7 @@ export default function App() {
   if(!mounted) return null;
 
   return (
-    <div style={{minHeight:"100vh",background:T.bg,color:T.text,fontFamily:T.font,display:"flex"}}>
+    <div id="qf-root" style={{minHeight:"100vh",background:T.bg,color:T.text,fontFamily:T.font,display:"flex"}}>
 
       {/* Company setup / pending approval / cabinet wizard overlays */}
       <SetupErrorBoundary>
@@ -5450,7 +5450,7 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
 
 // Shared print-ready quote document. Accepts either a locked version snapshot
 // or a computed draft preview — caller normalises the data shape.
-function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, depositPct, versionNum, issuedAt, proj, company, variations}) {
+function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, depositPct, versionNum, issuedAt, proj, company, variations, schemes}) {
   const approvedVars = (variations||[]).filter(v=>v.status==="approved");
   const varTotal = approvedVars.reduce((s,v)=>s+(v.amount||0),0);
   const sub = (items||[]).reduce((s,item)=> s+(item.qty||0)*(item.rate||0)*(1+((item.margin_pct??marginPct??0)/100)), 0);
@@ -5468,7 +5468,16 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
   const expiryStr = issuedAt
     ? new Date(new Date(issuedAt).getTime()+30*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"})
     : new Date(Date.now()+30*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
-  return <div style={{background:"#fff",color:"#111827",borderRadius:8,padding:"44px 54px",
+  return <><style>{`
+    @media print {
+      aside, .no-print { display: none !important; }
+      #qf-root { background: white !important; }
+      main { background: white !important; padding: 0 !important; overflow: visible !important; }
+      body { background: white !important; margin: 0; }
+      #qf-quote-document { box-shadow: none !important; border-radius: 0 !important; margin: 0 !important; max-width: 100% !important; padding: 28px 40px !important; }
+    }
+  `}</style>
+  <div id="qf-quote-document" style={{background:"#fff",color:"#111827",borderRadius:8,padding:"44px 54px",
     maxWidth:840,fontFamily:"Georgia,serif",fontSize:13,lineHeight:1.65,margin:"0 auto",
     boxShadow:"0 4px 40px rgba(0,0,0,0.5)"}}>
 
@@ -5552,6 +5561,29 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
             : `${gr.unitType} — ${gr.level}`;
           return {key:`${gr.unitType}__${gr.level}`, hdr, mode:"summary", rows:[{desc:hdr, qty:gr.count, unit:"items", total:gr.total}]};
         });
+      } else if(quoteView==="byunit") {
+        // By actual unit number (101, 102, 103) — summary row per unit
+        const g={};
+        (items||[]).forEach(li=>{
+          const un=li.cab?.unit||"";
+          const key=un||"No Unit Assigned";
+          if(!g[key]) g[key]={unit:un,label:un?`Unit ${un}`:"No Unit Assigned",total:0,count:0,rooms:{}};
+          g[key].total+=lineAmt(li); g[key].count++;
+          const rm=li.cab?.room||"Other";
+          g[key].rooms[rm]=(g[key].rooms[rm]||0)+lineAmt(li);
+        });
+        const sortedU=Object.values(g).sort((a,b)=>{
+          const na=parseInt(a.unit||"99999",10), nb=parseInt(b.unit||"99999",10);
+          if(!isNaN(na)&&!isNaN(nb)) return na-nb;
+          return (a.unit||"").localeCompare(b.unit||"");
+        });
+        sections=sortedU.map(gr=>({
+          key:gr.label,
+          hdr:`${gr.label}${gr.count>0?` — ${gr.count} item${gr.count>1?"s":""}`:""} `,
+          mode:"unit-summary",
+          rooms:gr.rooms,
+          total:gr.total,
+        }));
       } else if(quoteView==="unit-individual") {
         // Detail: every item listed, grouped under unit-type + level header
         const g={};
@@ -5599,6 +5631,21 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
                   <td style={{padding:"6px 0",textAlign:"right",fontFamily:"monospace",fontWeight:600,color:"#111827"}}>{$$(row.total)}</td>
                 </tr>
               ))}</tbody>
+            </table>
+          ) : sec.mode==="unit-summary" ? (
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <tbody>
+                {Object.entries(sec.rooms||{}).map(([room,val])=>(
+                  <tr key={room} style={{borderBottom:"1px solid #f8f0e4"}}>
+                    <td style={{padding:"5px 0",paddingLeft:14,color:"#6b7280"}}>{room}</td>
+                    <td style={{padding:"5px 0",textAlign:"right",fontFamily:"monospace",color:"#374151"}}>{$$(val)}</td>
+                  </tr>
+                ))}
+                <tr style={{borderTop:"1px solid #e8d8b0"}}>
+                  <td style={{padding:"6px 0",fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11}}>Unit Total</td>
+                  <td style={{padding:"6px 0",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:"#111827"}}>{$$(sec.total)}</td>
+                </tr>
+              </tbody>
             </table>
           ) : (
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
@@ -5667,7 +5714,84 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
       All pricing in {company.currency||"AUD"}, GST included at {gstPct||10}%.
       Work to be carried out in accordance with applicable building codes and regulations.
     </div>
-  </div>;
+
+    {/* ── Finishes Schedule ── */}
+    {(()=>{
+      const schemeList=(schemes?.schemes||[]).filter(s=>{
+        const rooms=s.rooms||{};
+        return Object.values(rooms).some(rv=>rv&&Object.values(rv).some(v=>v));
+      });
+      if(!schemeList.length) return null;
+      const FINISH_FIELDS=[
+        {key:"carcass",label:"Carcass Board"},
+        {key:"fronts",label:"Door / Fronts"},
+        {key:"benchtop",label:"Benchtop"},
+        {key:"handle",label:"Handle"},
+        {key:"kickboard",label:"Kickboard"},
+        {key:"notes",label:"Notes"},
+      ];
+      return <div style={{marginTop:32,paddingTop:20,borderTop:"2px solid #b45309"}}>
+        <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+          textTransform:"uppercase",letterSpacing:"0.08em",color:"#b45309",marginBottom:14}}>
+          Colour Scheme / Finishes Schedule
+        </div>
+        {schemeList.map((scheme,si)=>{
+          const rooms=scheme.rooms||{};
+          // Gather one representative value per field (if all rooms match, show once; else list by room)
+          return <div key={scheme.id||si} style={{marginBottom:20}}>
+            {schemeList.length>1&&<div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:13,
+              marginBottom:8,color:"#111827",paddingBottom:4,borderBottom:"1px solid #e8d8b0"}}>
+              {scheme.name||`Scheme ${si+1}`}
+            </div>}
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <tbody>
+                {FINISH_FIELDS.map(f=>{
+                  const vals=Object.entries(rooms).map(([,rv])=>rv?.[f.key]).filter(Boolean);
+                  const unique=[...new Set(vals)];
+                  if(!unique.length) return null;
+                  const display=unique.length===1?unique[0]:unique.join(" · ");
+                  return <tr key={f.key} style={{borderBottom:"1px solid #f5f0ea"}}>
+                    <td style={{padding:"5px 0",color:"#6b7280",fontFamily:"system-ui,sans-serif",
+                      fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",
+                      width:140}}>{f.label}</td>
+                    <td style={{padding:"5px 0",color:"#111827"}}>{display}</td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+          </div>;
+        })}
+        <div style={{fontSize:11,color:"#9ca3af",marginTop:4}}>
+          Finishes are subject to availability. Substitutions of equal specification may be made with client approval.
+        </div>
+      </div>;
+    })()}
+
+    {/* ── Client Acceptance ── */}
+    <div style={{marginTop:36,paddingTop:24,borderTop:"1px solid #e5e7eb"}}>
+      <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+        textTransform:"uppercase",letterSpacing:"0.08em",color:"#374151",marginBottom:16}}>
+        Client Acceptance
+      </div>
+      <div style={{fontSize:12,color:"#6b7280",marginBottom:20,lineHeight:1.75}}>
+        By signing below I/we accept this quote and authorise {company.name||"the contractor"} to proceed
+        with the works as described above, subject to the terms and conditions stated herein.
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"24px 40px"}}>
+        {[
+          {label:"Client Name",value:proj.client||""},
+          {label:"Date","value":""},
+          {label:"Signature","value":""},
+          {label:"Purchase Order No. (if required)","value":""},
+        ].map(f=><div key={f.label}>
+          <div style={{fontSize:11,color:"#9ca3af",fontFamily:"system-ui,sans-serif",
+            fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4}}>{f.label}</div>
+          <div style={{borderBottom:"1px solid #d1d5db",minHeight:30,paddingBottom:4,
+            color:"#374151",fontSize:13}}>{f.value}</div>
+        </div>)}
+      </div>
+    </div>
+  </div></>;
 }
 
 const QV_STATUS = {
@@ -5691,7 +5815,12 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
   const [gstPct,       setGstPct]       = useState(proj.gst||10);
   const [issueNotes,   setIssueNotes]   = useState("");
   const [busy,         setBusy]         = useState(false);
-  const [quoteView,    setQuoteView]    = useState("category"); // "category"|"joinery"|"unit"|"unit-individual"|"level"
+  const [quoteView,    setQuoteView]    = useState("category"); // "category"|"joinery"|"unit"|"byunit"|"unit-individual"|"level"
+  const [schemes,      setSchemes]      = useState(null);
+
+  useEffect(()=>{
+    try{ const s=localStorage.getItem(`qf_schemes_${proj.id}`); if(s) setSchemes(JSON.parse(s)); }catch{}
+  },[proj.id]);
 
   async function reload(keepSel) {
     setLoading(true);
@@ -5750,7 +5879,8 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
 
   return <div>
 
-    {/* ── Control bar ── */}
+    {/* ── Control bar (hidden on print) ── */}
+    <div className="no-print">
     <Row gap={8} sx={{marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
 
       {/* Version tabs */}
@@ -5824,21 +5954,23 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
         <Btn onClick={()=>setShowIssue(false)} sx={{marginBottom:12}}>Cancel</Btn>
       </Row>
     </Card>}
+    </div>{/* end .no-print */}
 
     {/* ── Superseded banner ── */}
-    {selVersion?.status==="superseded"&&<div style={{
+    {selVersion?.status==="superseded"&&<div className="no-print" style={{
       background:`${T.yellow}18`,border:`1px solid ${T.yellow}50`,borderRadius:6,
       padding:"8px 14px",fontSize:12,color:T.yellow,marginBottom:12}}>
       This version was superseded when a newer quote was issued. It is read-only.
     </div>}
 
-    {/* ── Quote view mode selector (screen only — hidden on print) ── */}
-    {docItems.length>0&&<div style={{marginBottom:12,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+    {/* ── Quote view mode selector (hidden on print) ── */}
+    {docItems.length>0&&<div className="no-print" style={{marginBottom:12,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
       <span style={{fontSize:11,color:T.faint,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em"}}>Quote format:</span>
       {[
         {key:"category",       label:"By Trade"},
         {key:"joinery",        label:"Joinery Types"},
         {key:"unit",           label:"Unit Types"},
+        {key:"byunit",         label:"By Unit Number"},
         {key:"unit-individual",label:"Unit Individuals"},
         {key:"level",          label:"Level Individuals"},
       ].map(({key,label})=>(
@@ -5871,7 +6003,8 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
             issuedAt={isDraft?null:selVersion?.issued_at}
             proj={proj}
             company={company}
-            variations={variations}/>
+            variations={variations}
+            schemes={schemes}/>
     }
   </div>;
 }
