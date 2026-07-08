@@ -7028,6 +7028,8 @@ function ClaimsModule({proj, c, pop}) {
   const [nc,          setNc]          = useState({claim_number:1, description:"", period_end:""});
   const [showAddItem, setShowAddItem] = useState(null);
   const [newItem,     setNewItem]     = useState({description:"", qty:1, unit:"", unit_cost:0});
+  const [unitReg,     setUnitReg]     = useState({units:[]});
+  const [wiz,         setWiz]         = useState(null); // {claimNum, description, periodEnd, selections:Set}
 
   async function reload() {
     const { data } = await dbListClaims(proj.id);
@@ -7047,10 +7049,66 @@ function ClaimsModule({proj, c, pop}) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[proj.id]);
 
+  // Load building register for unit-level claim matrix
+  useEffect(()=>{
+    try{ const s=localStorage.getItem(`qf_unitreg_${proj.id}`); if(s) setUnitReg(JSON.parse(s)); }catch{}
+  },[proj.id]);
+
+  // Matrix data — units/levels derived from building register + estimate items
+  const lineItemsForClaim = proj.lineItems||[];
+  const regUnits = unitReg.units||[];
+  const matrixUnits = [...new Set([
+    ...regUnits.map(u=>u.number).filter(Boolean),
+    ...lineItemsForClaim.map(li=>li.cab?.unit).filter(Boolean),
+  ])];
+  const matrixLevels = [...new Set(lineItemsForClaim.map(li=>li.cab?.level).filter(Boolean))]
+    .sort((a,b)=>{const ai=BUILDING_LEVELS.indexOf(a),bi=BUILDING_LEVELS.indexOf(b);return(ai<0?99:ai)-(bi<0?99:bi);});
+  const hasMatrix = matrixUnits.length>0 && matrixLevels.length>0;
+
+  // Helper: line items for a specific unit + level
+  function cellItems(unit,level){ return lineItemsForClaim.filter(li=>li.cab?.unit===unit&&li.cab?.level===level); }
+  // Helper: total estimate value for a unit+level (includes margin)
+  function cellValue(unit,level){
+    return cellItems(unit,level).reduce((s,li)=>s+(li.qty||0)*(li.rate||0)*(1+((li.margin??proj.margin??20)/100)),0);
+  }
+  // Helper: breakdown by room for a unit+level → [{room, value}]
+  function cellRooms(unit,level){
+    const map={};
+    cellItems(unit,level).forEach(li=>{
+      const r=li.cab?.room||"Other";
+      if(!map[r]) map[r]=0;
+      map[r]+=(li.qty||0)*(li.rate||0)*(1+((li.margin??proj.margin??20)/100));
+    });
+    return Object.entries(map).filter(([,v])=>v>0).map(([room,value])=>({room,value}));
+  }
+  // Helper: parse "Unit 101 · Level 1 — Kitchen" → {unit,level}
+  function parseUL(desc){ const m=(desc||"").match(/^Unit\s+(\S+)\s+·\s+(.+?)\s+—/); return m?{unit:m[1].trim(),level:m[2].trim()}:null; }
+  // Keys that are already claimed in a submitted/approved/paid claim
+  const alreadyClaimed=new Set(
+    claims.filter(cl=>cl.status!=="draft").flatMap(cl=>(cl.claim_items||[]).map(i=>parseUL(i.description)).filter(Boolean).map(ul=>`${ul.unit}|${ul.level}`))
+  );
+  // Build claim item rows from selected unit|level keys
+  function buildClaimRows(sels){
+    const rows=[];
+    [...sels].forEach(key=>{
+      const [unit,...rest]=key.split("|"); const level=rest.join("|");
+      const rooms=cellRooms(unit,level);
+      if(rooms.length>0) rooms.forEach(({room,value})=>rows.push({description:`Unit ${unit} · ${level} — ${room}`,qty:1,unit:"ea",unit_cost:Math.round(value*100)/100}));
+      else rows.push({description:`Unit ${unit} · ${level} — fit-out`,qty:1,unit:"ea",unit_cost:0});
+    });
+    return rows;
+  }
+  // Wizard total
+  const wizTotal = wiz ? buildClaimRows(wiz.selections).reduce((s,r)=>s+r.unit_cost,0) : 0;
+
   function openNew(){
     const next = claims.length>0 ? Math.max(...claims.map(cl=>cl.claim_number))+1 : 1;
-    setNc({claim_number:next, description:"", period_end:""});
-    setShowNew(true);
+    if(hasMatrix){
+      setWiz({claimNum:next, description:"", periodEnd:"", selections:new Set()});
+    } else {
+      setNc({claim_number:next, description:"", period_end:""});
+      setShowNew(true);
+    }
   }
 
   async function createClaim(){
@@ -7096,6 +7154,18 @@ function ClaimsModule({proj, c, pop}) {
     if(error) return pop(error,"error");
     await reload();
     pop(`Imported ${rows.length} items from Estimate.`);
+  }
+
+  async function createUnitClaim(){
+    if(!wiz.description.trim()) return pop("Description required.","error");
+    if(!wiz.selections.size) return pop("Select at least one unit-level to claim.","error");
+    setBusy(true);
+    const {data:claim,error}=await dbCreateClaim(proj.id,{claim_number:wiz.claimNum,description:wiz.description,period_end:wiz.periodEnd||null});
+    if(error||!claim){ setBusy(false); return pop(error||"Could not create claim.","error"); }
+    const rows=buildClaimRows(wiz.selections);
+    if(rows.length) await dbAddClaimItems(claim.id,rows);
+    setBusy(false); setWiz(null); await reload();
+    pop(`Claim #${wiz.claimNum} created — ${wiz.selections.size} unit-level${wiz.selections.size!==1?"s":""}, ${$$(wizTotal)} total.`,"success");
   }
 
   async function addItem(claimId){
@@ -7153,8 +7223,12 @@ function ClaimsModule({proj, c, pop}) {
 
     <Row gap={8} sx={{marginBottom:14}}>
       <Btn v="pri" onClick={openNew}>+ New Claim</Btn>
+      {hasMatrix&&<span style={{fontSize:11,color:T.faint,alignSelf:"center"}}>
+        Unit-level matrix active — {matrixUnits.length} units × {matrixLevels.length} levels
+      </span>}
     </Row>
 
+    {/* ── Simple claim form (fallback when no matrix) */}
     {showNew&&<Card hi sx={{marginBottom:14}}>
       <div style={{fontWeight:700,marginBottom:10,fontSize:13}}>New Progress Claim</div>
       <div style={{display:"grid",gridTemplateColumns:"100px 1fr 160px",gap:10,marginBottom:10}}>
@@ -7171,7 +7245,131 @@ function ClaimsModule({proj, c, pop}) {
       </Row>
     </Card>}
 
-    {claims.length===0&&!showNew&&<Card>
+    {/* ── Unit-level claim wizard modal */}
+    {wiz&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:9999,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setWiz(null)}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:T.card,borderRadius:12,width:820,maxWidth:"98vw",maxHeight:"90vh",
+        display:"flex",flexDirection:"column",border:`1px solid ${T.border}`,boxShadow:"0 24px 60px rgba(0,0,0,0.6)"}}>
+
+        {/* Header */}
+        <div style={{padding:"18px 22px",borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
+          <div style={{fontWeight:800,fontSize:16,marginBottom:2}}>New Progress Claim</div>
+          <div style={{color:T.muted,fontSize:12}}>Select which unit-levels are complete. Values are pulled automatically from the Estimate.</div>
+        </div>
+
+        {/* Claim metadata */}
+        <div style={{padding:"14px 22px",borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
+          <div style={{display:"grid",gridTemplateColumns:"90px 1fr 170px",gap:10}}>
+            <Inp label="Claim #" value={wiz.claimNum} type="number" mono
+              onChange={v=>setWiz(x=>({...x,claimNum:parseInt(v)||1}))} sx={{marginBottom:0}}/>
+            <Inp label="Description" value={wiz.description}
+              onChange={v=>setWiz(x=>({...x,description:v}))} placeholder="e.g. Level 1 completion — 3 units"
+              sx={{marginBottom:0}}/>
+            <Inp label="Period End" value={wiz.periodEnd} type="date"
+              onChange={v=>setWiz(x=>({...x,periodEnd:v}))} sx={{marginBottom:0}}/>
+          </div>
+        </div>
+
+        {/* Matrix */}
+        <div style={{flex:1,overflowY:"auto",padding:"14px 22px"}}>
+          <Row gap={8} sx={{marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
+            <div style={{fontSize:11,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:"0.06em"}}>Select completed unit-levels</div>
+            <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+              <Btn sm v="gho" onClick={()=>{
+                const all=new Set();
+                matrixUnits.forEach(u=>matrixLevels.forEach(l=>{ if(!alreadyClaimed.has(`${u}|${l}`)&&cellValue(u,l)>0) all.add(`${u}|${l}`); }));
+                setWiz(x=>({...x,selections:all}));
+              }}>Select all unclaimed</Btn>
+              <Btn sm v="gho" onClick={()=>setWiz(x=>({...x,selections:new Set()}))}>Clear</Btn>
+            </div>
+          </Row>
+
+          <div style={{overflowX:"auto"}}>
+            <table style={{borderCollapse:"collapse",fontSize:12,width:"100%"}}>
+              <thead>
+                <tr style={{background:T.bg}}>
+                  <th style={{padding:"7px 10px",textAlign:"left",color:T.faint,fontWeight:600,minWidth:110,position:"sticky",left:0,background:T.bg}}>Level</th>
+                  {matrixUnits.map(u=>{
+                    const reg=regUnits.find(r=>r.number===u);
+                    return <th key={u} style={{padding:"7px 10px",textAlign:"center",color:T.faint,fontWeight:600,minWidth:100}}>
+                      <div style={{fontFamily:T.mono,color:T.text,fontSize:12}}>Unit {u}</div>
+                      {reg&&<div style={{fontSize:10,color:T.faint,fontWeight:400}}>{reg.defaultType}</div>}
+                    </th>;
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {matrixLevels.map(lvl=>(
+                  <tr key={lvl} style={{borderTop:`1px solid ${T.border}`}}>
+                    <td style={{padding:"8px 10px",fontWeight:600,color:T.muted,fontSize:12,position:"sticky",left:0,background:T.card}}>{lvl}</td>
+                    {matrixUnits.map(u=>{
+                      const key=`${u}|${lvl}`;
+                      const val=cellValue(u,lvl);
+                      const rooms=cellRooms(u,lvl);
+                      const claimed=alreadyClaimed.has(key);
+                      const sel=wiz.selections.has(key);
+                      const noValue=val===0;
+                      return <td key={u} style={{padding:"6px 8px",textAlign:"center",
+                        background:claimed?"transparent":sel?`${T.accent}12`:"transparent",
+                        opacity:claimed||noValue?0.4:1}}>
+                        {claimed
+                          ?<div style={{fontSize:10,color:T.green,fontWeight:700}}>✓ Claimed</div>
+                          :noValue
+                            ?<div style={{fontSize:10,color:T.faint}}>No estimate</div>
+                            :<label style={{cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                              <input type="checkbox" checked={sel} onChange={e=>{
+                                setWiz(x=>{const s=new Set(x.selections);e.target.checked?s.add(key):s.delete(key);return{...x,selections:s};});
+                              }}/>
+                              <div style={{fontFamily:T.mono,fontSize:11,color:sel?T.accent:T.text,fontWeight:sel?700:400}}>{$$(val)}</div>
+                              {rooms.length>0&&<div style={{fontSize:9,color:T.faint,lineHeight:1.3}}>
+                                {rooms.map(r=>r.room).join(", ")}
+                              </div>}
+                            </label>}
+                      </td>;
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:"14px 22px",borderTop:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:13,color:T.text,fontWeight:700}}>{$$(wizTotal)}</div>
+            <div style={{fontSize:11,color:T.faint}}>{wiz.selections.size} unit-level{wiz.selections.size!==1?"s":""} selected · {buildClaimRows(wiz.selections).length} line items</div>
+          </div>
+          <Btn v="gho" onClick={()=>setWiz(null)}>Cancel</Btn>
+          <Btn v="pri" onClick={createUnitClaim} disabled={busy||!wiz.selections.size}>
+            {busy?"Creating…":`Create Claim #${wiz.claimNum} →`}
+          </Btn>
+        </div>
+      </div>
+    </div>}
+
+    {/* ── Unclaimed summary (only when building register + estimate data exists) */}
+    {hasMatrix&&(()=>{
+      const unclaimedKeys=[];
+      matrixLevels.forEach(lvl=>matrixUnits.forEach(u=>{ if(!alreadyClaimed.has(`${u}|${lvl}`)&&cellValue(u,lvl)>0) unclaimedKeys.push(`${u}|${lvl}`); }));
+      const unclaimedTotal=unclaimedKeys.reduce((s,k)=>{const[u,...lp]=k.split("|");return s+cellValue(u,lp.join("|"));},0);
+      if(!unclaimedKeys.length) return null;
+      return <Card sx={{marginBottom:14,background:`${T.accent}08`,border:`1px solid ${T.accentBrd}`}}>
+        <Row gap={10} sx={{alignItems:"center",flexWrap:"wrap"}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:13,color:T.accent}}>Remaining to claim</div>
+            <div style={{fontSize:11,color:T.muted,marginTop:2}}>{unclaimedKeys.length} unit-level{unclaimedKeys.length!==1?"s":""} not yet claimed</div>
+          </div>
+          <div style={{marginLeft:"auto",fontFamily:T.mono,fontWeight:800,fontSize:16,color:T.accent}}>{$$(unclaimedTotal)}</div>
+          <Btn sm v="pri" onClick={()=>{ const next=claims.length>0?Math.max(...claims.map(cl=>cl.claim_number))+1:1; setWiz({claimNum:next,description:"",periodEnd:"",selections:new Set(unclaimedKeys)}); }}>
+            Claim all remaining →
+          </Btn>
+        </Row>
+      </Card>;
+    })()}
+
+    {claims.length===0&&!showNew&&!wiz&&<Card>
       <div style={{color:T.faint,fontSize:13,padding:"8px 0"}}>
         No progress claims yet. Create your first claim to start tracking payments against this project.
       </div>
@@ -7185,12 +7383,19 @@ function ClaimsModule({proj, c, pop}) {
       const nextBtn = {draft:"Submit Claim",submitted:"Approve",approved:"Mark Paid"}[cl.status];
       const nextV   = {draft:"blu",submitted:"grn",approved:"grn"}[cl.status];
 
+      // Derive which unit-levels this claim covers (from item descriptions)
+      const claimULs=[...new Set((items).map(i=>{ const ul=parseUL(i.description); return ul?`Unit ${ul.unit} · ${ul.level}`:null; }).filter(Boolean))];
+
       return <Card key={cl.id} sx={{marginBottom:10,padding:"12px 14px",borderLeft:`3px solid ${st.c}`}}>
         <Row gap={10} sx={{alignItems:"center",cursor:"pointer"}} onClick={()=>setExpanded(isOpen?null:cl.id)}>
           <span style={{fontFamily:T.mono,color:T.purple,fontWeight:800,fontSize:13}}>#{cl.claim_number}</span>
           <div style={{flex:1}}>
             <div style={{fontWeight:600,fontSize:13,color:T.text}}>{cl.description||"—"}</div>
             {cl.period_end&&<div style={{fontSize:11,color:T.faint}}>Period ending {cl.period_end}</div>}
+            {claimULs.length>0&&<div style={{marginTop:4,display:"flex",flexWrap:"wrap",gap:4}}>
+              {claimULs.map(k=><span key={k} style={{fontSize:10,background:`${T.purple}18`,color:T.purple,
+                border:`1px solid ${T.purple}44`,borderRadius:4,padding:"1px 6px"}}>{k}</span>)}
+            </div>}
           </div>
           <Bdg color={st.c}>{st.l}</Bdg>
           <div style={{fontFamily:T.mono,fontWeight:700,fontSize:14,color:T.accent,minWidth:80,textAlign:"right"}}>{$$(total)}</div>
