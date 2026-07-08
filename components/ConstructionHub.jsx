@@ -2183,65 +2183,159 @@ function ReportingModule({projects, clients}) {
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════
 function Dashboard({projects, xero, onOpen, setNav}) {
+  const [actFeed,    setActFeed]    = useState([]);
+  const [prodCounts, setProdCounts] = useState({}); // {status: count} across all active jobs
+  const [prodJobs,   setProdJobs]   = useState(0);  // how many active jobs have production data
+
+  useEffect(()=>{
+    // Cross-project production summary from localStorage
+    const counts={};
+    PROD_STATUSES.forEach(s=>{ counts[s.key]=0; });
+    let jobsWithData=0;
+    projects.filter(p=>["approved","active"].includes(p.status)).forEach(p=>{
+      try{
+        const raw=localStorage.getItem(`qf_prod_${p.id}`);
+        if(!raw) return;
+        const data=JSON.parse(raw);
+        const vals=Object.values(data);
+        if(vals.length){ jobsWithData++; vals.forEach(st=>{ if(counts[st]!==undefined) counts[st]++; }); }
+      }catch{}
+    });
+    setProdCounts(counts);
+    setProdJobs(jobsWithData);
+    // Recent activity feed
+    dbGetActivityFeed(10).then(({data})=>setActFeed(data||[]));
+  },[projects]);
+
   const pipeline   = projects.reduce((s,p)=>s+calc(p).total,0);
   const invoiced   = projects.reduce((s,p)=>s+(p.invoiced||0),0);
   const wonVal     = projects.filter(p=>["approved","active","complete"].includes(p.status)).reduce((s,p)=>s+calc(p).total,0);
+  const outstanding= Math.max(0, wonVal - invoiced);
   const activeJobs = projects.filter(p=>["approved","active"].includes(p.status)).length;
   const pending    = projects.filter(p=>["quoting","sent"].includes(p.status)).length;
-  const won  = projects.filter(p=>["approved","active","complete"].includes(p.status)).length;
-  const lost = projects.filter(p=>p.status==="lost").length;
-  const winRate = (won+lost)>0 ? Math.round(won/(won+lost)*100) : null;
+  const won        = projects.filter(p=>["approved","active","complete"].includes(p.status)).length;
+  const lost       = projects.filter(p=>p.status==="lost").length;
+  const winRate    = (won+lost)>0 ? Math.round(won/(won+lost)*100) : null;
+
+  const totalProdCells = Object.values(prodCounts).reduce((s,n)=>s+n,0);
+  const installedCells = prodCounts.installed||0;
+  const installedPct   = totalProdCells>0 ? installedCells/totalProdCells*100 : 0;
+
+  // "Needs attention" flags — simple heuristics, no extra async calls
+  const today = new Date();
+  const attention = [];
+  projects.forEach(p=>{
+    const ageDays = p.created ? Math.floor((today - new Date(p.created)) / 86400000) : 0;
+    if(p.status==="sent"  && ageDays>14) attention.push({proj:p, msg:`Quote sent ${ageDays}d ago — awaiting decision`, color:T.yellow});
+    if(p.status==="active"&& !localStorage.getItem(`qf_prod_${p.id}`)) attention.push({proj:p, msg:"Active job — no production data yet", color:T.orange||T.accent});
+    if(["approved","active"].includes(p.status)&&!calc(p).total) attention.push({proj:p, msg:"No estimate — job has no value", color:T.red});
+  });
+
+  // Activity icons + colours
+  const actIcon  = t=>({project:"◧",estimate:"≡",quote:"◈",claim:"$",takeoff:"⬜",procurement:"📦"}[t]||"●");
+  const actColor = a=>({create:T.green,update:T.blue,delete:T.red,advance:T.teal,submit:T.teal,approve:T.green,pay:T.green}[a]||T.muted);
+  const timeAgo  = s=>{ const d=Math.floor((Date.now()-new Date(s))/60000); return d<1?"just now":d<60?`${d}m ago`:d<1440?`${Math.floor(d/60)}h ago`:`${Math.floor(d/1440)}d ago`; };
 
   return <div>
     <Hdr action={<Btn v="pri" sm onClick={()=>setNav("projects")}>+ New Project</Btn>}>Dashboard</Hdr>
 
-    <Row wrap gap={12} sx={{marginBottom:20}}>
-      <KPI label="Total Pipeline"  value={$$(pipeline,true)} sub={`${projects.length} projects`}/>
-      <KPI label="Won & Active"    value={$$(wonVal,true)} sub="approved + active" color={T.green}/>
-      <KPI label="Win Rate"        value={winRate!==null?`${winRate}%`:"—"} sub={`${won} won · ${lost} lost`} color={winRate>=50?T.green:T.yellow}/>
-      <KPI label="Invoiced"        value={$$(invoiced,true)} sub="total invoiced" color={T.teal}/>
-      <KPI label="Active Jobs"     value={activeJobs} sub="on-site" color={T.blue}/>
-      <KPI label="Pending Quotes"  value={pending} sub="awaiting decision" color={T.yellow}/>
+    {/* ── KPIs */}
+    <Row wrap gap={10} sx={{marginBottom:18}}>
+      <KPI label="Total Pipeline"  value={$$(pipeline,true)}     sub={`${projects.length} project${projects.length!==1?"s":""}`}/>
+      <KPI label="Won & Active"    value={$$(wonVal,true)}        sub="approved + active"    color={T.green}/>
+      <KPI label="Outstanding"     value={$$(outstanding,true)}   sub="earned, not invoiced" color={outstanding>0?T.accent:T.faint}/>
+      <KPI label="Invoiced"        value={$$(invoiced,true)}      sub="total invoiced"       color={T.teal}/>
+      <KPI label="Win Rate"        value={winRate!==null?`${winRate}%`:"—"} sub={`${won} won · ${lost} lost`} color={winRate!=null?(winRate>=50?T.green:T.yellow):T.faint}/>
+      <KPI label="Active Jobs"     value={activeJobs}             sub="on-site"              color={T.blue}/>
+      <KPI label="Pending Quotes"  value={pending}                sub="awaiting decision"    color={T.yellow}/>
     </Row>
 
-    <Card sx={{marginBottom:14}}>
-      <div style={{fontWeight:700,fontSize:13,marginBottom:14}}>Recent Projects</div>
-      {projects.slice(0,6).map(p=>{
-        const c=calc(p); const sm=STATUS[p.status]||STATUS.draft;
-        return <div key={p.id} onClick={()=>onOpen(p.id)} style={{
-          display:"flex",justifyContent:"space-between",alignItems:"center",
-          padding:"9px 0",borderBottom:`1px solid ${T.border}`,cursor:"pointer"}}>
-          <div>
-            <div style={{fontWeight:600,fontSize:13,color:T.text}}>{p.name}</div>
-            <div style={{color:T.faint,fontSize:11}}>{p.client} · {p.created}</div>
-          </div>
-          <Row gap={8}>
-            <Bdg color={sm.color}>{sm.label}</Bdg>
-            <span style={{fontFamily:T.mono,fontSize:12,color:T.accent,fontWeight:700}}>{$$(c.total,true)}</span>
-          </Row>
-        </div>;
-      })}
-      {!projects.length&&<div style={{color:T.faint,fontSize:12}}>No projects yet.</div>}
-    </Card>
+    {/* ── Production summary across active jobs */}
+    {totalProdCells>0&&<Card sx={{marginBottom:14}}>
+      <Row gap={10} sx={{marginBottom:10,alignItems:"center"}}>
+        <div style={{fontWeight:700,fontSize:13}}>Production — across {prodJobs} active job{prodJobs!==1?"s":""}</div>
+        <div style={{marginLeft:"auto",fontSize:11,color:T.faint}}>{installedCells} of {totalProdCells} cells installed ({Math.round(installedPct)}%)</div>
+      </Row>
+      {/* Multi-colour progress bar */}
+      <div style={{height:10,borderRadius:5,overflow:"hidden",display:"flex",marginBottom:10}}>
+        {PROD_STATUSES.map(s=>{ const pct=totalProdCells>0?(prodCounts[s.key]||0)/totalProdCells*100:0; return pct>0?<div key={s.key} style={{width:`${pct}%`,background:s.color,transition:"width 0.4s"}}/>:null; })}
+        {totalProdCells===0&&<div style={{width:"100%",background:T.card2}}/>}
+      </div>
+      <Row gap={14} wrap>
+        {PROD_STATUSES.map(s=>{ const n=prodCounts[s.key]||0; return n>0?<div key={s.key} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
+          <span style={{width:9,height:9,borderRadius:"50%",background:s.color,display:"inline-block",flexShrink:0}}/>
+          <span style={{color:T.muted}}>{s.label}:</span>
+          <span style={{color:T.text,fontWeight:600,fontFamily:T.mono}}>{n}</span>
+        </div>:null; })}
+      </Row>
+    </Card>}
 
+    {/* ── Needs attention */}
+    {attention.length>0&&<Card sx={{marginBottom:14}}>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>Needs Attention</div>
+      {attention.map(({proj:p,msg,color},i)=><div key={i} onClick={()=>onOpen(p.id)} style={{
+        display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderRadius:6,cursor:"pointer",
+        marginBottom:4,background:`${color}10`,border:`1px solid ${color}30`}}>
+        <span style={{width:8,height:8,borderRadius:"50%",background:color,flexShrink:0}}/>
+        <span style={{flex:1,fontSize:12,color:T.text,fontWeight:600}}>{p.name}</span>
+        <span style={{fontSize:11,color:color}}>{msg}</span>
+      </div>)}
+    </Card>}
+
+    {/* ── Recent projects + Activity feed side by side */}
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+      <Card>
+        <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Recent Projects</div>
+        {projects.slice(0,8).map(p=>{
+          const cv=calc(p); const sm=STATUS[p.status]||STATUS.draft;
+          return <div key={p.id} onClick={()=>onOpen(p.id)} style={{
+            display:"flex",justifyContent:"space-between",alignItems:"center",
+            padding:"8px 0",borderBottom:`1px solid ${T.border}`,cursor:"pointer"}}>
+            <div style={{minWidth:0,flex:1,marginRight:8}}>
+              <div style={{fontWeight:600,fontSize:12,color:T.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div>
+              <div style={{color:T.faint,fontSize:10}}>{p.client||"No client"}</div>
+            </div>
+            <Row gap={6}>
+              <Bdg color={sm.color}>{sm.label}</Bdg>
+              <span style={{fontFamily:T.mono,fontSize:11,color:T.accent,fontWeight:700,whiteSpace:"nowrap"}}>{$$(cv.total,true)}</span>
+            </Row>
+          </div>;
+        })}
+        {!projects.length&&<div style={{color:T.faint,fontSize:12}}>No projects yet.</div>}
+      </Card>
+
+      <Card>
+        <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Recent Activity</div>
+        {actFeed.length===0&&<div style={{color:T.faint,fontSize:12}}>No activity recorded yet.</div>}
+        {actFeed.map(a=><div key={a.id} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"7px 0",borderBottom:`1px solid ${T.border}`}}>
+          <span style={{fontSize:14,lineHeight:1,marginTop:1,flexShrink:0}}>{actIcon(a.entity_type)}</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:12,color:T.text,fontWeight:500,lineHeight:1.3}}>{a.summary||`${a.entity_type} ${a.action}`}</div>
+            <div style={{fontSize:10,color:T.faint,marginTop:2}}>{timeAgo(a.created_at)}</div>
+          </div>
+          <span style={{fontSize:10,color:actColor(a.action),fontWeight:700,flexShrink:0,marginTop:2}}>{a.action}</span>
+        </div>)}
+      </Card>
+    </div>
+
+    {/* ── Pipeline by Status */}
     <Card>
-      <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Pipeline by Status</div>
-      <div style={{display:"flex",height:28,borderRadius:5,overflow:"hidden",marginBottom:10}}>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>Pipeline by Status</div>
+      <div style={{display:"flex",height:22,borderRadius:5,overflow:"hidden",marginBottom:8}}>
         {Object.entries(STATUS).map(([k,v])=>{
           const val=projects.filter(p=>p.status===k).reduce((s,p)=>s+calc(p).total,0);
           const pct=pipeline>0?val/pipeline*100:0;
-          return pct>0?<div key={k} title={`${v.label}: ${$$(val,true)}`}
-            style={{width:`${pct}%`,background:v.color,transition:"width 0.5s"}}/>:null;
+          return pct>0?<div key={k} title={`${v.label}: ${$$(val,true)}`} style={{width:`${pct}%`,background:v.color,transition:"width 0.5s"}}/>:null;
         })}
         {pipeline===0&&<div style={{width:"100%",background:T.card2}}/>}
       </div>
-      <Row gap={16} wrap>
+      <Row gap={14} wrap>
         {Object.entries(STATUS).map(([k,v])=>{
           const val=projects.filter(p=>p.status===k).reduce((s,p)=>s+calc(p).total,0);
           return val>0?<div key={k} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
             <span style={{width:8,height:8,borderRadius:"50%",background:v.color,display:"inline-block"}}/>
             <span style={{color:T.muted}}>{v.label}:</span>
-            <span style={{color:T.text,fontFamily:T.mono}}>{$$(val,true)}</span>
+            <span style={{color:T.text,fontFamily:T.mono,fontWeight:600}}>{$$(val,true)}</span>
           </div>:null;
         })}
       </Row>
