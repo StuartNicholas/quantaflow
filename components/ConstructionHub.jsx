@@ -2393,7 +2393,8 @@ function Dashboard({projects, xero, onOpen, setNav}) {
       <Card>
         <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Recent Projects</div>
         {projects.slice(0,8).map(p=>{
-          const cv=calc(p); const sm=STATUS[p.status]||STATUS.draft;
+          const sm=STATUS[p.status]||STATUS.draft;
+          const qv=p.quote_value||calc(p).total;
           return <div key={p.id} onClick={()=>onOpen(p.id)} style={{
             display:"flex",justifyContent:"space-between",alignItems:"center",
             padding:"8px 0",borderBottom:`1px solid ${T.border}`,cursor:"pointer"}}>
@@ -2403,7 +2404,7 @@ function Dashboard({projects, xero, onOpen, setNav}) {
             </div>
             <Row gap={6}>
               <Bdg color={sm.color}>{sm.label}</Bdg>
-              <span style={{fontFamily:T.mono,fontSize:11,color:T.accent,fontWeight:700,whiteSpace:"nowrap"}}>{$$(cv.total,true)}</span>
+              <span style={{fontFamily:T.mono,fontSize:11,color:qv>0?T.accent:T.faint,fontWeight:700,whiteSpace:"nowrap"}}>{qv>0?$$(qv,true):"—"}</span>
             </Row>
           </div>;
         })}
@@ -6919,7 +6920,10 @@ function VariationDocument({variation, proj, company, variations, c}) {
   const varAmtIncGst = varAmtExGst + gstAmt;
 
   // Original quote (ex. GST, before any variations)
-  const origExGst = (c.exGst||0) - (c.varTotal||0);
+  // c.exGst is 0 for DB-loaded projects until Estimate tab is opened; fall back to quote_value / (1+gst)
+  const gstPctV = parseFloat(proj.gst)||10;
+  const baseExGst = c.exGst || (proj.quote_value ? proj.quote_value/(1+gstPctV/100) : 0);
+  const origExGst = baseExGst - (c.varTotal||0);
 
   // Prior approved variations (excluding this one)
   const priorApproved = (variations||[]).filter(x=>x.id!==v.id && x.status==="approved");
@@ -7128,12 +7132,16 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
     pop("Variation deleted.","info");
   }
 
-  const variance = c.exGst - c.actTotal;
-  const vPct = c.exGst>0 ? variance/c.exGst*100 : 0;
+  // For DB-loaded projects, c.exGst may be 0 until the Estimate tab is opened.
+  // Derive from quote_value (inc. GST) as a fallback.
+  const gstPct = parseFloat(proj.gst)||10;
+  const budgetExGst = c.exGst || (proj.quote_value ? proj.quote_value / (1 + gstPct/100) : 0);
+  const variance = budgetExGst - c.actTotal;
+  const vPct = budgetExGst>0 ? variance/budgetExGst*100 : 0;
 
   return <div>
     <Row gap={12} wrap sx={{marginBottom:18}}>
-      <KPI label="Budget ex. GST" value={$$(c.exGst,true)} sub="quoted"/>
+      <KPI label="Budget ex. GST" value={$$(budgetExGst,true)} sub="quoted"/>
       <KPI label="Actual Costs" value={$$(c.actTotal,true)} sub={`${(proj.actualCosts||[]).length} entries`} color={T.blue}/>
       <KPI label="Committed (POs)" value={$$(poCommitted,true)} sub={`${poCount} live orders`} color={T.purple}/>
       <KPI label="Variance" value={$$(Math.abs(variance),true)}
@@ -7154,15 +7162,15 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
       </Row>
     </Card>
 
-    {c.exGst>0&&<Card sx={{marginBottom:16}}>
+    {budgetExGst>0&&<Card sx={{marginBottom:16}}>
       <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>Budget vs Actual</div>
       <div style={{background:T.bg,borderRadius:5,height:20,overflow:"hidden",position:"relative"}}>
         <div style={{position:"absolute",left:0,top:0,height:"100%",borderRadius:5,
           background:`linear-gradient(90deg,${T.blue},${T.teal})`,
-          width:`${Math.min(100,c.exGst>0?c.actTotal/c.exGst*100:0)}%`,transition:"width 0.5s"}}/>
+          width:`${Math.min(100,budgetExGst>0?c.actTotal/budgetExGst*100:0)}%`,transition:"width 0.5s"}}/>
         <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",padding:"0 10px"}}>
           <span style={{fontFamily:T.mono,fontSize:11,fontWeight:700,color:"#fff",textShadow:"0 1px 3px rgba(0,0,0,0.8)"}}>
-            {c.exGst>0?(c.actTotal/c.exGst*100).toFixed(1):0}% · {$$(c.actTotal,true)} of {$$(c.exGst,true)}
+            {budgetExGst>0?(c.actTotal/budgetExGst*100).toFixed(1):0}% · {$$(c.actTotal,true)} of {$$(budgetExGst,true)}
           </span>
         </div>
       </div>
@@ -8510,7 +8518,7 @@ function ClaimsModule({proj, c, pop, company, clients}) {
   const totalApproved  = claims.filter(cl=>["approved","paid"].includes(cl.status)).reduce((s,cl)=>s+claimTotal(cl),0);
   const totalPaid      = claims.filter(cl=>cl.status==="paid").reduce((s,cl)=>s+claimTotal(cl),0);
   const totalRetention = claims.filter(cl=>["submitted","approved","paid"].includes(cl.status)).reduce((s,cl)=>s+retHeld(cl),0);
-  const contractVal    = c.total||0;
+  const contractVal    = c.total||proj.quote_value||0;
 
   const STATUS = {
     draft:     {c:T.faint,  l:"Draft"},
@@ -10793,6 +10801,7 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
       </Row>
       {ready.map(p=>{
         const c=calc(p); const sm=STATUS[p.status]||STATUS.draft;
+        const xqv=c.total||p.quote_value||0;
         return <div key={p.id} style={{display:"flex",justifyContent:"space-between",
           alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${T.border}`}}>
           <div>
@@ -10800,7 +10809,7 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
             <div style={{color:T.faint,fontSize:11}}>{p.client} · <Bdg color={sm.color} sm>{sm.label}</Bdg></div>
           </div>
           <Row gap={12}>
-            <span style={{fontFamily:T.mono,color:T.accent,fontWeight:700}}>{$$(c.total)}</span>
+            <span style={{fontFamily:T.mono,color:T.accent,fontWeight:700}}>{$$(xqv)}</span>
             <Btn sm v="grn" onClick={()=>pushOne(p)}>⟳ Push</Btn>
           </Row>
         </div>;
