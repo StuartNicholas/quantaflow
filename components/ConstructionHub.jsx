@@ -2422,26 +2422,27 @@ function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,
     <div style={{overflowX:"auto"}}>
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr style={{color:T.faint,textAlign:"left",fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em"}}>
-          {["Project","Status","Takeoff Items","Quote (inc. tax)","Invoiced",""].map(h=>
+          {["Project","Client / Address","Status","Quote (inc. GST)","Invoiced",""].map(h=>
             <th key={h} style={{padding:"7px 10px",fontWeight:600}}>{h}</th>)}
         </tr></thead>
         <tbody>
           {filtered.map(p=>{
-            const c=calc(p); const sm=STATUS[p.status]||STATUS.draft;
+            const sm=STATUS[p.status]||STATUS.draft;
+            // Use stored quote_value from DB; fall back to calc() for seed/in-memory projects
+            const qv = (p.quote_value&&p.quote_value>0) ? p.quote_value : calc(p).total;
             return <tr key={p.id} style={{borderTop:`1px solid ${T.border}`,cursor:"pointer"}}
               onClick={()=>onOpen(p.id)}>
               <td style={{padding:"10px 10px"}}>
                 <div style={{fontWeight:700,color:T.text}}>{p.name}</div>
-                <div style={{color:T.faint,fontSize:11,marginTop:2}}>{p.client} · {p.created}</div>
+                <div style={{color:T.faint,fontSize:11,marginTop:2}}>{p.created}{p.dueDate?` · due ${p.dueDate}`:""}</div>
+              </td>
+              <td style={{padding:"10px 10px"}}>
+                <div style={{fontWeight:600,fontSize:13,color:T.text}}>{p.client||"—"}</div>
+                {p.address&&<div style={{color:T.faint,fontSize:11,marginTop:1}}>{p.address}</div>}
               </td>
               <td style={{padding:"10px 10px"}}><Bdg color={sm.color}>{sm.label}</Bdg></td>
-              <td style={{padding:"10px 10px"}}>
-                <Bdg color={(p.takeoffItems||[]).length>0?T.green:T.faint}>
-                  {(p.takeoffItems||[]).length>0?`✓ ${(p.takeoffItems||[]).length} items`:"Pending"}
-                </Bdg>
-              </td>
-              <td style={{padding:"10px 10px",fontFamily:T.mono,color:c.total>0?T.accent:T.faint,fontWeight:700}}>
-                {c.total>0?$$(c.total):"—"}
+              <td style={{padding:"10px 10px",fontFamily:T.mono,color:qv>0?T.accent:T.faint,fontWeight:700}}>
+                {qv>0?$$(qv):"—"}
               </td>
               <td style={{padding:"10px 10px",fontFamily:T.mono,color:p.invoiced>0?T.green:T.faint}}>
                 {p.invoiced>0?$$(p.invoiced):"—"}
@@ -2511,9 +2512,11 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
       <span style={{color:T.faint}}>/</span>
       <span style={{fontWeight:700,fontSize:13,color:T.text}}>{proj.name}</span>
       <Bdg color={sm.color}>{sm.label}</Bdg>
-      {sm.next&&<Btn sm v="gho" onClick={()=>{onMutate(p=>({...p,status:sm.next}));pop(`→ ${STATUS[sm.next].label}`);}}>
-        Advance →
-      </Btn>}
+      {sm.next&&<Btn sm v="gho" onClick={async()=>{
+        onMutate(p=>({...p,status:sm.next}));
+        await supabase.from("projects").update({status:sm.next}).eq("id",proj.id);
+        pop(`→ ${STATUS[sm.next].label}`);
+      }}>Advance →</Btn>}
       <div style={{marginLeft:"auto",textAlign:"right"}}>
         <div style={{fontFamily:T.mono,fontSize:20,fontWeight:800,color:T.accent}}>{$$(c.total)}</div>
         <div style={{color:T.faint,fontSize:11}}>inc. GST{c.actTotal>0?` · ${$$(c.actTotal,true)} actual`:""}</div>
