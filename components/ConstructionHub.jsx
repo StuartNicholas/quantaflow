@@ -554,6 +554,16 @@ function $$(n, short=false) {
   return (n<0?"-$":"$")+v.toLocaleString("en-AU",{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
+function fmtDate(d,short=false){
+  if(!d) return "";
+  try{
+    const dt=new Date(d);
+    if(isNaN(dt)) return d;
+    if(short) return dt.toLocaleDateString("en-AU",{day:"numeric",month:"short"});
+    return dt.toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"});
+  }catch{return d||"";}
+}
+
 // ── MICRO COMPONENTS ─────────────────────────────────────────────────────────
 function Bdg({color, children, sm}) {
   return <span style={{background:`${color}18`,color,border:`1px solid ${color}35`,
@@ -2458,6 +2468,7 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
   const [np,setNp]=useState({name:"",client:"",client_id:"",address:"",builder_id:""});
   const [filter,setFilter]=useState("all");
   const [search,setSearch]=useState("");
+  const [sort,setSort]=useState("created_desc");
 
   if (loading) return <div>
     <Hdr sub="Create, manage and track all project quotes and jobs." action={<Btn v="pri" onClick={()=>setShowNew(true)} disabled>+ New Project</Btn>}>Projects</Hdr>
@@ -2479,6 +2490,14 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
     const ms = filter==="all"||p.status===filter;
     const mq = !search||[p.name,p.client,p.address].join(" ").toLowerCase().includes(search.toLowerCase());
     return ms&&mq;
+  }).slice().sort((a,b)=>{
+    if(sort==="created_asc")  return (a.created_at||"") < (b.created_at||"") ? -1 : 1;
+    if(sort==="due_asc")      return ((a.due_date||a.dueDate)||"9999") < ((b.due_date||b.dueDate)||"9999") ? -1 : 1;
+    if(sort==="due_desc")     return ((a.due_date||a.dueDate)||"0000") > ((b.due_date||b.dueDate)||"0000") ? -1 : 1;
+    if(sort==="value_desc")   return (b.quote_value||0)-(a.quote_value||0);
+    if(sort==="value_asc")    return (a.quote_value||0)-(b.quote_value||0);
+    // default: created_desc
+    return (a.created_at||"") > (b.created_at||"") ? -1 : 1;
   });
 
   async function create() {
@@ -2532,6 +2551,16 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
             border:`1px solid ${filter===k?T.accentBrd:T.border}`}}>{label}</div>;
         })}
       </Row>
+      <select value={sort} onChange={e=>setSort(e.target.value)} style={{
+        background:T.card,border:`1px solid ${T.border}`,borderRadius:5,color:T.muted,
+        fontSize:12,padding:"5px 8px",cursor:"pointer",fontFamily:T.font,outline:"none"}}>
+        <option value="created_desc">Newest first</option>
+        <option value="created_asc">Oldest first</option>
+        <option value="due_asc">Due date ↑</option>
+        <option value="due_desc">Due date ↓</option>
+        <option value="value_desc">Value: high → low</option>
+        <option value="value_asc">Value: low → high</option>
+      </select>
     </Row>
 
     <div style={{overflowX:"auto"}}>
@@ -2549,7 +2578,7 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
               onClick={()=>onOpen(p.id)}>
               <td style={{padding:"10px 10px"}}>
                 <div style={{fontWeight:700,color:T.text}}>{p.name}</div>
-                <div style={{color:T.faint,fontSize:11,marginTop:2}}>{p.created_at?.slice(0,10)||p.created||""}</div>
+                <div style={{color:T.faint,fontSize:11,marginTop:2}}>{fmtDate(p.created_at||p.created,true)}</div>
               </td>
               <td style={{padding:"10px 10px"}}>
                 <div style={{fontWeight:600,fontSize:13,color:T.text}}>{p.client||"—"}</div>
@@ -2560,7 +2589,7 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
                 {qv>0?$$(qv):"—"}
               </td>
               <td style={{padding:"10px 10px",color:T.muted,fontSize:12}}>
-                {(()=>{const d=p.due_date||p.dueDate;return d?<span style={{color:T.text}}>{d}</span>:<span style={{color:T.faint}}>—</span>;})()}
+                {(()=>{const d=p.due_date||p.dueDate;return d?<span style={{color:T.text}}>{fmtDate(d,true)}</span>:<span style={{color:T.faint}}>—</span>;})()}
               </td>
               <td style={{padding:"10px 10px"}}>
                 <Row gap={5} onClick={e=>e.stopPropagation()}>
