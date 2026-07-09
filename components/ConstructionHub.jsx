@@ -7320,6 +7320,7 @@ function HandoverModule({proj, onMutate, pop}) {
     if(openDefects>0) return pop(`${openDefects} defect${openDefects>1?"s":""} still open — close them before marking complete.`,"error");
     if(unchecked>0)   return pop(`${unchecked} checklist item${unchecked>1?"s":""} not ticked — complete them first.`,"error");
     onMutate(p=>({...p,status:"complete"}));
+    await dbUpdateProject(proj.id, {status:"complete"});
     pop("Project marked complete. Well done!");
   }
 
