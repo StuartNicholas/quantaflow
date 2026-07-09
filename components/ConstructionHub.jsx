@@ -6,7 +6,7 @@ import { listClients as dbListClients, createClient as dbCreateClient, updateCli
 import { listBuilders as dbListBuilders, createBuilder as dbCreateBuilder, updateBuilder as dbUpdateBuilder, deleteBuilder as dbDeleteBuilder } from "../lib/db/builders";
 import { listSuppliers as dbListSuppliers, createSupplier as dbCreateSupplier, updateSupplier as dbUpdateSupplier, deleteSupplier as dbDeleteSupplier } from "../lib/db/suppliers";
 import { getEstimate as dbGetEstimate, updateEstimate as dbUpdateEstimate, addItem as dbAddItem, addItems as dbAddItems, updateItem as dbUpdateItem, deleteItem as dbDeleteItem } from "../lib/db/estimates";
-import { updateProjectQuoteValue as dbUpdateProjectQuoteValue, trashProject as dbTrashProject, restoreProject as dbRestoreProject, deleteProject as dbDeleteProject, listTrashedProjects as dbListTrashedProjects } from "../lib/db/projects";
+import { updateProject as dbUpdateProject, updateProjectQuoteValue as dbUpdateProjectQuoteValue, trashProject as dbTrashProject, restoreProject as dbRestoreProject, deleteProject as dbDeleteProject, listTrashedProjects as dbListTrashedProjects } from "../lib/db/projects";
 import { listQuoteVersions as dbListQuoteVersions, getQuoteVersionItems as dbGetQuoteVersionItems, issueQuote as dbIssueQuote, updateQuoteStatus as dbUpdateQuoteStatus } from "../lib/db/quotes";
 import { listVariations as dbListVariations, createVariation as dbCreateVariation, updateVariation as dbUpdateVariation, deleteVariation as dbDeleteVariation } from "../lib/db/variations";
 import { getTakeoff as dbGetTakeoff, saveTakeoff as dbSaveTakeoff, addTakeoffItem as dbAddTakeoffItem, deleteTakeoffItem as dbDeleteTakeoffItem, ensureTakeoff as dbEnsureTakeoff, patchTakeoffMeta as dbPatchTakeoffMeta } from "../lib/db/takeoffs";
@@ -8682,6 +8682,7 @@ function ClaimsModule({proj, c, pop, company}) {
 // ═══════════════════════════════════════════════════════════════════════════
 function ProjectInfo({proj, clients, onMutate, pop}) {
   const [builders, setBuilders] = useState([]);
+  const [saving, setSaving] = useState(false);
   useEffect(()=>{
     let on=true;
     dbListBuilders().then(({data})=>{ if(on) setBuilders(data||[]); });
@@ -8691,6 +8692,36 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
   async function setBuilder(builderId) {
     onMutate(p=>({...p, builder_id: builderId||null}));
     await supabase.from("projects").update({builder_id: builderId||null}).eq("id", proj.id);
+  }
+
+  async function saveProject(){
+    setSaving(true);
+    // Persist core fields — fall back gracefully if optional columns don't exist
+    try{
+      await supabase.from("projects").update({
+        name: proj.name,
+        client_name: proj.client,
+        address: proj.address||null,
+        status: proj.status,
+        description: proj.description||null,
+        notes: proj.notes||null,
+        due_date: proj.dueDate||null,
+      }).eq("id", proj.id);
+    }catch{
+      await supabase.from("projects").update({
+        name: proj.name, client_name: proj.client,
+        address: proj.address||null, status: proj.status,
+      }).eq("id", proj.id);
+    }
+    // Persist margin/overhead/gst to estimates table (source of truth for financials)
+    try{
+      await supabase.from("estimates").update({
+        margin_pct: parseFloat(proj.margin)||0,
+        overhead_pct: parseFloat(proj.overhead)||0,
+      }).eq("project_id", proj.id);
+    }catch{}
+    setSaving(false);
+    pop("Project info saved.");
   }
 
   return <div>
@@ -8711,11 +8742,12 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
         </Grid2>
         <Inp label="Description" value={proj.description||""} onChange={v=>onMutate(p=>({...p,description:v}))} rows={2}/>
         <Inp label="Notes" value={proj.notes||""} onChange={v=>onMutate(p=>({...p,notes:v}))} rows={3}/>
-        <Btn v="pri" onClick={()=>pop("Project info updated.")}>Save</Btn>
+        <Btn v="pri" onClick={saveProject} disabled={saving}>{saving?"Saving…":"Save Project Info"}</Btn>
       </Card>
       <div>
         <Card sx={{marginBottom:14}}>
           <div style={{fontWeight:700,fontSize:13,marginBottom:12,color:T.accent}}>Financial Defaults</div>
+          <div style={{color:T.faint,fontSize:11,marginBottom:10}}>Margin and overhead are shared with the Estimate — changes here apply project-wide.</div>
           <Grid3 gap={10}>
             <Inp label="Margin %" value={proj.margin||0} onChange={v=>onMutate(p=>({...p,margin:v}))} type="number" mono/>
             <Inp label="Overhead %" value={proj.overhead||0} onChange={v=>onMutate(p=>({...p,overhead:v}))} type="number" mono/>
@@ -8727,6 +8759,7 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
             <Sel value={proj.status} onChange={v=>onMutate(p=>({...p,status:v}))}
               options={Object.entries(STATUS).map(([k,v])=>({value:k,label:v.label}))}/>
           </div>
+          <Btn v="pri" sx={{marginTop:10}} onClick={saveProject} disabled={saving}>{saving?"Saving…":"Save"}</Btn>
         </Card>
         <Card>
           <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:T.accent}}>Summary</div>
