@@ -1176,10 +1176,12 @@ export default function App() {
         company_id: companyId,
         name: np.name,
         client_name: np.client,
-        address: np.address,
+        address: np.address||null,
         status: "draft",
         quote_value: 0,
         created_by: user.id,
+        builder_id: np.builder_id||null,
+        client_id: np.client_id||null,
       };
       const { data, error } = await supabase.from("projects").insert(insert).select().single();
       if (error) throw error;
