@@ -6195,6 +6195,10 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
       onMutate(p=>({...p,status:"lost"}));
       await dbUpdateProject(proj.id, {status:"lost"});
       pop("Quote marked declined.","info");
+    } else if(status==="sent") {
+      onMutate(p=>({...p,status:"sent"}));
+      await dbUpdateProject(proj.id, {status:"sent"});
+      pop("Quote marked sent — project status updated to Sent.");
     } else pop(`Quote marked ${status}.`,"info");
     setVersions(vs=>vs.map(v=>v.id===id?{...v,...data}:v));
   }
