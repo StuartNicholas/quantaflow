@@ -2099,13 +2099,15 @@ function ReportingModule({projects, clients}) {
   });
   const maxFcastVal = Math.max(...fcastMonths.map(m=>m.value), 1);
 
-  // ── Status display config ───────────────────────────────────────────────
+  // ── Status display config — must match STATUS keys ──────────────────────
   const STATUS_CFG = {
-    draft:    {color:T.faint,  label:"Draft"},
-    active:   {color:T.blue,   label:"Active"},
-    approved: {color:T.green,  label:"Approved"},
-    complete: {color:T.teal,   label:"Complete"},
-    archived: {color:T.faint,  label:"Archived"},
+    draft:    {color:T.faint,   label:"Draft"},
+    quoting:  {color:"#eab308", label:"Quoting"},
+    sent:     {color:"#3b82f6", label:"Sent"},
+    approved: {color:"#22c55e", label:"Approved"},
+    active:   {color:T.blue,    label:"Active"},
+    complete: {color:T.teal,    label:"Complete"},
+    lost:     {color:"#ef4444", label:"Lost"},
   };
 
   // ── Activity icon map ───────────────────────────────────────────────────
@@ -2486,6 +2488,10 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
     </Card>
   </div>;
 
+  const statusCounts = projects.reduce((acc,p)=>{
+    acc[p.status||"draft"]=(acc[p.status||"draft"]||0)+1; return acc;
+  },{});
+
   const filtered = projects.filter(p=>{
     const ms = filter==="all"||p.status===filter;
     const mq = !search||[p.name,p.client,p.address].join(" ").toLowerCase().includes(search.toLowerCase());
@@ -2544,7 +2550,9 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
           padding:"7px 11px",color:T.text,fontSize:13,outline:"none",fontFamily:T.font}}/>
       <Row gap={4}>
         {["all",...Object.keys(STATUS)].map(k=>{
-          const label=k==="all"?"All":(STATUS[k]?.label||k);
+          const base = k==="all"?"All":(STATUS[k]?.label||k);
+          const cnt  = k==="all" ? projects.length : (statusCounts[k]||0);
+          const label= cnt>0 ? `${base} (${cnt})` : base;
           return <div key={k} onClick={()=>setFilter(k)} style={{
             padding:"5px 11px",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:600,
             background:filter===k?T.accentDim:T.card,color:filter===k?T.accent:T.muted,
@@ -2588,8 +2596,18 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
               <td style={{padding:"10px 10px",fontFamily:T.mono,color:qv>0?T.accent:T.faint,fontWeight:700}}>
                 {qv>0?$$(qv):"—"}
               </td>
-              <td style={{padding:"10px 10px",color:T.muted,fontSize:12}}>
-                {(()=>{const d=p.due_date||p.dueDate;return d?<span style={{color:T.text}}>{fmtDate(d,true)}</span>:<span style={{color:T.faint}}>—</span>;})()}
+              <td style={{padding:"10px 10px",fontSize:12}}>
+                {(()=>{
+                  const d=p.due_date||p.dueDate;
+                  if(!d) return <span style={{color:T.faint}}>—</span>;
+                  const daysLeft=Math.ceil((new Date(d)-Date.now())/86400000);
+                  const isDone=["complete","lost"].includes(p.status);
+                  const color=isDone?T.faint:daysLeft<0?"#ef4444":daysLeft<=7?"#f59e0b":T.text;
+                  const tag=isDone?"":(daysLeft<0?" overdue":daysLeft===0?" today":daysLeft<=7?` ${daysLeft}d`:"");
+                  return <span style={{color,fontWeight:daysLeft<=7&&!isDone?600:400}}>
+                    {fmtDate(d,true)}{tag&&<span style={{fontSize:10,marginLeft:4}}>{tag}</span>}
+                  </span>;
+                })()}
               </td>
               <td style={{padding:"10px 10px"}}>
                 <Row gap={5} onClick={e=>e.stopPropagation()}>
