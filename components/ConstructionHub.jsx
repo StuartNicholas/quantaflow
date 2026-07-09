@@ -2293,7 +2293,7 @@ function Dashboard({projects, xero, onOpen, setNav}) {
   });
 
   // Activity icons + colours
-  const actIcon  = t=>({project:"◧",estimate:"≡",quote:"◈",claim:"$",takeoff:"⬜",procurement:"📦"}[t]||"●");
+  const actIcon  = t=>({project:"◧",estimate:"≡",quote_version:"◈",claim:"$",variation:"△",purchase_order:"📦",defect:"⚠",handover_item:"✓",client:"◎"}[t]||"●");
   const actColor = a=>({create:T.green,update:T.blue,delete:T.red,advance:T.teal,submit:T.teal,approve:T.green,pay:T.green}[a]||T.muted);
   const timeAgo  = s=>{ const d=Math.floor((Date.now()-new Date(s))/60000); return d<1?"just now":d<60?`${d}m ago`:d<1440?`${Math.floor(d/60)}h ago`:`${Math.floor(d/1440)}d ago`; };
 
@@ -2579,7 +2579,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
         pop(`→ ${STATUS[sm.next].label}`);
       }}>Advance →</Btn>}
       <div style={{marginLeft:"auto",textAlign:"right"}}>
-        <div style={{fontFamily:T.mono,fontSize:20,fontWeight:800,color:T.accent}}>{$$(c.total)}</div>
+        <div style={{fontFamily:T.mono,fontSize:20,fontWeight:800,color:T.accent}}>{$$(c.total||proj.quote_value||0)}</div>
         <div style={{color:T.faint,fontSize:11}}>inc. GST{c.actTotal>0?` · ${$$(c.actTotal,true)} actual`:""}</div>
       </div>
     </Row>
