@@ -2019,6 +2019,27 @@ function ReportingModule({projects, clients}) {
     .sort((a,b)=>b.value-a.value).slice(0,8);
   const maxClientVal = topClients[0]?.value||1;
 
+  // ── Monthly revenue forecast (next 6 months, by project due_date) ───────
+  const fcastNow = new Date();
+  const fcastMonths = Array.from({length:6}, (_,i)=>{
+    const d = new Date(fcastNow.getFullYear(), fcastNow.getMonth()+i, 1);
+    return {
+      key: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`,
+      label: d.toLocaleDateString("en-AU",{month:"short",year:"numeric"}),
+      value: 0, count: 0,
+    };
+  });
+  const fcastMap = {};
+  fcastMonths.forEach(m=>{ fcastMap[m.key]=m; });
+  let unscheduledVal=0, unscheduledCount=0;
+  projects.filter(p=>!["archived","lost"].includes(p.status)).forEach(p=>{
+    const due = p.due_date||p.dueDate;
+    const val = p.quote_value||calc(p).total;
+    if(due){ const key=due.slice(0,7); if(fcastMap[key]){fcastMap[key].value+=val;fcastMap[key].count++;} }
+    else { unscheduledVal+=val; unscheduledCount++; }
+  });
+  const maxFcastVal = Math.max(...fcastMonths.map(m=>m.value), 1);
+
   // ── Status display config ───────────────────────────────────────────────
   const STATUS_CFG = {
     draft:    {color:T.faint,  label:"Draft"},
@@ -2121,6 +2142,42 @@ function ReportingModule({projects, clients}) {
               </div>}
             </>
           }
+        </Card>
+
+        {/* Monthly revenue forecast */}
+        <Card>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>Revenue Forecast</div>
+          <div style={{color:T.muted,fontSize:11,marginBottom:14}}>Pipeline value by project due date — next 6 months</div>
+          <div style={{display:"flex",alignItems:"flex-end",gap:6,height:90,marginBottom:10}}>
+            {fcastMonths.map(m=>{
+              const barPct = m.value/maxFcastVal*100;
+              return <div key={m.key} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+                <div style={{width:"100%",height:70,display:"flex",alignItems:"flex-end"}}>
+                  <div title={m.value>0?`${m.label}: ${$$(m.value,true)} (${m.count} proj)`:`${m.label}: no projects due`}
+                    style={{width:"100%",height:`${barPct}%`,minHeight:m.value>0?3:0,
+                      background:T.accent,borderRadius:"3px 3px 0 0",transition:"height 0.4s",
+                      opacity:m.value>0?1:0.15}}/>
+                </div>
+                <div style={{fontSize:9,color:T.muted,textAlign:"center",whiteSpace:"nowrap",lineHeight:1.2}}>
+                  {m.label}
+                </div>
+                {m.count>0&&<div style={{fontSize:9,color:T.faint,textAlign:"center"}}>{m.count}p</div>}
+              </div>;
+            })}
+          </div>
+          {fcastMonths.some(m=>m.value>0)&&<Row gap={6} wrap sx={{marginBottom:unscheduledCount>0?8:0}}>
+            {fcastMonths.filter(m=>m.value>0).map(m=><div key={m.key}
+              style={{fontSize:11,fontFamily:T.mono,color:T.accent,whiteSpace:"nowrap"}}>
+              {m.label}: <strong>{$$(m.value,true)}</strong>
+            </div>)}
+          </Row>}
+          {unscheduledCount>0&&<div style={{fontSize:11,color:T.faint,borderTop:`1px solid ${T.border}`,paddingTop:8}}>
+            {unscheduledCount} project{unscheduledCount!==1?"s":""} without a due date ·{" "}
+            <span style={{fontFamily:T.mono,color:T.text,fontWeight:600}}>{$$(unscheduledVal,true)}</span> unscheduled
+          </div>}
+          {fcastMonths.every(m=>m.value===0)&&unscheduledCount===0&&<div style={{fontSize:12,color:T.faint}}>
+            No active projects — add due dates to projects to see your forecast.
+          </div>}
         </Card>
 
         {/* Top clients */}
