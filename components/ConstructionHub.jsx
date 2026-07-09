@@ -2479,7 +2479,7 @@ function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,
     <div style={{overflowX:"auto"}}>
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr style={{color:T.faint,textAlign:"left",fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em"}}>
-          {["Project","Client / Address","Status","Quote (inc. GST)","Invoiced",""].map(h=>
+          {["Project","Client / Address","Status","Quote (inc. GST)","Due Date",""].map(h=>
             <th key={h} style={{padding:"7px 10px",fontWeight:600}}>{h}</th>)}
         </tr></thead>
         <tbody>
@@ -2491,7 +2491,7 @@ function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,
               onClick={()=>onOpen(p.id)}>
               <td style={{padding:"10px 10px"}}>
                 <div style={{fontWeight:700,color:T.text}}>{p.name}</div>
-                <div style={{color:T.faint,fontSize:11,marginTop:2}}>{p.created}{p.dueDate?` · due ${p.dueDate}`:""}</div>
+                <div style={{color:T.faint,fontSize:11,marginTop:2}}>{p.created_at?.slice(0,10)||p.created||""}</div>
               </td>
               <td style={{padding:"10px 10px"}}>
                 <div style={{fontWeight:600,fontSize:13,color:T.text}}>{p.client||"—"}</div>
@@ -2501,8 +2501,8 @@ function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,
               <td style={{padding:"10px 10px",fontFamily:T.mono,color:qv>0?T.accent:T.faint,fontWeight:700}}>
                 {qv>0?$$(qv):"—"}
               </td>
-              <td style={{padding:"10px 10px",fontFamily:T.mono,color:p.invoiced>0?T.green:T.faint}}>
-                {p.invoiced>0?$$(p.invoiced):"—"}
+              <td style={{padding:"10px 10px",color:T.muted,fontSize:12}}>
+                {(()=>{const d=p.due_date||p.dueDate;return d?<span style={{color:T.text}}>{d}</span>:<span style={{color:T.faint}}>—</span>;})()}
               </td>
               <td style={{padding:"10px 10px"}}>
                 <Row gap={5} onClick={e=>e.stopPropagation()}>
