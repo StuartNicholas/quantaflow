@@ -5241,6 +5241,21 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
     }catch{}
   }
 
+  // debounced save of margin/overhead to estimates table so they survive page refresh
+  const _ratesTimer = useRef(null);
+  useEffect(()=>{
+    if(!estId) return;
+    clearTimeout(_ratesTimer.current);
+    _ratesTimer.current = setTimeout(()=>{
+      supabase.from("estimates").update({
+        margin_pct: parseFloat(proj.margin)||0,
+        overhead_pct: parseFloat(proj.overhead)||0,
+      }).eq("id", estId);
+    }, 800);
+    return ()=>clearTimeout(_ratesTimer.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[proj.margin, proj.overhead, estId]);
+
   // mutate in-memory (keeps every reader working) AND persist the change
   function persistAdd(item){
     if(!estId) return;
