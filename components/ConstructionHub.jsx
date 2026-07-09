@@ -2638,9 +2638,9 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="schemes"      && <SchemesModule proj={proj} pop={pop}/>}
     {tab==="production"   && <ProductionModule proj={proj} pop={pop}/>}
     {tab==="procurement"  && <ProcurementModule proj={proj} company={company} pop={pop}/>}
-    {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} company={company} onMutate={onMutate} pop={pop}/>}
+    {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} company={company} clients={clients} onMutate={onMutate} pop={pop}/>}
     {tab==="handover"  && <HandoverModule proj={proj} onMutate={onMutate} pop={pop}/>}
-    {tab==="claims"    && <ClaimsModule proj={proj} c={c} company={company} pop={pop}/>}
+    {tab==="claims"    && <ClaimsModule proj={proj} c={c} company={company} clients={clients} pop={pop}/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
   </div>;
 }
@@ -6138,6 +6138,10 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
   const [quoteView,    setQuoteView]    = useState("category"); // "category"|"joinery"|"unit"|"byunit"|"unit-individual"|"level"
   const [schemes,      setSchemes]      = useState(null);
   const [viewDepInv,   setViewDepInv]   = useState(null); // quote version to show deposit invoice for
+  const clientEmail = (()=>{
+    const cl=(clients||[]).find(cl=>cl.id===(proj.clientId||proj.client_id)||cl.name===proj.client);
+    return cl?.email||"";
+  })();
 
   useEffect(()=>{
     try{ const s=localStorage.getItem(`qf_schemes_${proj.id}`); if(s) setSchemes(JSON.parse(s)); }catch{}
@@ -6229,9 +6233,10 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
         <Btn sm v="gho" onClick={()=>window.print()}>⎙ Print / Save as PDF</Btn>
         <Btn sm v="gho" onClick={()=>{
           const depRef=`DEP-${String(viewDepInv.version_number).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`;
+          const to=clientEmail?encodeURIComponent(clientEmail):"";
           const sub=encodeURIComponent(`Deposit Invoice ${depRef} – ${proj.name}`);
           const body=encodeURIComponent(`Hi ${proj.client||""},\n\nThank you for accepting our quote for ${proj.name}.\n\nPlease find attached the deposit invoice ${depRef}. Works will commence upon receipt of the deposit payment.\n\nKind regards`);
-          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
+          window.open(`mailto:${to}?subject=${sub}&body=${body}`,"_self");
         }}>✉ Email Client</Btn>
         <Btn sm v="gho" onClick={()=>setViewDepInv(null)}>✕ Close</Btn>
       </div>
@@ -6769,10 +6774,12 @@ function ProcurementModule({proj, company, pop}) {
         </div>
         <Btn sm v="gho" onClick={()=>window.print()}>⎙ Print / Save as PDF</Btn>
         <Btn sm v="gho" onClick={()=>{
+          const sup=suppliers.find(s=>s.id===viewPO.supplier_id);
+          const to=sup?.email?encodeURIComponent(sup.email):"";
           const sub=encodeURIComponent(`Purchase Order ${viewPO.ref} – ${proj.name}`);
-          const body=encodeURIComponent(`Hi,\n\nPlease find Purchase Order ${viewPO.ref} attached for your reference.\n\nKind regards\n${company.name}`);
-          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
-        }}>✉ Email</Btn>
+          const body=encodeURIComponent(`Hi${viewPO.supplier_name?` ${viewPO.supplier_name}`:""},\n\nPlease find Purchase Order ${viewPO.ref} attached for your reference.\n\nKind regards\n${company.name}`);
+          window.open(`mailto:${to}?subject=${sub}&body=${body}`,"_self");
+        }}>✉ Email Supplier</Btn>
         <Btn sm v="gho" onClick={()=>setViewPO(null)}>✕ Close</Btn>
       </div>
       <div style={{flex:1,overflowY:"auto",padding:"28px 20px",background:"#07090c"}}>
@@ -7052,7 +7059,7 @@ function VariationDocument({variation, proj, company, variations, c}) {
   </>;
 }
 
-function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, company, onMutate, pop}) {
+function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, company, clients, onMutate, pop}) {
   const [showAct, setShowAct] = useState(false);
   const [showVar, setShowVar] = useState(false);
   const [busy,    setBusy]    = useState(false);
@@ -7061,6 +7068,10 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
   const [nv, setNv] = useState({ref:"",description:"",amount:0,status:"pending",date:new Date().toISOString().slice(0,10),notes:""});
   const [poCommitted, setPoCommitted] = useState(0);
   const [poCount,     setPoCount]     = useState(0);
+  const clientEmail = (()=>{
+    const cl=(clients||[]).find(c=>c.id===(proj.clientId||proj.client_id)||c.name===proj.client);
+    return cl?.email||"";
+  })();
 
   useEffect(()=>{
     (async()=>{
@@ -7261,9 +7272,10 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
         </div>
         <Btn sm v="gho" onClick={()=>window.print()}>⎙ Print / Save as PDF</Btn>
         <Btn sm v="gho" onClick={()=>{
+          const to=clientEmail?encodeURIComponent(clientEmail):"";
           const sub=encodeURIComponent(`Variation Order ${viewVar.ref} – ${proj.name}`);
           const body=encodeURIComponent(`Hi ${proj.client||""},\n\nPlease find attached Variation Order ${viewVar.ref} for your authorisation.\n\nOnce signed, please return a copy so we can proceed with the works.\n\nKind regards`);
-          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
+          window.open(`mailto:${to}?subject=${sub}&body=${body}`,"_self");
         }}>✉ Email</Btn>
         <Btn sm v="gho" onClick={()=>setViewVar(null)}>✕ Close</Btn>
       </div>
@@ -8296,7 +8308,7 @@ function InvoiceDocument({claim, proj, company}) {
   </div></>;
 }
 
-function ClaimsModule({proj, c, pop, company}) {
+function ClaimsModule({proj, c, pop, company, clients}) {
   const [claims,      setClaims]      = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [expanded,    setExpanded]    = useState(null);
@@ -8310,6 +8322,11 @@ function ClaimsModule({proj, c, pop, company}) {
   const [viewClaim,    setViewClaim]   = useState(null);
   const [viewInvoice,  setViewInvoice] = useState(null);
   const [retentionPct, setRetentionPctState] = useState(0);
+
+  const clientEmail = (()=>{
+    const cl=(clients||[]).find(c=>c.id===(proj.clientId||proj.client_id)||c.name===proj.client);
+    return cl?.email||"";
+  })();
 
   // Persist retention % per project in localStorage
   useEffect(()=>{
@@ -8705,9 +8722,10 @@ function ClaimsModule({proj, c, pop, company}) {
         <Btn sm v="gho" onClick={()=>window.print()}>⎙ Print / Save as PDF</Btn>
         <Btn sm v="gho" onClick={()=>{
           const invNum=`INV-${String(viewInvoice.claim_number).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`;
+          const to=clientEmail?encodeURIComponent(clientEmail):"";
           const sub=encodeURIComponent(`Tax Invoice ${invNum} – ${proj.name}`);
           const body=encodeURIComponent(`Hi ${proj.client||""},\n\nPlease find attached Tax Invoice ${invNum} for the above project.\n\nPlease don't hesitate to contact us if you have any questions.\n\nKind regards`);
-          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
+          window.open(`mailto:${to}?subject=${sub}&body=${body}`,"_self");
         }}>✉ Email</Btn>
         <Btn sm v="gho" onClick={()=>setViewInvoice(null)}>✕ Close</Btn>
       </div>
@@ -8734,9 +8752,10 @@ function ClaimsModule({proj, c, pop, company}) {
           window.print();
         }}>⎙ Print / Save as PDF</Btn>
         <Btn sm v="gho" onClick={()=>{
+          const to=clientEmail?encodeURIComponent(clientEmail):"";
           const sub=encodeURIComponent(`Progress Claim #${viewClaim.claim_number} – ${proj.name}`);
           const body=encodeURIComponent(`Hi ${proj.client||""},\n\nPlease find attached Progress Claim #${viewClaim.claim_number} for the above project.\n\nPlease don't hesitate to contact us if you have any questions.\n\nKind regards`);
-          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
+          window.open(`mailto:${to}?subject=${sub}&body=${body}`,"_self");
         }}>✉ Email</Btn>
         <Btn sm v="gho" onClick={()=>setViewClaim(null)}>✕ Close</Btn>
       </div>
