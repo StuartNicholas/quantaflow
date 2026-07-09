@@ -1469,7 +1469,7 @@ export default function App() {
                 <span style={{marginLeft:"auto"}}><Btn sm v="pri" onClick={returnToProject}>← Back to takeoff</Btn></span>
               </div>}
               {nav==="dashboard" && <Dashboard projects={projects} xero={xero} onOpen={openProj} setNav={setNav}/>}
-              {nav==="projects"  && <ProjectsModule projects={projects} loading={projectsLoading} error={projectsError} company={company} builders={builders} onOpen={openProj} onTrash={trashProject} onDuplicate={duplicateProject} pop={pop} createProject={createProject}/>}
+              {nav==="projects"  && <ProjectsModule projects={projects} loading={projectsLoading} error={projectsError} company={company} builders={builders} clients={clients} onOpen={openProj} onTrash={trashProject} onDuplicate={duplicateProject} pop={pop} createProject={createProject}/>}
               {nav==="clients"   && <ClientsModule clients={clients} reloadClients={reloadClients} clientsLoading={clientsLoading} projects={projects} pop={pop}/>}
               {nav==="builders"  && <BuildersModule builders={builders} reloadBuilders={reloadBuilders} buildersLoading={buildersLoading} projects={projects} pop={pop}/>}
               {nav==="suppliers" && <SuppliersModule pop={pop}/>}
@@ -2452,9 +2452,9 @@ function Dashboard({projects, xero, onOpen, setNav}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // PROJECTS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,onDuplicate,pop,createProject}) {
+function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,onTrash,onDuplicate,pop,createProject}) {
   const [showNew,setShowNew]=useState(false);
-  const [np,setNp]=useState({name:"",client:"",address:"",builder_id:""});
+  const [np,setNp]=useState({name:"",client:"",client_id:"",address:"",builder_id:""});
   const [filter,setFilter]=useState("all");
   const [search,setSearch]=useState("");
 
@@ -2483,8 +2483,8 @@ function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,
   async function create() {
     if(!np.name.trim()) return pop("Project name required.","error");
     try {
-      await createProject({...np, builder_id: np.builder_id||null});
-      setNp({name:"",client:"",address:"",builder_id:""});
+      await createProject({...np, builder_id: np.builder_id||null, client_id: np.client_id||null});
+      setNp({name:"",client:"",client_id:"",address:"",builder_id:""});
       setShowNew(false);
     } catch {}
   }
@@ -2499,7 +2499,15 @@ function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,
       <div style={{fontWeight:700,marginBottom:12,color:T.accent}}>New Project</div>
       <Grid2 gap={10}>
         <Inp label="Project Name" value={np.name} onChange={v=>setNp(x=>({...x,name:v}))} placeholder="e.g. Smith Residence Extension"/>
-        <Inp label="Client Name" value={np.client} onChange={v=>setNp(x=>({...x,client:v}))} placeholder="Client or company name"/>
+        <div>
+          <div style={{fontSize:12,color:T.muted,marginBottom:4,fontWeight:600}}>Client</div>
+          <Sel value={np.client_id||"__new__"} onChange={v=>{
+            if(v==="__new__"){ setNp(x=>({...x,client_id:"",client:""})); return; }
+            const cl=(clients||[]).find(c=>c.id===v);
+            setNp(x=>({...x,client_id:v,client:cl?.name||""}));
+          }} options={[{value:"__new__",label:"— type new client name —"},...(clients||[]).map(c=>({value:c.id,label:c.name}))]}/>
+          {!np.client_id&&<Inp value={np.client} onChange={v=>setNp(x=>({...x,client:v}))} placeholder="Client or company name" sx={{marginTop:6}}/>}
+        </div>
       </Grid2>
       <Inp label="Site Address" value={np.address} onChange={v=>setNp(x=>({...x,address:v}))} placeholder="Full site address"/>
       <div style={{marginBottom:10}}>
@@ -8901,6 +8909,7 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
       await supabase.from("projects").update({
         name: proj.name,
         client_name: proj.client,
+        client_id: proj.clientId||null,
         address: proj.address||null,
         status: proj.status,
         description: proj.description||null,
@@ -8909,7 +8918,7 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
       }).eq("id", proj.id);
     }catch{
       await supabase.from("projects").update({
-        name: proj.name, client_name: proj.client,
+        name: proj.name, client_name: proj.client, client_id: proj.clientId||null,
         address: proj.address||null, status: proj.status,
       }).eq("id", proj.id);
     }
@@ -8929,7 +8938,16 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
       <Card>
         <div style={{fontWeight:700,fontSize:13,marginBottom:12,color:T.accent}}>Project Details</div>
         <Inp label="Project Name" value={proj.name} onChange={v=>onMutate(p=>({...p,name:v}))}/>
-        <Inp label="Client" value={proj.client} onChange={v=>onMutate(p=>({...p,client:v}))}/>
+        <div style={{marginBottom:10}}>
+          <div style={{fontSize:12,color:T.muted,marginBottom:4,fontWeight:600}}>Client</div>
+          <Sel value={proj.clientId||"__new__"} onChange={v=>{
+            if(v==="__new__"){ onMutate(p=>({...p,clientId:null})); return; }
+            const cl=(clients||[]).find(c=>c.id===v);
+            onMutate(p=>({...p,clientId:v,client:cl?.name||p.client}));
+          }} options={[{value:"__new__",label:"— unlinked / type name below —"},...(clients||[]).map(c=>({value:c.id,label:c.name}))]}/>
+          <Inp value={proj.client} onChange={v=>onMutate(p=>({...p,client:v}))}
+            placeholder="Client or company name" sx={{marginTop:6}}/>
+        </div>
         <Inp label="Site Address" value={proj.address} onChange={v=>onMutate(p=>({...p,address:v}))}/>
         <div style={{marginBottom:10}}>
           <div style={{fontSize:12,color:T.muted,marginBottom:4,fontWeight:600}}>Builder / Head Contractor <span style={{color:T.faint,fontWeight:400}}>(optional)</span></div>
