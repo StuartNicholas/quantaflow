@@ -1249,7 +1249,7 @@ export default function App() {
   }
 
   const curProj = projId ? projects.find(p=>p.id===projId) : null;
-  const pipeline = projects.reduce((s,p)=>s+calc(p).total, 0);
+  const pipeline = projects.reduce((s,p)=>s+(p.quote_value||calc(p).total), 0);
 
   const NAV = [
     {id:"dashboard", icon:"▦",label:"Dashboard"},
@@ -1982,10 +1982,10 @@ function ReportingModule({projects, clients}) {
     const s=p.status||"draft";
     if(!byStatus[s]) byStatus[s]={count:0,value:0};
     byStatus[s].count++;
-    byStatus[s].value+=calc(p).total;
+    byStatus[s].value+=(p.quote_value||calc(p).total);
   });
 
-  const totalPipeline = projects.reduce((s,p)=>s+calc(p).total,0);
+  const totalPipeline = projects.reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
   const activeValue   = (byStatus.active?.value||0)+(byStatus.approved?.value||0);
   const completedVal  = byStatus.complete?.value||0;
 
@@ -2012,7 +2012,7 @@ function ReportingModule({projects, clients}) {
     const cl  = clients.find(c=>c.id===cid);
     const name= cl?.name || (typeof cid==="string"&&cid.length<40?cid:"Unknown");
     if(!clientValues[name]) clientValues[name]={name,value:0,count:0};
-    clientValues[name].value += calc(p).total;
+    clientValues[name].value += (p.quote_value||calc(p).total);
     clientValues[name].count++;
   });
   const topClients = Object.values(clientValues)
@@ -2207,9 +2207,9 @@ function Dashboard({projects, xero, onOpen, setNav}) {
     dbGetActivityFeed(10).then(({data})=>setActFeed(data||[]));
   },[projects]);
 
-  const pipeline   = projects.reduce((s,p)=>s+calc(p).total,0);
+  const pipeline   = projects.reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
   const invoiced   = projects.reduce((s,p)=>s+(p.invoiced||0),0);
-  const wonVal     = projects.filter(p=>["approved","active","complete"].includes(p.status)).reduce((s,p)=>s+calc(p).total,0);
+  const wonVal     = projects.filter(p=>["approved","active","complete"].includes(p.status)).reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
   const outstanding= Math.max(0, wonVal - invoiced);
   const activeJobs = projects.filter(p=>["approved","active"].includes(p.status)).length;
   const pending    = projects.filter(p=>["quoting","sent"].includes(p.status)).length;
@@ -2228,7 +2228,7 @@ function Dashboard({projects, xero, onOpen, setNav}) {
     const ageDays = p.created ? Math.floor((today - new Date(p.created)) / 86400000) : 0;
     if(p.status==="sent"  && ageDays>14) attention.push({proj:p, msg:`Quote sent ${ageDays}d ago — awaiting decision`, color:T.yellow});
     if(p.status==="active"&& !localStorage.getItem(`qf_prod_${p.id}`)) attention.push({proj:p, msg:"Active job — no production data yet", color:T.orange||T.accent});
-    if(["approved","active"].includes(p.status)&&!calc(p).total) attention.push({proj:p, msg:"No estimate — job has no value", color:T.red});
+    if(["approved","active"].includes(p.status)&&!p.quote_value&&!calc(p).total) attention.push({proj:p, msg:"No estimate — job has no value", color:T.red});
   });
 
   // Activity icons + colours
@@ -2323,7 +2323,7 @@ function Dashboard({projects, xero, onOpen, setNav}) {
       <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>Pipeline by Status</div>
       <div style={{display:"flex",height:22,borderRadius:5,overflow:"hidden",marginBottom:8}}>
         {Object.entries(STATUS).map(([k,v])=>{
-          const val=projects.filter(p=>p.status===k).reduce((s,p)=>s+calc(p).total,0);
+          const val=projects.filter(p=>p.status===k).reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
           const pct=pipeline>0?val/pipeline*100:0;
           return pct>0?<div key={k} title={`${v.label}: ${$$(val,true)}`} style={{width:`${pct}%`,background:v.color,transition:"width 0.5s"}}/>:null;
         })}
@@ -2331,7 +2331,7 @@ function Dashboard({projects, xero, onOpen, setNav}) {
       </div>
       <Row gap={14} wrap>
         {Object.entries(STATUS).map(([k,v])=>{
-          const val=projects.filter(p=>p.status===k).reduce((s,p)=>s+calc(p).total,0);
+          const val=projects.filter(p=>p.status===k).reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
           return val>0?<div key={k} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
             <span style={{width:8,height:8,borderRadius:"50%",background:v.color,display:"inline-block"}}/>
             <span style={{color:T.muted}}>{v.label}:</span>
@@ -6080,9 +6080,15 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
   async function setStatus(id, status) {
     const { data, error } = await dbUpdateQuoteStatus(id, status);
     if(error) return pop(error,"error");
-    if(status==="accepted") { onMutate(p=>({...p,status:"approved"})); pop("Quote accepted — project marked approved!"); }
-    else if(status==="declined") { onMutate(p=>({...p,status:"lost"})); pop("Quote marked declined.","info"); }
-    else pop(`Quote marked ${status}.`,"info");
+    if(status==="accepted") {
+      onMutate(p=>({...p,status:"approved"}));
+      await dbUpdateProject(proj.id, {status:"approved"});
+      pop("Quote accepted — project marked approved!");
+    } else if(status==="declined") {
+      onMutate(p=>({...p,status:"lost"}));
+      await dbUpdateProject(proj.id, {status:"lost"});
+      pop("Quote marked declined.","info");
+    } else pop(`Quote marked ${status}.`,"info");
     setVersions(vs=>vs.map(v=>v.id===id?{...v,...data}:v));
   }
 
@@ -8911,7 +8917,7 @@ function ClientsModule({clients, reloadClients, clientsLoading, projects, pop}) 
       <div>
         {filtered.map(c=>{
           const cProjs=projects.filter(p=>p.clientId===c.id||p.client===c.name);
-          const cVal=cProjs.reduce((s,p)=>s+calc(p).total,0);
+          const cVal=cProjs.reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
           return <div key={c.id} onClick={()=>{setSel(c.id===sel?null:c.id);setEditing(false);}} style={{
             display:"flex",justifyContent:"space-between",alignItems:"flex-start",
             padding:"12px 14px",borderRadius:7,marginBottom:6,cursor:"pointer",
