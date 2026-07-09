@@ -7850,6 +7850,130 @@ function ClaimDocument({claim, proj, company, contractTotal, allClaims}) {
   </>;
 }
 
+// ─── Tax Invoice document (green #15803d) ────────────────────────────────────
+function InvoiceDocument({claim, proj, company}) {
+  const green = "#15803d";
+  const items = claim.claim_items||[];
+  const exGst = items.reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
+  const gstAmt = exGst*0.10;
+  const incGst = exGst+gstAmt;
+  const invoiceNum = `INV-${String(claim.claim_number).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`;
+  const issuedDate = new Date().toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+  // Due date: 14 days from today (or use paymentTerms days if detectable)
+  const dueDays = parseInt((company.paymentTerms||"").match(/(\d+)\s*day/i)?.[1]||"14",10);
+  const dueDate = new Date(Date.now()+dueDays*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+
+  return <><style>{`
+    @media print {
+      aside, .no-print { display: none !important; }
+      #qf-root { background: white !important; }
+      main { background: white !important; padding: 0 !important; overflow: visible !important; }
+      body { background: white !important; margin: 0; }
+      #qf-invoice-overlay { position: static !important; background: transparent !important; padding: 0 !important; overflow: visible !important; }
+      #qf-invoice-document { box-shadow: none !important; border-radius: 0 !important; margin: 0 !important; max-width: 100% !important; padding: 28px 40px !important; }
+    }
+  `}</style>
+  <div id="qf-invoice-document" style={{background:"#fff",color:"#111827",borderRadius:8,padding:"44px 54px",
+    maxWidth:840,fontFamily:"Georgia,serif",fontSize:13,lineHeight:1.65,margin:"0 auto",
+    boxShadow:"0 4px 40px rgba(0,0,0,0.5)"}}>
+
+    {/* Header */}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:28}}>
+      <div>
+        <div style={{fontWeight:900,fontSize:22,color:"#111827",fontFamily:"system-ui,sans-serif",marginBottom:4}}>{company.name}</div>
+        <div style={{color:"#6b7280",fontSize:12,lineHeight:1.75}}>
+          {company.address}<br/>
+          {company.phone} · {company.email}
+          {company.abn&&<><br/>ABN: {company.abn}</>}
+        </div>
+      </div>
+      <div style={{textAlign:"right"}}>
+        <div style={{fontWeight:900,fontSize:32,color:green,fontFamily:"system-ui,sans-serif",letterSpacing:"-1px"}}>TAX INVOICE</div>
+        <div style={{color:"#6b7280",fontSize:12,marginTop:6,lineHeight:1.75}}>
+          Invoice No: <strong>{invoiceNum}</strong><br/>
+          Date: {issuedDate}<br/>
+          Payment Due: {dueDate}
+        </div>
+      </div>
+    </div>
+    <hr style={{border:"none",borderTop:`2px solid ${green}`,marginBottom:24}}/>
+
+    {/* Bill To / Project */}
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24,marginBottom:24}}>
+      <div>
+        <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
+          color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>Bill To</div>
+        <div style={{fontWeight:700,fontSize:15}}>{proj.client||"—"}</div>
+        <div style={{color:"#6b7280"}}>{proj.address}</div>
+      </div>
+      <div>
+        <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
+          color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>Project</div>
+        <div style={{fontWeight:700}}>{proj.name}</div>
+        {claim.description&&<div style={{color:"#6b7280",fontSize:12,marginTop:2}}>{claim.description}</div>}
+      </div>
+    </div>
+
+    {/* Line items */}
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:24}}>
+      <thead>
+        <tr style={{background:"#f0fdf4",borderBottom:`2px solid ${green}`}}>
+          <th style={{padding:"8px 10px",textAlign:"left",fontWeight:700,fontFamily:"system-ui,sans-serif",color:"#166534"}}>Description</th>
+          <th style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontFamily:"system-ui,sans-serif",color:"#166534",width:55}}>Qty</th>
+          <th style={{padding:"8px 10px",fontWeight:700,fontFamily:"system-ui,sans-serif",color:"#166534",width:55}}>Unit</th>
+          <th style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontFamily:"system-ui,sans-serif",color:"#166534",width:100}}>Unit Price</th>
+          <th style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontFamily:"system-ui,sans-serif",color:"#166534",width:100}}>Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((item,i)=>(
+          <tr key={item.id||i} style={{borderBottom:"1px solid #e5e7eb"}}>
+            <td style={{padding:"9px 10px",color:"#111827"}}>{item.description}</td>
+            <td style={{padding:"9px 10px",textAlign:"right",fontFamily:"monospace"}}>{item.qty}</td>
+            <td style={{padding:"9px 10px",color:"#6b7280"}}>{item.unit||"—"}</td>
+            <td style={{padding:"9px 10px",textAlign:"right",fontFamily:"monospace"}}>{$$(item.unit_cost)}</td>
+            <td style={{padding:"9px 10px",textAlign:"right",fontFamily:"monospace",fontWeight:600}}>{$$((item.qty||0)*(item.unit_cost||0))}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+
+    {/* Totals */}
+    <div style={{display:"flex",justifyContent:"flex-end",marginBottom:28}}>
+      <div style={{width:280}}>
+        {[
+          {l:"Subtotal (ex. GST)", v:$$(exGst)},
+          {l:`GST (10%)`,          v:$$(gstAmt)},
+          {l:"TOTAL (inc. GST)",   v:$$(incGst), big:true},
+        ].map(r=>(
+          <div key={r.l} style={{display:"flex",justifyContent:"space-between",
+            padding:r.big?"10px 0 0":"5px 0",borderTop:r.big?`2px solid ${green}`:"none",
+            marginTop:r.big?4:0}}>
+            <span style={{color:r.big?"#111827":"#6b7280",fontFamily:"system-ui,sans-serif",fontSize:r.big?14:12,fontWeight:r.big?700:400}}>{r.l}</span>
+            <span style={{fontFamily:"monospace",fontWeight:r.big?800:400,fontSize:r.big?18:13,color:r.big?green:"#111827"}}>{r.v}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {/* Payment details */}
+    {(company.bankAccount||company.paymentTerms)&&<div style={{
+      padding:"14px 18px",background:"#f0fdf4",borderRadius:6,borderLeft:`3px solid ${green}`,fontSize:12}}>
+      <div style={{fontWeight:700,color:"#166534",marginBottom:6,fontFamily:"system-ui,sans-serif"}}>Payment Details</div>
+      {company.bankAccount&&<div style={{color:"#374151",marginBottom:4}}>
+        <strong>{company.bankName}</strong> · Account: {company.bankAccount}
+      </div>}
+      {company.abn&&<div style={{color:"#6b7280",marginBottom:4}}>ABN: {company.abn} · GST Registered</div>}
+      <div style={{color:"#6b7280"}}>{company.paymentTerms||`Payment due within ${dueDays} days of invoice date.`}</div>
+    </div>}
+
+    <div style={{marginTop:16,fontSize:11,color:"#9ca3af",lineHeight:1.7}}>
+      All amounts in {company.currency||"AUD"} including GST at 10% where applicable.
+      Please quote invoice number <strong>{invoiceNum}</strong> on your payment.
+    </div>
+  </div></>;
+}
+
 function ClaimsModule({proj, c, pop, company}) {
   const [claims,      setClaims]      = useState([]);
   const [loading,     setLoading]     = useState(true);
@@ -7862,6 +7986,7 @@ function ClaimsModule({proj, c, pop, company}) {
   const [unitReg,     setUnitReg]     = useState({units:[]});
   const [wiz,         setWiz]         = useState(null); // {claimNum, description, periodEnd, selections:Set}
   const [viewClaim,   setViewClaim]   = useState(null);
+  const [viewInvoice, setViewInvoice] = useState(null);
 
   async function reload() {
     const { data } = await dbListClaims(proj.id);
@@ -7973,15 +8098,20 @@ function ClaimsModule({proj, c, pop, company}) {
   }
 
   async function importFromEstimate(cl){
-    const rows = (proj.lineItems||[])
-      .filter(li=>(li.label||li.desc||"").trim())
-      .map(li=>({
-        description: li.label||li.desc||"",
-        qty: li.qty||1,
-        unit: li.unit||"",
-        unit_cost: li.unitCost||li.unit_cost||0,
-      }));
-    if(!rows.length) return pop("No estimate items to import.","error");
+    const items = (proj.lineItems||[]).filter(li=>(li.description||"").trim());
+    if(!items.length) return pop("No estimate items to import.","error");
+    const sub = items.reduce((s,li)=>(li.qty||0)*(li.rate||0)*(1+((li.margin??proj.margin??0)/100))+s, 0);
+    const rows = items.map(li=>({
+      description: li.description,
+      qty: li.qty||1,
+      unit: li.unit||"",
+      unit_cost: parseFloat((li.rate*(1+((li.margin??proj.margin??0)/100))).toFixed(2)),
+    }));
+    // Add overhead as a separate line when applicable
+    const ovhdPct = parseFloat(proj.overhead)||0;
+    if(ovhdPct>0 && sub>0){
+      rows.push({description:`Overhead (${ovhdPct}%)`,qty:1,unit:"allow",unit_cost:parseFloat((sub*ovhdPct/100).toFixed(2))});
+    }
     const { error } = await dbAddClaimItems(cl.id, rows);
     if(error) return pop(error,"error");
     await reload();
@@ -8207,6 +8337,29 @@ function ClaimsModule({proj, c, pop, company}) {
       </div>
     </Card>}
 
+    {/* ── Tax Invoice overlay ── */}
+    {viewInvoice&&company&&<div id="qf-invoice-overlay" style={{position:"fixed",inset:0,zIndex:10001,
+      background:"rgba(0,0,0,0.88)",display:"flex",flexDirection:"column"}}>
+      <div className="no-print" style={{background:"#0d1117",padding:"12px 20px",display:"flex",
+        gap:10,alignItems:"center",borderBottom:"1px solid #1c2838",flexShrink:0}}>
+        <div style={{flex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:"#dde6f0"}}>Tax Invoice</span>
+          <span style={{color:"#7a8fa5",fontSize:12,marginLeft:10}}>Claim #{viewInvoice.claim_number} · {viewInvoice.description||proj.name}</span>
+        </div>
+        <Btn sm v="gho" onClick={()=>window.print()}>⎙ Print / Save as PDF</Btn>
+        <Btn sm v="gho" onClick={()=>{
+          const invNum=`INV-${String(viewInvoice.claim_number).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`;
+          const sub=encodeURIComponent(`Tax Invoice ${invNum} – ${proj.name}`);
+          const body=encodeURIComponent(`Hi ${proj.client||""},\n\nPlease find attached Tax Invoice ${invNum} for the above project.\n\nPlease don't hesitate to contact us if you have any questions.\n\nKind regards`);
+          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
+        }}>✉ Email</Btn>
+        <Btn sm v="gho" onClick={()=>setViewInvoice(null)}>✕ Close</Btn>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"28px 20px",background:"#07090c"}}>
+        <InvoiceDocument claim={viewInvoice} proj={proj} company={company}/>
+      </div>
+    </div>}
+
     {/* ── Claim document overlay ── */}
     {viewClaim&&company&&<div id="qf-claim-overlay" style={{position:"fixed",inset:0,zIndex:10000,
       background:"rgba(0,0,0,0.88)",display:"flex",flexDirection:"column"}}>
@@ -8333,7 +8486,8 @@ function ClaimsModule({proj, c, pop, company}) {
               <Btn sm v="gho" onClick={()=>importFromEstimate(cl)}>↓ Import from Estimate</Btn>
             </>}
             {nextBtn&&<Btn sm v={nextV} onClick={()=>advance(cl)}>{nextBtn}</Btn>}
-            <Btn sm v="blu" onClick={()=>setViewClaim(cl)}>⎙ View Document</Btn>
+            <Btn sm v="blu" onClick={()=>setViewClaim(cl)}>⎙ View Claim</Btn>
+            {cl.status!=="draft"&&<Btn sm v="grn" onClick={()=>setViewInvoice(cl)}>⎙ Tax Invoice</Btn>}
             {cl.status==="draft"&&<Btn sm v="red" onClick={()=>removeClaim(cl)}>Delete</Btn>}
           </Row>
         </div>}
