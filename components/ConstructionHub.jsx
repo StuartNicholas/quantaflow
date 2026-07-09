@@ -7872,15 +7872,20 @@ function SchemesModule({proj, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // CLAIMS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function ClaimDocument({claim, proj, company, contractTotal, allClaims}) {
+function ClaimDocument({claim, proj, company, contractTotal, allClaims, retentionPct}) {
   const items = claim.claim_items||[];
   const claimExGst = items.reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
   const gstAmt = claimExGst*0.10;
   const claimIncGst = claimExGst+gstAmt;
+  const retPct = parseFloat(retentionPct)||0;
+  const retentionAmt = claimIncGst * retPct / 100;
+  const netDue = claimIncGst - retentionAmt;
 
   const prevClaims=(allClaims||[]).filter(cl=>cl.id!==claim.id&&["submitted","approved","paid"].includes(cl.status));
   const prevExGst=prevClaims.reduce((s,cl)=>s+(cl.claim_items||[]).reduce((s2,i)=>s2+(i.qty||0)*(i.unit_cost||0),0),0);
   const prevIncGst=prevExGst*1.10;
+  const prevRetentionHeld=prevIncGst*retPct/100;
+  const retentionToDate=prevRetentionHeld+retentionAmt;
 
   const contractHasValue=contractTotal>0;
   const claimRef=`PC${String(claim.claim_number).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`;
@@ -8005,10 +8010,23 @@ function ClaimDocument({claim, proj, company, contractTotal, allClaims}) {
         </>}
         <div style={rowStyle}><span style={lblStyle}>This Claim (ex. GST)</span><span style={{fontFamily:"monospace"}}>{$$(claimExGst)}</span></div>
         <div style={rowStyle}><span style={lblStyle}>GST (10%)</span><span style={{fontFamily:"monospace"}}>{$$(gstAmt)}</span></div>
-        <div style={{display:"flex",justifyContent:"space-between",borderTop:"2px solid #111827",paddingTop:9,marginTop:6}}>
-          <span style={{fontWeight:900,fontFamily:"system-ui,sans-serif",fontSize:15}}>THIS CLAIM (inc. GST)</span>
-          <span style={{fontFamily:"monospace",fontWeight:900,fontSize:17,color:"#1d4ed8"}}>{$$(claimIncGst)}</span>
-        </div>
+        {retPct>0 ? <>
+          <div style={rowStyle}><span style={lblStyle}>Gross This Claim (inc. GST)</span><span style={{fontFamily:"monospace"}}>{$$(claimIncGst)}</span></div>
+          <div style={rowStyle}>
+            <span style={{...lblStyle,color:"#b45309"}}>Less Retention ({retPct}%)</span>
+            <span style={{fontFamily:"monospace",color:"#b45309"}}>({$$(retentionAmt)})</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",borderTop:"2px solid #111827",paddingTop:9,marginTop:6}}>
+            <span style={{fontWeight:900,fontFamily:"system-ui,sans-serif",fontSize:15}}>NET PAYMENT DUE</span>
+            <span style={{fontFamily:"monospace",fontWeight:900,fontSize:17,color:"#1d4ed8"}}>{$$(netDue)}</span>
+          </div>
+          <div style={rowStyle}><span style={{...lblStyle,fontSize:11}}>Retention held to date</span><span style={{fontFamily:"monospace",fontSize:11,color:"#b45309"}}>{$$(retentionToDate)}</span></div>
+        </> : (
+          <div style={{display:"flex",justifyContent:"space-between",borderTop:"2px solid #111827",paddingTop:9,marginTop:6}}>
+            <span style={{fontWeight:900,fontFamily:"system-ui,sans-serif",fontSize:15}}>THIS CLAIM (inc. GST)</span>
+            <span style={{fontFamily:"monospace",fontWeight:900,fontSize:17,color:"#1d4ed8"}}>{$$(claimIncGst)}</span>
+          </div>
+        )}
         {contractHasValue&&<div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:7,borderTop:"1px dashed #d1d5db"}}>
           <span style={lblStyle}>Balance Remaining (inc. GST)</span>
           <span style={{fontFamily:"monospace",fontWeight:700,
@@ -8168,9 +8186,20 @@ function ClaimsModule({proj, c, pop, company}) {
   const [showAddItem, setShowAddItem] = useState(null);
   const [newItem,     setNewItem]     = useState({description:"", qty:1, unit:"", unit_cost:0});
   const [unitReg,     setUnitReg]     = useState({units:[]});
-  const [wiz,         setWiz]         = useState(null); // {claimNum, description, periodEnd, selections:Set}
-  const [viewClaim,   setViewClaim]   = useState(null);
-  const [viewInvoice, setViewInvoice] = useState(null);
+  const [wiz,          setWiz]         = useState(null); // {claimNum, description, periodEnd, selections:Set}
+  const [viewClaim,    setViewClaim]   = useState(null);
+  const [viewInvoice,  setViewInvoice] = useState(null);
+  const [retentionPct, setRetentionPctState] = useState(0);
+
+  // Persist retention % per project in localStorage
+  useEffect(()=>{
+    try{ const r=localStorage.getItem(`qf_retention_${proj.id}`); if(r) setRetentionPctState(parseFloat(r)||0); }catch{}
+  },[proj.id]);
+  function setRetention(v){
+    const pct=Math.max(0,Math.min(50,parseFloat(v)||0));
+    setRetentionPctState(pct);
+    try{ localStorage.setItem(`qf_retention_${proj.id}`,String(pct)); }catch{}
+  }
 
   async function reload() {
     const { data } = await dbListClaims(proj.id);
@@ -8329,11 +8358,14 @@ function ClaimsModule({proj, c, pop, company}) {
     await reload();
   }
 
-  const claimTotal   = cl => (cl.claim_items||[]).reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
-  const totalClaimed  = claims.reduce((s,cl)=>s+claimTotal(cl),0);
-  const totalApproved = claims.filter(cl=>["approved","paid"].includes(cl.status)).reduce((s,cl)=>s+claimTotal(cl),0);
-  const totalPaid     = claims.filter(cl=>cl.status==="paid").reduce((s,cl)=>s+claimTotal(cl),0);
-  const contractVal   = c.total||0;
+  const claimTotal     = cl => (cl.claim_items||[]).reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
+  const claimNet       = cl => { const g=claimTotal(cl)*1.10; return g - g*retentionPct/100; }; // inc-gst net of retention
+  const retHeld        = cl => claimTotal(cl)*1.10*retentionPct/100;
+  const totalClaimed   = claims.reduce((s,cl)=>s+claimTotal(cl),0);
+  const totalApproved  = claims.filter(cl=>["approved","paid"].includes(cl.status)).reduce((s,cl)=>s+claimTotal(cl),0);
+  const totalPaid      = claims.filter(cl=>cl.status==="paid").reduce((s,cl)=>s+claimTotal(cl),0);
+  const totalRetention = claims.filter(cl=>["submitted","approved","paid"].includes(cl.status)).reduce((s,cl)=>s+retHeld(cl),0);
+  const contractVal    = c.total||0;
 
   const STATUS = {
     draft:     {c:T.faint,  l:"Draft"},
@@ -8347,10 +8379,30 @@ function ClaimsModule({proj, c, pop, company}) {
   return <div>
     <Row gap={12} wrap sx={{marginBottom:18}}>
       <KPI label="Contract Value" value={$$(contractVal,true)} sub="inc. GST"/>
-      <KPI label="Claimed"        value={$$(totalClaimed,true)} sub={`${claims.length} claim${claims.length!==1?"s":""}`} color={T.accent}/>
-      <KPI label="Approved"       value={$$(totalApproved,true)} sub="approved + paid" color={T.yellow}/>
-      <KPI label="Paid"           value={$$(totalPaid,true)}     sub="received"        color={T.green}/>
+      <KPI label="Claimed (gross)" value={$$(totalClaimed,true)} sub={`${claims.length} claim${claims.length!==1?"s":""}`} color={T.accent}/>
+      <KPI label="Approved (gross)" value={$$(totalApproved,true)} sub="approved + paid" color={T.yellow}/>
+      <KPI label="Paid (gross)"    value={$$(totalPaid,true)}     sub="received"        color={T.green}/>
+      {retentionPct>0&&<KPI label="Retention Held" value={$$(totalRetention,true)} sub={`${retentionPct}% withheld`} color="#b45309"/>}
     </Row>
+
+    {/* Retention config */}
+    <Card sx={{marginBottom:14,padding:"10px 16px"}}>
+      <Row gap={14} sx={{alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{fontWeight:600,fontSize:12,color:T.text}}>Retention</div>
+        <Row gap={6} sx={{alignItems:"center"}}>
+          <input type="number" min={0} max={50} step={0.5} value={retentionPct}
+            onChange={e=>setRetention(e.target.value)}
+            style={{width:65,padding:"4px 8px",borderRadius:5,border:`1px solid ${T.border}`,
+              background:T.bg,color:T.text,fontFamily:T.mono,fontSize:13}}/>
+          <span style={{color:T.muted,fontSize:13}}>%</span>
+        </Row>
+        {retentionPct>0
+          ? <span style={{fontSize:11,color:"#b45309"}}>
+              {retentionPct}% withheld from each claim · total held {$$(totalRetention,true)}
+            </span>
+          : <span style={{fontSize:11,color:T.faint}}>Set to 0% if no retention applies to this project</span>}
+      </Row>
+    </Card>
 
     {contractVal>0&&<Card sx={{marginBottom:16}}>
       <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Claim Progress</div>
@@ -8576,6 +8628,7 @@ function ClaimsModule({proj, c, pop, company}) {
           company={company}
           contractTotal={contractVal}
           allClaims={claims}
+          retentionPct={retentionPct}
         />
       </div>
     </div>}
@@ -8603,7 +8656,12 @@ function ClaimsModule({proj, c, pop, company}) {
             </div>}
           </div>
           <Bdg color={st.c}>{st.l}</Bdg>
-          <div style={{fontFamily:T.mono,fontWeight:700,fontSize:14,color:T.accent,minWidth:80,textAlign:"right"}}>{$$(total)}</div>
+          <div style={{textAlign:"right",minWidth:90}}>
+            <div style={{fontFamily:T.mono,fontWeight:700,fontSize:14,color:T.accent}}>{$$(total)}</div>
+            {retentionPct>0&&cl.status!=="draft"&&<div style={{fontFamily:T.mono,fontSize:11,color:"#b45309"}}>
+              net {$$(total*1.10*(1-retentionPct/100))}
+            </div>}
+          </div>
           <div onClick={e=>{e.stopPropagation();setViewClaim(cl);}}
             style={{padding:"3px 9px",borderRadius:4,fontSize:11,cursor:"pointer",fontWeight:600,
               border:`1px solid ${T.blue}55`,color:T.blue,whiteSpace:"nowrap"}}>
