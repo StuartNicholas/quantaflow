@@ -2527,7 +2527,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="orderlist"    && <OrderListModule proj={proj} pop={pop}/>}
     {tab==="schemes"      && <SchemesModule proj={proj} pop={pop}/>}
     {tab==="production"   && <ProductionModule proj={proj} pop={pop}/>}
-    {tab==="procurement"  && <ProcurementModule proj={proj} pop={pop}/>}
+    {tab==="procurement"  && <ProcurementModule proj={proj} company={company} pop={pop}/>}
     {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} company={company} onMutate={onMutate} pop={pop}/>}
     {tab==="handover"  && <HandoverModule proj={proj} onMutate={onMutate} pop={pop}/>}
     {tab==="claims"    && <ClaimsModule proj={proj} c={c} company={company} pop={pop}/>}
@@ -2753,6 +2753,11 @@ function OrderListModule({proj, pop}) {
   const [contingency,setContingency]=useState(proj.sheet_contingency_pct??15);
   const [loading,setLoading]=useState(true);
   const [err,setErr]=useState(null);
+  const [suppliers,setSuppliers]=useState([]);
+  const [showCreatePO,setShowCreatePO]=useState(false);
+  const [poSup,setPoSup]=useState("");
+  const [poNotes,setPoNotes]=useState("");
+  const [poCreating,setPoCreating]=useState(false);
 
   useEffect(()=>{(async()=>{
     setLoading(true); setErr(null);
@@ -2771,9 +2776,38 @@ function OrderListModule({proj, pop}) {
     finally{ setLoading(false); }
   })();},[proj.id]);
 
+  useEffect(()=>{
+    supabase.from("suppliers").select("id,name,category").order("name").then(({data})=>setSuppliers(data||[]));
+  },[]);
+
   async function saveContingency(v){
     setContingency(v);
     try{ await supabase.from("projects").update({sheet_contingency_pct:v}).eq("id",proj.id); }catch{}
+  }
+
+  async function doPOCreate(boardRows, hardwareRows){
+    if(!poSup&&suppliers.length>0) return pop("Please select a supplier.","error");
+    setPoCreating(true);
+    const sup=suppliers.find(s=>s.id===poSup);
+    const rows=[
+      ...boardRows.filter(b=>b.order>0).map(b=>({
+        description:b.item?.name?`${b.label} — ${b.item.name}`:b.label,
+        qty:b.order, unit:"sheets", unit_cost:0,
+      })),
+      ...hardwareRows.map(h=>({
+        description:h.item?.name?`${h.name} — ${h.item.name}`:h.name,
+        qty:h.qty, unit:h.name==="Drawer runner sets"?"sets":"ea", unit_cost:0,
+      })),
+    ];
+    const ref=`PO-${String(Date.now()).slice(-6)}`;
+    const {data,error}=await dbCreatePurchaseOrder(proj.id,{
+      ref, supplier_id:poSup||null, supplier_name:sup?.name||"",
+      notes:poNotes||`Order list — ${proj.name}`,
+    });
+    if(error||!data){ setPoCreating(false); return pop(error||"Could not create PO.","error"); }
+    await dbAddPurchaseOrderItems(data.id, rows.map((r,i)=>({...r,sort_order:i})));
+    setPoCreating(false); setShowCreatePO(false); setPoSup(""); setPoNotes("");
+    pop(`${ref} created in Procurement with ${rows.length} items — switch to the Procurement tab to review and send it.`,"success");
   }
 
   if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Building order list…</div></Card>;
@@ -2886,9 +2920,38 @@ function OrderListModule({proj, pop}) {
       </table>
     </Card>
 
-    <div style={{color:T.faint,fontSize:11}}>
+    <div style={{color:T.faint,fontSize:11,marginBottom:16}}>
       Counts roll up every cabinet in this project. Benchtops and splashbacks are excluded (ordered by lineal metre/area separately).
     </div>
+
+    {/* Create PO from Order List */}
+    {!showCreatePO
+      ? <Btn v="tel" onClick={()=>setShowCreatePO(true)}>+ Create PO from this list →</Btn>
+      : <Card hi sx={{marginTop:4}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:T.teal}}>Create Purchase Order from Order List</div>
+          <div style={{fontSize:12,color:T.muted,marginBottom:12}}>
+            This will create a draft PO in the Procurement tab pre-filled with the board and hardware quantities above.
+            Unit costs are left blank — fill them in once you have supplier quotes.
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+            <div>
+              <div style={{fontSize:11,color:T.faint,marginBottom:4}}>Supplier (optional)</div>
+              <select value={poSup} onChange={e=>setPoSup(e.target.value)}
+                style={{width:"100%",background:T.card,border:`1px solid ${T.border}`,
+                  borderRadius:5,padding:"7px 10px",color:poSup?T.text:T.faint,fontSize:13,outline:"none"}}>
+                <option value="">— Select supplier —</option>
+                {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}{s.category?` (${s.category})`:""}</option>)}
+              </select>
+            </div>
+            <Inp label="Notes (optional)" value={poNotes} onChange={v=>setPoNotes(v)} placeholder={`Order list — ${proj.name}`} sx={{marginBottom:0}}/>
+          </div>
+          <Row gap={8}>
+            <Btn v="pri" sm onClick={()=>doPOCreate(boardRows,hardwareRows)} disabled={poCreating}>
+              {poCreating?"Creating…":"Create Draft PO →"}
+            </Btn>
+            <Btn sm onClick={()=>setShowCreatePO(false)}>Cancel</Btn>
+          </Row>
+        </Card>}
   </div>;
 }
 
@@ -6093,7 +6156,159 @@ function ScheduleModule({proj, onMutate, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // PROCUREMENT MODULE — Supabase-backed purchase orders per project
 // ═══════════════════════════════════════════════════════════════════════════
-function ProcurementModule({proj, pop}) {
+function PODocument({po, proj, company}) {
+  const items = po.purchase_order_items||[];
+  const subtotal = items.reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
+  const hasPrice = subtotal > 0;
+  const gstAmt   = subtotal * 0.10;
+  const totalInc = subtotal + gstAmt;
+
+  const dateStr = po.created_at
+    ? new Date(po.created_at).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"})
+    : new Date().toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+
+  const teal   = "#0d9488";
+  const tealLt = "#ccfbf1";
+  const hdrStyle = {fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+    textTransform:"uppercase",letterSpacing:"0.05em",color:teal,
+    marginBottom:5,paddingBottom:3,borderBottom:`1px solid ${tealLt}`};
+
+  return <>
+    <style>{`
+      @media print {
+        aside, .no-print { display: none !important; }
+        #qf-root { background: white !important; }
+        main { background: white !important; padding: 0 !important; overflow: visible !important; }
+        body { background: white !important; margin: 0; }
+        #qf-po-overlay { position: static !important; background: transparent !important; padding: 0 !important; overflow: visible !important; }
+        #qf-po-document { box-shadow: none !important; border-radius: 0 !important; margin: 0 !important; max-width: 100% !important; padding: 28px 40px !important; }
+      }
+    `}</style>
+    <div id="qf-po-document" style={{background:"#fff",color:"#111827",borderRadius:8,padding:"44px 54px",
+      maxWidth:840,fontFamily:"Georgia,serif",fontSize:13,lineHeight:1.65,margin:"0 auto",
+      boxShadow:"0 4px 40px rgba(0,0,0,0.5)"}}>
+
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:28}}>
+        <div>
+          <div style={{fontWeight:900,fontSize:22,color:"#111827",fontFamily:"system-ui,sans-serif",marginBottom:4}}>{company.name}</div>
+          <div style={{color:"#6b7280",fontSize:12,lineHeight:1.75}}>
+            {company.address}<br/>
+            {company.phone} · {company.email}<br/>
+            {company.website}
+            {company.abn&&<><br/>ABN / NZBN: {company.abn}</>}
+          </div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontWeight:900,fontSize:28,color:teal,fontFamily:"system-ui,sans-serif",letterSpacing:"-0.5px"}}>PURCHASE ORDER</div>
+          <div style={{color:"#6b7280",fontSize:12,marginTop:6,lineHeight:1.75}}>
+            PO No: <strong>{po.ref}</strong><br/>
+            Date: {dateStr}
+          </div>
+        </div>
+      </div>
+      <hr style={{border:"none",borderTop:`2px solid ${teal}`,marginBottom:24}}/>
+
+      {/* To / Deliver To */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24,marginBottom:22}}>
+        <div>
+          <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
+            color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>To (Supplier)</div>
+          <div style={{fontWeight:700,fontSize:15}}>{po.supplier_name||"—"}</div>
+        </div>
+        <div>
+          <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
+            color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>Deliver To</div>
+          <div style={{fontWeight:600,fontSize:13}}>{company.name}</div>
+          <div style={{color:"#6b7280",fontSize:12}}>{company.address}</div>
+        </div>
+      </div>
+
+      {proj.name&&<div style={{marginBottom:22,background:"#f0fdfa",borderRadius:6,padding:"12px 18px",border:`1px solid ${tealLt}`}}>
+        <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",marginBottom:3,color:"#134e4a"}}>
+          Project: {proj.name}
+        </div>
+        {po.notes&&<div style={{color:"#374151",fontSize:12}}>{po.notes}</div>}
+      </div>}
+
+      {/* Supply instruction */}
+      <div style={{marginBottom:14,fontSize:12,color:"#374151",fontStyle:"italic"}}>
+        Please supply the following items in accordance with our specifications and deliver to the address above.
+        This purchase order constitutes our written authorisation to supply.
+      </div>
+
+      {/* Line items */}
+      <div style={hdrStyle}>Order Schedule</div>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:16}}>
+        <thead>
+          <tr style={{color:"#9ca3af",textAlign:"left",fontFamily:"system-ui,sans-serif",fontSize:11,
+            background:"#f9fafb",borderBottom:`2px solid ${tealLt}`}}>
+            <th style={{padding:"7px 10px",fontWeight:600}}>Description</th>
+            <th style={{padding:"7px 10px",textAlign:"right",fontWeight:600,width:60}}>Qty</th>
+            <th style={{padding:"7px 10px",fontWeight:600,width:60}}>Unit</th>
+            {hasPrice&&<>
+              <th style={{padding:"7px 10px",textAlign:"right",fontWeight:600,width:90}}>Unit Cost</th>
+              <th style={{padding:"7px 10px",textAlign:"right",fontWeight:600,width:90}}>Total</th>
+            </>}
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item,i)=>{
+            const lineTotal=(item.qty||0)*(item.unit_cost||0);
+            return <tr key={item.id||i} style={{borderBottom:"1px solid #f0fdfa"}}>
+              <td style={{padding:"7px 10px"}}>{item.description}</td>
+              <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"monospace"}}>{item.qty}</td>
+              <td style={{padding:"7px 10px",color:"#6b7280"}}>{item.unit||"ea"}</td>
+              {hasPrice&&<>
+                <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"monospace",color:"#6b7280"}}>{item.unit_cost>0?$$(item.unit_cost):"—"}</td>
+                <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"monospace",fontWeight:600}}>{lineTotal>0?$$(lineTotal):"—"}</td>
+              </>}
+            </tr>;
+          })}
+        </tbody>
+      </table>
+
+      {/* Totals — only if prices exist */}
+      {hasPrice&&<div style={{maxWidth:320,marginLeft:"auto",marginBottom:22}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+          <span style={{color:"#6b7280",fontFamily:"system-ui,sans-serif",fontSize:12}}>Subtotal (ex. GST)</span>
+          <span style={{fontFamily:"monospace"}}>{$$(subtotal)}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+          <span style={{color:"#6b7280",fontFamily:"system-ui,sans-serif",fontSize:12}}>GST (10%)</span>
+          <span style={{fontFamily:"monospace"}}>{$$(gstAmt)}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",borderTop:`2px solid ${teal}`,paddingTop:9,marginTop:6}}>
+          <span style={{fontWeight:900,fontFamily:"system-ui,sans-serif",fontSize:15}}>TOTAL (inc. GST)</span>
+          <span style={{fontFamily:"monospace",fontWeight:900,fontSize:17,color:teal}}>{$$(totalInc)}</span>
+        </div>
+      </div>}
+
+      {/* Authorisation */}
+      <div style={{marginTop:32,paddingTop:20,borderTop:`1px solid ${tealLt}`}}>
+        <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+          textTransform:"uppercase",letterSpacing:"0.08em",color:"#374151",marginBottom:14}}>
+          Authorised By
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"20px 40px"}}>
+          {[{label:"Name"},{label:"Signature"},{label:"Date"},{label:"Contact / Phone"}].map(f=><div key={f.label}>
+            <div style={{fontSize:11,color:"#9ca3af",fontFamily:"system-ui,sans-serif",
+              fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4}}>{f.label}</div>
+            <div style={{borderBottom:"1px solid #d1d5db",minHeight:28,paddingBottom:4}}/>
+          </div>)}
+        </div>
+      </div>
+
+      <div style={{marginTop:14,fontSize:11,color:"#9ca3af",borderTop:"1px solid #f3f4f6",paddingTop:12,lineHeight:1.7}}>
+        {company.paymentTerms||"Payment due within 30 days of invoice date."}<br/>
+        {company.currency&&`All pricing in ${company.currency}. `}Please confirm receipt of this order and expected delivery date.
+        Queries: {company.phone||company.email}
+      </div>
+    </div>
+  </>;
+}
+
+function ProcurementModule({proj, company, pop}) {
   const [pos,       setPos]       = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [loading,   setLoading]   = useState(true);
@@ -6101,6 +6316,7 @@ function ProcurementModule({proj, pop}) {
   const [showNew,   setShowNew]   = useState(false);
   const [busy,      setBusy]      = useState(false);
   const [showAddItem, setShowAddItem] = useState(null); // po.id or null
+  const [viewPO,    setViewPO]    = useState(null);
   const [newPO,  setNewPO]  = useState({ref:"",supplier_id:"",supplier_name:"",notes:""});
   const [newItem,setNewItem]= useState({description:"",qty:1,unit:"ea",unit_cost:0});
 
@@ -6239,22 +6455,50 @@ function ProcurementModule({proj, pop}) {
     </div></Card>}
 
     {/* ── PO list ── */}
+    {/* ── PO document overlay ── */}
+    {viewPO&&company&&<div id="qf-po-overlay" style={{position:"fixed",inset:0,zIndex:10000,
+      background:"rgba(0,0,0,0.88)",display:"flex",flexDirection:"column"}}>
+      <div className="no-print" style={{background:"#0d1117",padding:"12px 20px",display:"flex",
+        gap:10,alignItems:"center",borderBottom:"1px solid #1c2838",flexShrink:0}}>
+        <div style={{flex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:"#dde6f0"}}>Purchase Order — {viewPO.ref}</span>
+          {viewPO.supplier_name&&<span style={{color:"#7a8fa5",fontSize:12,marginLeft:10}}>{viewPO.supplier_name}</span>}
+        </div>
+        <Btn sm v="gho" onClick={()=>window.print()}>⎙ Print / Save as PDF</Btn>
+        <Btn sm v="gho" onClick={()=>{
+          const sub=encodeURIComponent(`Purchase Order ${viewPO.ref} – ${proj.name}`);
+          const body=encodeURIComponent(`Hi,\n\nPlease find Purchase Order ${viewPO.ref} attached for your reference.\n\nKind regards\n${company.name}`);
+          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
+        }}>✉ Email</Btn>
+        <Btn sm v="gho" onClick={()=>setViewPO(null)}>✕ Close</Btn>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"28px 20px",background:"#07090c"}}>
+        <PODocument po={viewPO} proj={proj} company={company}/>
+      </div>
+    </div>}
+
     {pos.map(po=>{
       const total=poTotal(po);
       const st=PO_STATUS[po.status]||PO_STATUS.draft;
       const isOpen=selId===po.id;
       return <Card key={po.id} sx={{marginBottom:10,padding:0,overflow:"hidden"}}>
         {/* Header row — click to expand */}
-        <div onClick={()=>setSelId(isOpen?null:po.id)}
-          style={{padding:"12px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer",flexWrap:"wrap"}}>
-          <div style={{fontFamily:T.mono,fontWeight:800,color:T.purple,fontSize:13,minWidth:80}}>{po.ref}</div>
-          <Bdg color={st.color}>{st.label}</Bdg>
-          <div style={{color:T.text,fontSize:13,flex:1}}>
-            {po.supplier_name||<span style={{color:T.faint,fontStyle:"italic"}}>No supplier</span>}
+        <div style={{padding:"12px 16px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div onClick={()=>setSelId(isOpen?null:po.id)} style={{display:"flex",alignItems:"center",gap:10,flex:1,cursor:"pointer",minWidth:0,flexWrap:"wrap"}}>
+            <div style={{fontFamily:T.mono,fontWeight:800,color:T.purple,fontSize:13,minWidth:80}}>{po.ref}</div>
+            <Bdg color={st.color}>{st.label}</Bdg>
+            <div style={{color:T.text,fontSize:13,flex:1}}>
+              {po.supplier_name||<span style={{color:T.faint,fontStyle:"italic"}}>No supplier</span>}
+            </div>
+            <span style={{fontFamily:T.mono,color:T.accent,fontWeight:700}}>{$$(total)}</span>
+            <span style={{color:T.faint,fontSize:11}}>{(po.purchase_order_items||[]).length} items</span>
           </div>
-          <span style={{fontFamily:T.mono,color:T.accent,fontWeight:700}}>{$$(total)}</span>
-          <span style={{color:T.faint,fontSize:11}}>{(po.purchase_order_items||[]).length} items</span>
-          <span style={{color:T.faint,fontSize:12}}>{isOpen?"▴":"▾"}</span>
+          {company&&<div onClick={()=>setViewPO(po)}
+            style={{padding:"3px 9px",borderRadius:4,fontSize:11,cursor:"pointer",fontWeight:600,
+              border:`1px solid ${T.teal}55`,color:T.teal,whiteSpace:"nowrap",flexShrink:0}}>
+            ⎙ View PO
+          </div>}
+          <span onClick={()=>setSelId(isOpen?null:po.id)} style={{color:T.faint,fontSize:12,cursor:"pointer"}}>{isOpen?"▴":"▾"}</span>
         </div>
 
         {/* Expanded detail */}
