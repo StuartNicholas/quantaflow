@@ -4068,9 +4068,10 @@ ${EXTRACT_SCHEMA}`;
     try{
       const { data:est }=await dbGetEstimate(proj.id);
       if(est?.estimate?.id){
+        const existingLen = (proj.lineItems||[]).length;
         const saved=await dbAddItems(est.estimate.id, toAdd.map((it,i)=>({
           category:it.category, description:it.description, qty:it.qty, unit:it.unit,
-          rate:it.rate, margin_pct:it.margin??null, source:"takeoff", cab:it.cab||null, sort_order:i,
+          rate:it.rate, margin_pct:it.margin??null, source:"takeoff", cab:it.cab||null, sort_order:existingLen+i,
         })));
         if(saved.data) withIds=toAdd.map((li,i)=>saved.data[i]?{...li,id:saved.data[i].id}:li);
       }
@@ -5259,10 +5260,11 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
   // mutate in-memory (keeps every reader working) AND persist the change
   function persistAdd(item){
     if(!estId) return;
+    const nextOrder = (proj.lineItems||[]).length;
     dbAddItem(estId,{
       category:item.category, description:item.description, qty:item.qty, unit:item.unit,
       rate:item.rate, margin_pct:item.margin??null, source:item.source||"manual", cab:item.cab||null,
-      sort_order:0,
+      sort_order:nextOrder,
     }).then(({data})=>{
       if(data){ // swap the temp id for the db id
         onMutate(p=>({...p,lineItems:p.lineItems.map(li=>li.id===item.id?{...li,id:data.id}:li)}));
@@ -5278,9 +5280,10 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
   function persistDelete(id){ if(estId) dbDeleteItem(id); }
   function persistBulk(items){
     if(!estId) return Promise.resolve([]);
+    const baseOrder = (proj.lineItems||[]).length;
     return dbAddItems(estId, items.map((it,i)=>({
       category:it.category, description:it.description, qty:it.qty, unit:it.unit,
-      rate:it.rate, margin_pct:it.margin??null, source:it.source||"takeoff", cab:it.cab||null, sort_order:i,
+      rate:it.rate, margin_pct:it.margin??null, source:it.source||"takeoff", cab:it.cab||null, sort_order:baseOrder+i,
     }))).then(({data})=>data||[]);
   }
 
