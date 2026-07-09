@@ -118,7 +118,7 @@ const mkProject = (o={}) => ({
 const normalizeProject = (p={}) => ({
   ...p,
   client: p.client_name ?? p.client ?? "",
-  created: p.created ?? new Date().toISOString().slice(0,10),
+  created: p.created ?? (p.created_at ? p.created_at.slice(0,10) : new Date().toISOString().slice(0,10)),
 });
 
 const SEED_CLIENTS = [
@@ -2282,7 +2282,7 @@ function Dashboard({projects, xero, onOpen, setNav}) {
   const today = new Date();
   const attention = [];
   projects.forEach(p=>{
-    const ageDays = p.created ? Math.floor((today - new Date(p.created)) / 86400000) : 0;
+    const ageDays = (p.created_at||p.created) ? Math.floor((today - new Date(p.created_at||p.created)) / 86400000) : 0;
     if(p.status==="sent"  && ageDays>14) attention.push({proj:p, msg:`Quote sent ${ageDays}d ago — awaiting decision`, color:T.yellow});
     if(p.status==="active"&& !localStorage.getItem(`qf_prod_${p.id}`)) attention.push({proj:p, msg:"Active job — no production data yet", color:T.orange||T.accent});
     if(["approved","active"].includes(p.status)&&!p.quote_value&&!calc(p).total) attention.push({proj:p, msg:"No estimate — job has no value", color:T.red});
