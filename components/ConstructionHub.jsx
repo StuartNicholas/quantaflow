@@ -8516,7 +8516,9 @@ function ClaimsModule({proj, c, pop, company, clients}) {
 
   async function addItem(claimId){
     if(!newItem.description.trim()) return pop("Description required.","error");
-    const { error } = await dbAddClaimItem(claimId,{...newItem,sort_order:0});
+    const claim = claims.find(cl=>cl.id===claimId);
+    const nextOrder = (claim?.claim_items||[]).length;
+    const { error } = await dbAddClaimItem(claimId,{...newItem,sort_order:nextOrder});
     if(error) return pop(error,"error");
     setNewItem({description:"",qty:1,unit:"",unit_cost:0});
     setShowAddItem(null);
