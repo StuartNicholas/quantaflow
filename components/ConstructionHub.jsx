@@ -7150,6 +7150,26 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
     return cl?.email||"";
   })();
 
+  // Restore actual costs from localStorage (actualCosts has no DB table yet — localStorage bridge
+  // prevents data loss on page refresh; a future migration will move these to a proper table)
+  useEffect(()=>{
+    if(!(proj.actualCosts||[]).length){
+      try{
+        const saved=localStorage.getItem(`actual_costs_${proj.id}`);
+        if(saved){
+          const costs=JSON.parse(saved);
+          if(Array.isArray(costs)&&costs.length) onMutate(p=>({...p,actualCosts:costs}));
+        }
+      }catch{}
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[proj.id]);
+
+  function persistCosts(costs){
+    localStorage.setItem(`actual_costs_${proj.id}`,JSON.stringify(costs));
+    onMutate(p=>({...p,actualCosts:costs}));
+  }
+
   useEffect(()=>{
     (async()=>{
       const { data } = await dbGetPOCommittedTotal(proj.id);
@@ -7258,7 +7278,7 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
             <Inp label="Supplier" value={na.supplier} onChange={v=>setNa(x=>({...x,supplier:v}))} placeholder="Supplier name"/>
           </Grid2>
           <Row gap={8}><Btn v="pri" sm onClick={()=>{
-            onMutate(p=>({...p,actualCosts:[...(p.actualCosts||[]),{...na,id:Date.now(),amount:parseFloat(na.amount)||0}]}));
+            persistCosts([...(proj.actualCosts||[]),{...na,id:Date.now(),amount:parseFloat(na.amount)||0}]);
             setNa({category:CATS[0],description:"",amount:0,date:new Date().toISOString().slice(0,10),supplier:""});
             setShowAct(false); pop("Cost added.");
           }}>Save</Btn><Btn sm onClick={()=>setShowAct(false)}>Cancel</Btn></Row>
@@ -7267,12 +7287,12 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
           padding:"9px 0",borderBottom:`1px solid ${T.border}`,alignItems:"flex-start"}}>
           <div>
             <div style={{fontSize:13,color:T.text}}>{a.description}</div>
-            <div style={{fontSize:11,color:T.faint}}>{a.supplier}{a.supplier&&" · "}{a.date} · {a.category}</div>
+            <div style={{fontSize:11,color:T.faint}}>{a.supplier}{a.supplier&&" · "}{fmtDate(a.date,true)} · {a.category}</div>
           </div>
           <Row gap={8}>
             <span style={{fontFamily:T.mono,color:T.blue,fontWeight:700}}>{$$(a.amount)}</span>
             <span style={{cursor:"pointer",color:T.red,fontSize:12}}
-              onClick={()=>onMutate(p=>({...p,actualCosts:p.actualCosts.filter(x=>x.id!==a.id)}))}>✕</span>
+              onClick={()=>persistCosts((proj.actualCosts||[]).filter(x=>x.id!==a.id))}>✕</span>
           </Row>
         </div>)}
         {!(proj.actualCosts||[]).length&&<div style={{color:T.faint,fontSize:12}}>No actual costs recorded.</div>}
@@ -7309,7 +7329,7 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:13,color:T.text,fontWeight:600}}>{v.ref}: {v.description}</div>
               {v.notes&&<div style={{fontSize:11,color:T.muted,marginTop:2,lineHeight:1.5}}>{v.notes}</div>}
-              <div style={{fontSize:11,color:T.faint,marginTop:2}}>{v.date}</div>
+              <div style={{fontSize:11,color:T.faint,marginTop:2}}>{fmtDate(v.date,true)}</div>
             </div>
             <Row gap={6} sx={{alignItems:"center",flexShrink:0}}>
               <Bdg color={v.status==="approved"?T.green:v.status==="rejected"?T.red:T.yellow} sm>{v.status}</Bdg>
@@ -7562,7 +7582,7 @@ function HandoverModule({proj, onMutate, pop}) {
               <span style={{fontFamily:T.mono,color:T.purple,fontWeight:800,fontSize:12}}>{d.ref}</span>
               <Bdg color={st.c} sm>{st.l}</Bdg>
               <Bdg color={pr.c} sm>{pr.l}</Bdg>
-              {d.due_date&&<span style={{fontSize:11,color:T.faint}}> Due {d.due_date}</span>}
+              {d.due_date&&<span style={{fontSize:11,color:T.faint}}> Due {fmtDate(d.due_date,true)}</span>}
               <div style={{marginLeft:"auto"}}>
                 <span style={{cursor:"pointer",color:T.red,fontSize:12}}
                   onClick={()=>delDefect(d.id,d.ref)}>✕</span>
