@@ -5857,6 +5857,153 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
   </div></>;
 }
 
+// ─── Deposit Invoice document (orange #ea580c) ───────────────────────────────
+function DepositInvoiceDocument({version, items, proj, company}) {
+  const orange = "#ea580c";
+  const marginPct  = version.margin_pct  ?? 0;
+  const overheadPct= version.overhead_pct?? 0;
+  const gstPct     = version.gst_pct     ?? 10;
+  const depositPct = version.deposit_pct ?? 0;
+  const sub     = (items||[]).reduce((s,i)=>(i.qty||0)*(i.rate||0)*(1+((i.margin_pct??marginPct)/100))+s,0);
+  const ovhd    = sub * overheadPct / 100;
+  const exGst   = sub + ovhd;
+  const gstAmt  = exGst * gstPct / 100;
+  const totalInc= exGst + gstAmt;
+  const depositAmt = totalInc * depositPct / 100;
+  const balanceAmt = totalInc - depositAmt;
+  const invoiceNum = `DEP-${String(version.version_number).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`;
+  const quoteRef   = `Q${String(version.version_number).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`;
+  const issuedDate = version.issued_at
+    ? new Date(version.issued_at).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"})
+    : new Date().toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+  const dueDays = parseInt((company.paymentTerms||"").match(/(\d+)\s*day/i)?.[1]||"7",10);
+  const dueDate = new Date(Date.now()+dueDays*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+
+  return <><style>{`
+    @media print {
+      aside, .no-print { display: none !important; }
+      #qf-root { background: white !important; }
+      main { background: white !important; padding: 0 !important; overflow: visible !important; }
+      body { background: white !important; margin: 0; }
+      #qf-depinv-overlay { position: static !important; background: transparent !important; padding: 0 !important; overflow: visible !important; }
+      #qf-depinv-document { box-shadow: none !important; border-radius: 0 !important; margin: 0 !important; max-width: 100% !important; padding: 28px 40px !important; }
+    }
+  `}</style>
+  <div id="qf-depinv-document" style={{background:"#fff",color:"#111827",borderRadius:8,padding:"44px 54px",
+    maxWidth:840,fontFamily:"Georgia,serif",fontSize:13,lineHeight:1.65,margin:"0 auto",
+    boxShadow:"0 4px 40px rgba(0,0,0,0.5)"}}>
+
+    {/* Header */}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:28}}>
+      <div>
+        <div style={{fontWeight:900,fontSize:22,color:"#111827",fontFamily:"system-ui,sans-serif",marginBottom:4}}>{company.name}</div>
+        <div style={{color:"#6b7280",fontSize:12,lineHeight:1.75}}>
+          {company.address}<br/>
+          {company.phone} · {company.email}
+          {company.abn&&<><br/>ABN: {company.abn}</>}
+        </div>
+      </div>
+      <div style={{textAlign:"right"}}>
+        <div style={{fontWeight:900,fontSize:28,color:orange,fontFamily:"system-ui,sans-serif",letterSpacing:"-0.5px"}}>DEPOSIT INVOICE</div>
+        <div style={{color:"#6b7280",fontSize:12,marginTop:6,lineHeight:1.75}}>
+          Invoice No: <strong>{invoiceNum}</strong><br/>
+          Quote Ref: {quoteRef}<br/>
+          Date: {issuedDate}<br/>
+          Payment Due: {dueDate}
+        </div>
+      </div>
+    </div>
+    <hr style={{border:"none",borderTop:`2px solid ${orange}`,marginBottom:24}}/>
+
+    {/* Bill To */}
+    <div style={{marginBottom:24}}>
+      <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
+        color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>Bill To</div>
+      <div style={{fontWeight:700,fontSize:15}}>{proj.client||"—"}</div>
+      <div style={{color:"#6b7280"}}>{proj.address}</div>
+    </div>
+
+    {/* Project reference box */}
+    <div style={{background:"#fff7ed",borderRadius:6,padding:"12px 18px",marginBottom:24,border:`1px solid #fed7aa`}}>
+      <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",marginBottom:3}}>{proj.name}</div>
+      <div style={{color:"#6b7280",fontSize:12}}>
+        This deposit invoice forms part of the agreement for the above project,
+        accepted under Quote {quoteRef} dated {issuedDate}.
+      </div>
+    </div>
+
+    {/* Deposit schedule table */}
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:28}}>
+      <thead>
+        <tr style={{background:"#fff7ed",borderBottom:`2px solid ${orange}`}}>
+          <th style={{padding:"8px 10px",textAlign:"left",fontWeight:700,fontFamily:"system-ui,sans-serif",color:"#9a3412"}}>Description</th>
+          <th style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontFamily:"system-ui,sans-serif",color:"#9a3412",width:120}}>Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style={{borderBottom:"1px solid #e5e7eb"}}>
+          <td style={{padding:"12px 10px",color:"#111827"}}>
+            <div style={{fontWeight:600}}>Contract Value — {proj.name}</div>
+            <div style={{color:"#6b7280",fontSize:11,marginTop:2}}>
+              Supply and installation of joinery as per accepted quote {quoteRef}
+            </div>
+          </td>
+          <td style={{padding:"12px 10px",textAlign:"right",fontFamily:"monospace"}}>{$$(totalInc)}</td>
+        </tr>
+        <tr style={{background:"#fff7ed",borderBottom:`1px solid ${orange}50`}}>
+          <td style={{padding:"12px 10px",color:"#111827"}}>
+            <div style={{fontWeight:700,color:orange}}>Deposit Required ({depositPct}% of contract)</div>
+            <div style={{color:"#6b7280",fontSize:11,marginTop:2}}>Due prior to commencement of works</div>
+          </td>
+          <td style={{padding:"12px 10px",textAlign:"right",fontFamily:"monospace",fontWeight:800,fontSize:16,color:orange}}>{$$(depositAmt)}</td>
+        </tr>
+        <tr>
+          <td style={{padding:"10px 10px",color:"#6b7280",fontSize:12}}>
+            Balance remaining — due at practical completion
+          </td>
+          <td style={{padding:"10px 10px",textAlign:"right",fontFamily:"monospace",color:"#6b7280"}}>{$$(balanceAmt)}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    {/* GST note */}
+    <div style={{display:"flex",justifyContent:"flex-end",marginBottom:24}}>
+      <div style={{width:280,fontSize:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}>
+          <span style={{color:"#6b7280"}}>Deposit ex. GST</span>
+          <span style={{fontFamily:"monospace"}}>{$$(depositAmt/((gstPct||10)/100+1))}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}>
+          <span style={{color:"#6b7280"}}>GST ({gstPct}%)</span>
+          <span style={{fontFamily:"monospace"}}>{$$(depositAmt - depositAmt/((gstPct||10)/100+1))}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 0",
+          borderTop:`2px solid ${orange}`,marginTop:4}}>
+          <span style={{fontWeight:700,color:"#111827",fontFamily:"system-ui,sans-serif"}}>DEPOSIT DUE NOW</span>
+          <span style={{fontFamily:"monospace",fontWeight:800,fontSize:18,color:orange}}>{$$(depositAmt)}</span>
+        </div>
+      </div>
+    </div>
+
+    {/* Payment details */}
+    {(company.bankAccount||company.paymentTerms)&&<div style={{
+      padding:"14px 18px",background:"#fff7ed",borderRadius:6,borderLeft:`3px solid ${orange}`,fontSize:12}}>
+      <div style={{fontWeight:700,color:"#9a3412",marginBottom:6,fontFamily:"system-ui,sans-serif"}}>Payment Details</div>
+      {company.bankAccount&&<div style={{color:"#374151",marginBottom:4}}>
+        <strong>{company.bankName}</strong> · Account: {company.bankAccount}
+      </div>}
+      {company.abn&&<div style={{color:"#6b7280",marginBottom:4}}>ABN: {company.abn} · GST Registered</div>}
+      <div style={{color:"#6b7280"}}>Please quote invoice number <strong>{invoiceNum}</strong> on your payment.</div>
+      <div style={{color:"#6b7280",marginTop:2}}>Payment due within {dueDays} days. Works will commence upon receipt of deposit.</div>
+    </div>}
+
+    <div style={{marginTop:16,fontSize:11,color:"#9ca3af",lineHeight:1.7}}>
+      All amounts in {company.currency||"AUD"} including GST at {gstPct}% where applicable.
+      This deposit invoice does not replace the formal quote or contract for works.
+    </div>
+  </div></>;
+}
+
 const QV_STATUS = {
   draft:      {color:"#ca8a04", label:"Draft"},
   sent:       {color:"#2563eb", label:"Sent"},
@@ -5880,6 +6027,7 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
   const [busy,         setBusy]         = useState(false);
   const [quoteView,    setQuoteView]    = useState("category"); // "category"|"joinery"|"unit"|"byunit"|"unit-individual"|"level"
   const [schemes,      setSchemes]      = useState(null);
+  const [viewDepInv,   setViewDepInv]   = useState(null); // quote version to show deposit invoice for
 
   useEffect(()=>{
     try{ const s=localStorage.getItem(`qf_schemes_${proj.id}`); if(s) setSchemes(JSON.parse(s)); }catch{}
@@ -5942,6 +6090,36 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
 
   return <div>
 
+    {/* ── Deposit Invoice overlay ── */}
+    {viewDepInv&&company&&<div id="qf-depinv-overlay" style={{position:"fixed",inset:0,zIndex:10002,
+      background:"rgba(0,0,0,0.88)",display:"flex",flexDirection:"column"}}>
+      <div className="no-print" style={{background:"#0d1117",padding:"12px 20px",display:"flex",
+        gap:10,alignItems:"center",borderBottom:"1px solid #1c2838",flexShrink:0}}>
+        <div style={{flex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:"#dde6f0"}}>Deposit Invoice</span>
+          <span style={{color:"#ea580c",fontSize:12,marginLeft:10,fontWeight:600}}>
+            {(viewDepInv.deposit_pct||0)}% · {$$((() => {
+              const depV=viewDepInv;
+              const s=(selItems||[]).reduce((a,i)=>(i.qty||0)*(i.rate||0)*(1+((i.margin_pct??depV.margin_pct??0)/100))+a,0);
+              const ex=s+s*(depV.overhead_pct||0)/100;
+              return (ex+ex*(depV.gst_pct||10)/100)*(depV.deposit_pct||0)/100;
+            })())}
+          </span>
+        </div>
+        <Btn sm v="gho" onClick={()=>window.print()}>⎙ Print / Save as PDF</Btn>
+        <Btn sm v="gho" onClick={()=>{
+          const depRef=`DEP-${String(viewDepInv.version_number).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`;
+          const sub=encodeURIComponent(`Deposit Invoice ${depRef} – ${proj.name}`);
+          const body=encodeURIComponent(`Hi ${proj.client||""},\n\nThank you for accepting our quote for ${proj.name}.\n\nPlease find attached the deposit invoice ${depRef}. Works will commence upon receipt of the deposit payment.\n\nKind regards`);
+          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
+        }}>✉ Email Client</Btn>
+        <Btn sm v="gho" onClick={()=>setViewDepInv(null)}>✕ Close</Btn>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"28px 20px",background:"#07090c"}}>
+        <DepositInvoiceDocument version={viewDepInv} items={selItems} proj={proj} company={company}/>
+      </div>
+    </div>}
+
     {/* ── Control bar (hidden on print) ── */}
     <div className="no-print">
     <Row gap={8} sx={{marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
@@ -5987,6 +6165,9 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
           <Btn sm v="grn" onClick={()=>setStatus(selVersion.id,"accepted")}>✓ Client Accepted</Btn>
           <Btn sm v="red" onClick={()=>setStatus(selVersion.id,"declined")}>✕ Declined</Btn>
         </>}
+        {selVersion?.status==="accepted"&&(selVersion.deposit_pct||0)>0&&<Btn sm
+          style={{background:"#ea580c",color:"#fff",border:"none"}}
+          onClick={()=>{ setViewDepInv(selVersion); }}>⎙ Deposit Invoice</Btn>}
 
         <Btn sm v="gho" onClick={()=>{ window.print(); pop("Browser print dialog opened — choose 'Save as PDF' to create a file you can send.","info"); }}>⎙ Save as PDF</Btn>
         <Btn sm v="gho" onClick={()=>{
