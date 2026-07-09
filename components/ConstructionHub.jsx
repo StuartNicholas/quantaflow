@@ -2264,10 +2264,10 @@ function Dashboard({projects, xero, onOpen, setNav}) {
     dbGetActivityFeed(10).then(({data})=>setActFeed(data||[]));
   },[projects]);
 
-  const pipeline   = projects.reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
-  const invoiced   = projects.reduce((s,p)=>s+(p.invoiced||0),0);
-  const wonVal     = projects.filter(p=>["approved","active","complete"].includes(p.status)).reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
-  const outstanding= Math.max(0, wonVal - invoiced);
+  const pipeline     = projects.reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
+  const wonVal       = projects.filter(p=>["approved","active","complete"].includes(p.status)).reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
+  const completedVal = projects.filter(p=>p.status==="complete").reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
+  const pendingVal   = projects.filter(p=>["quoting","sent"].includes(p.status)).reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
   const activeJobs = projects.filter(p=>["approved","active"].includes(p.status)).length;
   const pending    = projects.filter(p=>["quoting","sent"].includes(p.status)).length;
   const won        = projects.filter(p=>["approved","active","complete"].includes(p.status)).length;
@@ -2298,10 +2298,10 @@ function Dashboard({projects, xero, onOpen, setNav}) {
 
     {/* ── KPIs */}
     <Row wrap gap={10} sx={{marginBottom:18}}>
-      <KPI label="Total Pipeline"  value={$$(pipeline,true)}     sub={`${projects.length} project${projects.length!==1?"s":""}`}/>
-      <KPI label="Won & Active"    value={$$(wonVal,true)}        sub="approved + active"    color={T.green}/>
-      <KPI label="Outstanding"     value={$$(outstanding,true)}   sub="earned, not invoiced" color={outstanding>0?T.accent:T.faint}/>
-      <KPI label="Invoiced"        value={$$(invoiced,true)}      sub="total invoiced"       color={T.teal}/>
+      <KPI label="Total Pipeline"   value={$$(pipeline,true)}      sub={`${projects.length} project${projects.length!==1?"s":""}`}/>
+      <KPI label="Won & Active"    value={$$(wonVal,true)}         sub="approved + active"   color={T.green}/>
+      <KPI label="Quotes Pending"  value={$$(pendingVal,true)}     sub={`${pending} awaiting decision`} color={T.yellow}/>
+      <KPI label="Completed"       value={$$(completedVal,true)}   sub="finished jobs"       color={T.teal}/>
       <KPI label="Win Rate"        value={winRate!==null?`${winRate}%`:"—"} sub={`${won} won · ${lost} lost`} color={winRate!=null?(winRate>=50?T.green:T.yellow):T.faint}/>
       <KPI label="Active Jobs"     value={activeJobs}             sub="on-site"              color={T.blue}/>
       <KPI label="Pending Quotes"  value={pending}                sub="awaiting decision"    color={T.yellow}/>
