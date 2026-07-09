@@ -2528,7 +2528,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="schemes"      && <SchemesModule proj={proj} pop={pop}/>}
     {tab==="production"   && <ProductionModule proj={proj} pop={pop}/>}
     {tab==="procurement"  && <ProcurementModule proj={proj} pop={pop}/>}
-    {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} onMutate={onMutate} pop={pop}/>}
+    {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} company={company} onMutate={onMutate} pop={pop}/>}
     {tab==="handover"  && <HandoverModule proj={proj} onMutate={onMutate} pop={pop}/>}
     {tab==="claims"    && <ClaimsModule proj={proj} c={c} company={company} pop={pop}/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
@@ -6350,10 +6350,166 @@ function ProcurementModule({proj, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // JOB COSTS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, onMutate, pop}) {
+function VariationDocument({variation, proj, company, variations, c}) {
+  const v = variation;
+  const varAmtExGst = v.amount||0;
+  const gstAmt      = varAmtExGst * 0.10;
+  const varAmtIncGst = varAmtExGst + gstAmt;
+
+  // Original quote (ex. GST, before any variations)
+  const origExGst = (c.exGst||0) - (c.varTotal||0);
+
+  // Prior approved variations (excluding this one)
+  const priorApproved = (variations||[]).filter(x=>x.id!==v.id && x.status==="approved");
+  const priorTotal    = priorApproved.reduce((s,x)=>s+(x.amount||0),0);
+
+  // Revised contract
+  const revisedExGst   = origExGst + priorTotal + varAmtExGst;
+  const revisedGst     = revisedExGst * 0.10;
+  const revisedIncGst  = revisedExGst + revisedGst;
+
+  const varRef  = v.ref || `VAR-${String(v.id||"").slice(-3).toUpperCase()}`;
+  const dateStr = v.date
+    ? new Date(v.date).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"})
+    : new Date().toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+
+  const purple="#7c3aed";
+  const purpleLt="#ede9fe";
+  const hdrStyle={fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+    textTransform:"uppercase",letterSpacing:"0.05em",color:purple,
+    marginBottom:5,paddingBottom:3,borderBottom:`1px solid ${purpleLt}`};
+  const rowStyle={display:"flex",justifyContent:"space-between",marginBottom:5};
+  const lblStyle={color:"#6b7280",fontFamily:"system-ui,sans-serif",fontSize:12};
+
+  return <>
+    <style>{`
+      @media print {
+        aside, .no-print { display: none !important; }
+        #qf-root { background: white !important; }
+        main { background: white !important; padding: 0 !important; overflow: visible !important; }
+        body { background: white !important; margin: 0; }
+        #qf-var-overlay { position: static !important; background: transparent !important; padding: 0 !important; overflow: visible !important; }
+        #qf-var-document { box-shadow: none !important; border-radius: 0 !important; margin: 0 !important; max-width: 100% !important; padding: 28px 40px !important; }
+      }
+    `}</style>
+    <div id="qf-var-document" style={{background:"#fff",color:"#111827",borderRadius:8,padding:"44px 54px",
+      maxWidth:840,fontFamily:"Georgia,serif",fontSize:13,lineHeight:1.65,margin:"0 auto",
+      boxShadow:"0 4px 40px rgba(0,0,0,0.5)"}}>
+
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:28}}>
+        <div>
+          <div style={{fontWeight:900,fontSize:22,color:"#111827",fontFamily:"system-ui,sans-serif",marginBottom:4}}>{company.name}</div>
+          <div style={{color:"#6b7280",fontSize:12,lineHeight:1.75}}>
+            {company.address}<br/>
+            {company.phone} · {company.email}<br/>
+            {company.website}
+            {company.abn&&<><br/>ABN / NZBN: {company.abn}</>}
+          </div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontWeight:900,fontSize:26,color:purple,fontFamily:"system-ui,sans-serif",letterSpacing:"-0.5px"}}>VARIATION ORDER</div>
+          <div style={{fontSize:10,color:"#6b7280",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.07em",marginTop:1}}>Change Order / Tax Invoice</div>
+          <div style={{color:"#6b7280",fontSize:12,marginTop:6,lineHeight:1.75}}>
+            Ref: <strong>{varRef}</strong><br/>
+            Date: {dateStr}<br/>
+            Status: <strong style={{color:v.status==="approved"?"#166534":v.status==="rejected"?"#dc2626":"#92400e"}}>{v.status?.toUpperCase()}</strong>
+          </div>
+        </div>
+      </div>
+      <hr style={{border:"none",borderTop:`2px solid ${purple}`,marginBottom:24}}/>
+
+      <div style={{marginBottom:20}}>
+        <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
+          color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>Prepared For</div>
+        <div style={{fontWeight:700,fontSize:15}}>{proj.client}</div>
+        <div style={{color:"#6b7280"}}>{proj.address}</div>
+      </div>
+
+      <div style={{marginBottom:22,background:"#faf7f2",borderRadius:6,padding:"12px 18px"}}>
+        <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",marginBottom:3}}>{proj.name}</div>
+        {(proj.description||proj.notes)&&<div style={{color:"#6b7280",fontSize:12}}>{proj.description||proj.notes}</div>}
+      </div>
+
+      {/* Scope of Works */}
+      <div style={{marginBottom:20}}>
+        <div style={hdrStyle}>Scope of Works</div>
+        <div style={{fontSize:13,lineHeight:1.8,color:"#111827",marginBottom:v.notes?10:0}}>{v.description}</div>
+        {v.notes&&<div style={{fontSize:12,color:"#374151",background:"#f9fafb",borderRadius:4,
+          padding:"10px 14px",borderLeft:`3px solid ${purpleLt}`,lineHeight:1.75}}>{v.notes}</div>}
+      </div>
+
+      {/* Variation Amount */}
+      <div style={{marginBottom:22}}>
+        <div style={hdrStyle}>Variation Amount</div>
+        <div style={{maxWidth:340,marginLeft:"auto"}}>
+          <div style={rowStyle}><span style={lblStyle}>This Variation (ex. GST)</span><span style={{fontFamily:"monospace"}}>{$$(varAmtExGst)}</span></div>
+          <div style={rowStyle}><span style={lblStyle}>GST (10%)</span><span style={{fontFamily:"monospace"}}>{$$(gstAmt)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",borderTop:`2px solid ${purple}`,paddingTop:9,marginTop:6}}>
+            <span style={{fontWeight:900,fontFamily:"system-ui,sans-serif",fontSize:15}}>THIS VARIATION (inc. GST)</span>
+            <span style={{fontFamily:"monospace",fontWeight:900,fontSize:17,color:purple}}>{$$(varAmtIncGst)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Revised Contract Summary */}
+      <div style={{marginBottom:22}}>
+        <div style={hdrStyle}>Revised Contract Summary</div>
+        <div style={{maxWidth:400,marginLeft:"auto"}}>
+          <div style={rowStyle}><span style={lblStyle}>Original Quote (ex. GST)</span><span style={{fontFamily:"monospace"}}>{$$(origExGst)}</span></div>
+          {priorTotal>0&&<div style={rowStyle}><span style={lblStyle}>Prior Approved Variations (ex. GST)</span><span style={{fontFamily:"monospace"}}>{$$(priorTotal)}</span></div>}
+          <div style={rowStyle}><span style={{...lblStyle,color:purple,fontWeight:700}}>This Variation (ex. GST)</span><span style={{fontFamily:"monospace",color:purple,fontWeight:700}}>{varAmtExGst>=0?"+":""}{$$(varAmtExGst)}</span></div>
+          <div style={{height:1,background:"#e5e7eb",margin:"6px 0"}}/>
+          <div style={rowStyle}><span style={lblStyle}>Revised Total (ex. GST)</span><span style={{fontFamily:"monospace"}}>{$$(revisedExGst)}</span></div>
+          <div style={rowStyle}><span style={lblStyle}>GST (10%)</span><span style={{fontFamily:"monospace"}}>{$$(revisedGst)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",borderTop:"2px solid #111827",paddingTop:9,marginTop:6}}>
+            <span style={{fontWeight:900,fontFamily:"system-ui,sans-serif",fontSize:14}}>Revised Contract Value (inc. GST)</span>
+            <span style={{fontFamily:"monospace",fontWeight:900,fontSize:16,color:"#111827"}}>{$$(revisedIncGst)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Client Acceptance */}
+      <div style={{marginTop:32,paddingTop:20,borderTop:`1px solid ${purpleLt}`}}>
+        <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+          textTransform:"uppercase",letterSpacing:"0.08em",color:"#374151",marginBottom:14}}>
+          Client Authorisation
+        </div>
+        <div style={{fontSize:12,color:"#6b7280",marginBottom:20,lineHeight:1.75}}>
+          By signing below I/we authorise {company.name||"the contractor"} to proceed with the variation works described above
+          at the price stated. This variation will be added to the contract and invoiced in the next progress claim or upon completion.
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"24px 40px"}}>
+          {[
+            {label:"Client Name",value:proj.client||""},
+            {label:"Date","value":""},
+            {label:"Signature","value":""},
+            {label:"PO / Auth Reference","value":""},
+          ].map(f=><div key={f.label}>
+            <div style={{fontSize:11,color:"#9ca3af",fontFamily:"system-ui,sans-serif",
+              fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4}}>{f.label}</div>
+            <div style={{borderBottom:"1px solid #d1d5db",minHeight:30,paddingBottom:4,
+              color:"#374151",fontSize:13}}>{f.value}</div>
+          </div>)}
+        </div>
+      </div>
+
+      {/* Terms footer */}
+      <div style={{marginTop:16,fontSize:11,color:"#9ca3af",borderTop:"1px solid #f3f4f6",paddingTop:12,lineHeight:1.7}}>
+        {company.paymentTerms||"Payment due within 14 days of invoice date."}<br/>
+        This variation order constitutes a written variation to the original contract.
+        No additional works will commence until written client authorisation is received.
+        All pricing in {company.currency||"AUD"}, GST included at 10%.
+      </div>
+    </div>
+  </>;
+}
+
+function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, company, onMutate, pop}) {
   const [showAct, setShowAct] = useState(false);
   const [showVar, setShowVar] = useState(false);
   const [busy,    setBusy]    = useState(false);
+  const [viewVar, setViewVar] = useState(null);
   const [na, setNa] = useState({category:CATS[0],description:"",amount:0,date:new Date().toISOString().slice(0,10),supplier:""});
   const [nv, setNv] = useState({ref:"",description:"",amount:0,status:"pending",date:new Date().toISOString().slice(0,10),notes:""});
   const [poCommitted, setPoCommitted] = useState(0);
@@ -6496,9 +6652,11 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, onM
           <Grid2 gap={8}>
             <Inp label="Ref" value={nv.ref} onChange={v=>setNv(x=>({...x,ref:v}))}/>
             <Inp label="Date" value={nv.date} onChange={v=>setNv(x=>({...x,date:v}))} type="date"/>
-            <Inp label="Description" value={nv.description} onChange={v=>setNv(x=>({...x,description:v}))}
-              sx={{gridColumn:"1/-1"}} placeholder="Scope of work for this variation"/>
-            <Inp label="Amount ($)" value={nv.amount} onChange={v=>setNv(x=>({...x,amount:v}))} type="number" mono/>
+            <Inp label="Description (summary)" value={nv.description} onChange={v=>setNv(x=>({...x,description:v}))}
+              sx={{gridColumn:"1/-1"}} placeholder="One-line scope summary"/>
+            <Inp label="Notes / Scope Detail" value={nv.notes} onChange={v=>setNv(x=>({...x,notes:v}))}
+              sx={{gridColumn:"1/-1"}} placeholder="Detailed scope of works, materials, labour included…"/>
+            <Inp label="Amount ex. GST ($)" value={nv.amount} onChange={v=>setNv(x=>({...x,amount:v}))} type="number" mono/>
             <Sel label="Status" value={nv.status} onChange={v=>setNv(x=>({...x,status:v}))}
               options={["pending","approved","rejected"]}/>
           </Grid2>
@@ -6506,24 +6664,32 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, onM
             <Btn sm onClick={()=>setShowVar(false)}>Cancel</Btn></Row>
         </Card>}
         {varsLoading&&<div style={{color:T.muted,fontSize:12}}>Loading…</div>}
-        {!varsLoading&&variations.map(v=><div key={v.id} style={{display:"flex",justifyContent:"space-between",
-          padding:"9px 0",borderBottom:`1px solid ${T.border}`,alignItems:"flex-start"}}>
-          <div>
-            <div style={{fontSize:13,color:T.text,fontWeight:600}}>{v.ref}: {v.description}</div>
-            <div style={{fontSize:11,color:T.faint}}>{v.date}</div>
+        {!varsLoading&&variations.map(v=><div key={v.id} style={{
+          padding:"9px 0",borderBottom:`1px solid ${T.border}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:13,color:T.text,fontWeight:600}}>{v.ref}: {v.description}</div>
+              {v.notes&&<div style={{fontSize:11,color:T.muted,marginTop:2,lineHeight:1.5}}>{v.notes}</div>}
+              <div style={{fontSize:11,color:T.faint,marginTop:2}}>{v.date}</div>
+            </div>
+            <Row gap={6} sx={{alignItems:"center",flexShrink:0}}>
+              <Bdg color={v.status==="approved"?T.green:v.status==="rejected"?T.red:T.yellow} sm>{v.status}</Bdg>
+              <span style={{fontFamily:T.mono,color:v.status==="approved"?T.green:T.muted,fontWeight:700,minWidth:72,textAlign:"right"}}>{$$(v.amount)}</span>
+              <select value={v.status}
+                onChange={e=>setVarStatus(v.id,e.target.value)}
+                style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:4,padding:"2px 5px",color:T.text,fontSize:11}}>
+                <option value="pending">pending</option>
+                <option value="approved">approved</option>
+                <option value="rejected">rejected</option>
+              </select>
+              {company&&<div onClick={()=>setViewVar(v)}
+                style={{padding:"2px 8px",borderRadius:4,fontSize:11,cursor:"pointer",fontWeight:600,
+                  border:`1px solid ${T.purple}55`,color:T.purple,whiteSpace:"nowrap"}}>
+                ⎙ View CO
+              </div>}
+              <span style={{cursor:"pointer",color:T.red,fontSize:12}} onClick={()=>delVar(v.id)}>✕</span>
+            </Row>
           </div>
-          <Row gap={8}>
-            <Bdg color={v.status==="approved"?T.green:v.status==="rejected"?T.red:T.yellow} sm>{v.status}</Bdg>
-            <span style={{fontFamily:T.mono,color:v.status==="approved"?T.green:T.muted,fontWeight:700}}>{$$(v.amount)}</span>
-            <select value={v.status}
-              onChange={e=>setVarStatus(v.id,e.target.value)}
-              style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:4,padding:"2px 5px",color:T.text,fontSize:11}}>
-              <option value="pending">pending</option>
-              <option value="approved">approved</option>
-              <option value="rejected">rejected</option>
-            </select>
-            <span style={{cursor:"pointer",color:T.red,fontSize:12}} onClick={()=>delVar(v.id)}>✕</span>
-          </Row>
         </div>)}
         {!varsLoading&&!variations.length&&<div style={{color:T.faint,fontSize:12}}>No variations yet.</div>}
         {!varsLoading&&variations.length>0&&varTotal>0&&<div style={{marginTop:10,display:"flex",justifyContent:"flex-end",gap:8,alignItems:"center"}}>
@@ -6532,6 +6698,38 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, onM
         </div>}
       </div>
     </div>
+
+    {/* ── Variation document overlay ── */}
+    {viewVar&&company&&<div id="qf-var-overlay" style={{position:"fixed",inset:0,zIndex:10000,
+      background:"rgba(0,0,0,0.88)",display:"flex",flexDirection:"column"}}>
+      <div className="no-print" style={{background:"#0d1117",padding:"12px 20px",display:"flex",
+        gap:10,alignItems:"center",borderBottom:"1px solid #1c2838",flexShrink:0}}>
+        <div style={{flex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:"#dde6f0"}}>
+            Variation Order — {viewVar.ref}
+          </span>
+          {viewVar.description&&<span style={{color:"#7a8fa5",fontSize:12,marginLeft:10}}>
+            {viewVar.description}
+          </span>}
+        </div>
+        <Btn sm v="gho" onClick={()=>window.print()}>⎙ Print / Save as PDF</Btn>
+        <Btn sm v="gho" onClick={()=>{
+          const sub=encodeURIComponent(`Variation Order ${viewVar.ref} – ${proj.name}`);
+          const body=encodeURIComponent(`Hi ${proj.client||""},\n\nPlease find attached Variation Order ${viewVar.ref} for your authorisation.\n\nOnce signed, please return a copy so we can proceed with the works.\n\nKind regards`);
+          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
+        }}>✉ Email</Btn>
+        <Btn sm v="gho" onClick={()=>setViewVar(null)}>✕ Close</Btn>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"28px 20px",background:"#07090c"}}>
+        <VariationDocument
+          variation={viewVar}
+          proj={proj}
+          company={company}
+          variations={variations}
+          c={c}
+        />
+      </div>
+    </div>}
   </div>;
 }
 
