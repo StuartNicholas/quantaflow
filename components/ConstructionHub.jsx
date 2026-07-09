@@ -8868,7 +8868,7 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
             options={[{value:"",label:"— no builder —"},...builders.map(b=>({value:b.id,label:b.name}))]}/>
         </div>
         <Grid2 gap={10}>
-          <Inp label="Start Date" value={proj.created} onChange={v=>onMutate(p=>({...p,created:v}))} type="date"/>
+          <Inp label="Created" value={proj.created} onChange={()=>{}} type="date" sx={{opacity:0.7}}/>
           <Inp label="Due Date" value={proj.dueDate||""} onChange={v=>onMutate(p=>({...p,dueDate:v}))} type="date"/>
         </Grid2>
         <Inp label="Description" value={proj.description||""} onChange={v=>onMutate(p=>({...p,description:v}))} rows={2}/>
@@ -8895,10 +8895,9 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
         <Card>
           <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:T.accent}}>Summary</div>
           {(()=>{const c2=calc(proj);return [
-            {l:"Quote Total",v:$$(c2.total)},
-            {l:"Invoiced",v:$$(proj.invoiced||0)},
-            {l:"Actual Costs",v:$$(c2.actTotal)},
+            {l:"Quote Total",v:$$(c2.total||proj.quote_value||0)},
             {l:"Variations",v:$$(c2.varTotal)},
+            {l:"Actual Costs",v:$$(c2.actTotal)},
           ].map(r=><div key={r.l} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${T.border}`,fontSize:13}}>
             <span style={{color:T.muted}}>{r.l}</span>
             <span style={{fontFamily:T.mono,fontWeight:600,color:T.text}}>{r.v}</span>
