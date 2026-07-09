@@ -117,8 +117,9 @@ const mkProject = (o={}) => ({
 
 const normalizeProject = (p={}) => ({
   ...p,
-  client: p.client_name ?? p.client ?? "",
-  created: p.created ?? (p.created_at ? p.created_at.slice(0,10) : new Date().toISOString().slice(0,10)),
+  client:   p.client_name ?? p.client ?? "",
+  clientId: p.client_id   ?? p.clientId ?? null,
+  created:  p.created ?? (p.created_at ? p.created_at.slice(0,10) : new Date().toISOString().slice(0,10)),
 });
 
 const SEED_CLIENTS = [
@@ -8915,7 +8916,7 @@ function ClientsModule({clients, reloadClients, clientsLoading, projects, pop}) 
   const [busy, setBusy] = useState(false);
 
   const client = clients.find(c=>c.id===sel);
-  const clientProjs = sel ? projects.filter(p=>p.clientId===sel||p.client===client?.name) : [];
+  const clientProjs = sel ? projects.filter(p=>p.client_id===sel||p.clientId===sel||p.client===client?.name) : [];
   const filtered = clients.filter(c=>!search||[c.name,c.contact,c.email].join(" ").toLowerCase().includes(search.toLowerCase()));
 
   async function saveNew() {
