@@ -119,6 +119,7 @@ const normalizeProject = (p={}) => ({
   ...p,
   client:   p.client_name ?? p.client ?? "",
   clientId: p.client_id   ?? p.clientId ?? null,
+  dueDate:  p.dueDate     ?? p.due_date ?? "",
   created:  p.created ?? (p.created_at ? p.created_at.slice(0,10) : new Date().toISOString().slice(0,10)),
 });
 
