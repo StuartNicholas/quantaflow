@@ -2587,7 +2587,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="takeoff"  && <TakeoffModule proj={proj} cabLib={cabLib} onMutate={onMutate} onGotoLibrary={onGotoLibrary} pop={pop}/>}
     {tab==="preset"   && <CabinetPreset proj={proj} pop={pop}/>}
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
-    {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} variations={variations} onMutate={onMutate} pop={pop}/>}
+    {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} variations={variations} clients={clients} onMutate={onMutate} pop={pop}/>}
     {tab==="orderlist"    && <OrderListModule proj={proj} pop={pop}/>}
     {tab==="schemes"      && <SchemesModule proj={proj} pop={pop}/>}
     {tab==="production"   && <ProductionModule proj={proj} pop={pop}/>}
@@ -6076,7 +6076,7 @@ const QV_STATUS = {
   superseded: {color:"#6b7280", label:"Superseded"},
 };
 
-function QuoteModule({proj, company, c, variations, onMutate, pop}) {
+function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
   const [versions,     setVersions]     = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [selId,        setSelId]        = useState(null);
@@ -6241,10 +6241,12 @@ function QuoteModule({proj, company, c, variations, onMutate, pop}) {
 
         <Btn sm v="gho" onClick={()=>{ window.print(); pop("Browser print dialog opened — choose 'Save as PDF' to create a file you can send.","info"); }}>⎙ Save as PDF</Btn>
         <Btn sm v="gho" onClick={()=>{
+          const cl=(clients||[]).find(c=>c.id===(proj.clientId||proj.client_id)||c.name===proj.client);
+          const to=cl?.email?encodeURIComponent(cl.email):"";
           const sub=encodeURIComponent(`Quote – ${proj.name}`);
           const body=encodeURIComponent(`Hi ${proj.client||""},\n\nPlease find attached our quote for the above project.\n\nIf you have any questions please don't hesitate to get in touch.\n\nKind regards`);
-          window.open(`mailto:?subject=${sub}&body=${body}`,"_self");
-          pop("Email client opened — attach your saved PDF before sending.","info");
+          window.open(`mailto:${to}?subject=${sub}&body=${body}`,"_self");
+          pop(to?"Email client opened — attach your saved PDF before sending.":"Email client opened — add client email and attach your saved PDF.","info");
         }}>✉ Email Client</Btn>
         {hasEstItems&&<Btn sm v="pri" onClick={()=>setShowIssue(s=>!s)}>
           {versions.length===0?"Issue Quote v1":`Issue New (v${nextVNum})`}
