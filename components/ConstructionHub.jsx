@@ -1200,6 +1200,51 @@ export default function App() {
     }
   }
 
+  async function duplicateProject(srcId){
+    const src = projects.find(p=>p.id===srcId); if(!src) return;
+    pop("Duplicating project…","info");
+    try{
+      // 1. Create new project row
+      const { data:newProj, error:pErr } = await supabase.from("projects").insert({
+        company_id: companyId, created_by: user?.id,
+        name: `Copy of ${src.name}`,
+        client_name: src.client_name||src.client||null,
+        address: src.address||null, status:"draft", quote_value:0,
+        builder_id: src.builder_id||null, client_id: src.client_id||src.clientId||null,
+      }).select().single();
+      if(pErr) throw pErr;
+      // 2. Copy estimate items from source project
+      const { data:srcEst } = await supabase.from("estimates").select("*,estimate_items(*)").eq("project_id",srcId).maybeSingle();
+      if(srcEst){
+        // Create a new estimate for the duplicate
+        const { data:newEst } = await supabase.from("estimates").insert({
+          company_id: companyId, project_id: newProj.id, created_by: user?.id, updated_by: user?.id,
+          margin_pct: srcEst.margin_pct??0, overhead_pct: srcEst.overhead_pct??0,
+        }).select().single();
+        if(newEst && srcEst.estimate_items?.length){
+          const rows = srcEst.estimate_items.map((it,i)=>({
+            company_id: companyId, estimate_id: newEst.id,
+            category: it.category, description: it.description, qty: it.qty, unit: it.unit,
+            rate: it.rate, margin_pct: it.margin_pct, source: it.source||"manual", sort_order: i,
+          }));
+          await supabase.from("estimate_items").insert(rows);
+          // Roll up total onto new project
+          const total = rows.reduce((s,it)=>{
+            const m=(it.margin_pct??srcEst.margin_pct??0)/100;
+            return s+(it.qty||0)*(it.rate||0)*(1+m);
+          },0);
+          const ovhd = total*(srcEst.overhead_pct||0)/100;
+          const incGst = (total+ovhd)*1.10;
+          await supabase.from("projects").update({quote_value:parseFloat(incGst.toFixed(2))}).eq("id",newProj.id);
+          newProj.quote_value = parseFloat(incGst.toFixed(2));
+        }
+      }
+      const project = normalizeProject({...mkProject({overhead:company.defaultOverhead,margin:company.defaultMargin,gst:company.defaultGst||15}),...newProj});
+      setProjects(ps=>[project,...ps]);
+      pop(`"${project.name}" created — ${srcEst?.estimate_items?.length||0} estimate items copied.`);
+    }catch(err){ pop(err?.message||String(err),"error"); }
+  }
+
   async function restoreProject(id){
     const p=trash.find(x=>x.id===id); if(!p) return;
     const { error } = await dbRestoreProject(id, p.name);
@@ -1424,7 +1469,7 @@ export default function App() {
                 <span style={{marginLeft:"auto"}}><Btn sm v="pri" onClick={returnToProject}>← Back to takeoff</Btn></span>
               </div>}
               {nav==="dashboard" && <Dashboard projects={projects} xero={xero} onOpen={openProj} setNav={setNav}/>}
-              {nav==="projects"  && <ProjectsModule projects={projects} loading={projectsLoading} error={projectsError} company={company} builders={builders} onOpen={openProj} onTrash={trashProject} pop={pop} createProject={createProject}/>}
+              {nav==="projects"  && <ProjectsModule projects={projects} loading={projectsLoading} error={projectsError} company={company} builders={builders} onOpen={openProj} onTrash={trashProject} onDuplicate={duplicateProject} pop={pop} createProject={createProject}/>}
               {nav==="clients"   && <ClientsModule clients={clients} reloadClients={reloadClients} clientsLoading={clientsLoading} projects={projects} pop={pop}/>}
               {nav==="builders"  && <BuildersModule builders={builders} reloadBuilders={reloadBuilders} buildersLoading={buildersLoading} projects={projects} pop={pop}/>}
               {nav==="suppliers" && <SuppliersModule pop={pop}/>}
@@ -2407,7 +2452,7 @@ function Dashboard({projects, xero, onOpen, setNav}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // PROJECTS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,pop,createProject}) {
+function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,onDuplicate,pop,createProject}) {
   const [showNew,setShowNew]=useState(false);
   const [np,setNp]=useState({name:"",client:"",address:"",builder_id:""});
   const [filter,setFilter]=useState("all");
@@ -2511,6 +2556,7 @@ function ProjectsModule({projects,loading,error,company,builders,onOpen,onTrash,
               <td style={{padding:"10px 10px"}}>
                 <Row gap={5} onClick={e=>e.stopPropagation()}>
                   <Btn sm v="blu" onClick={()=>onOpen(p.id)}>Open</Btn>
+                  <Btn sm v="gho" title="Duplicate project (copies all estimate items)" onClick={()=>onDuplicate?.(p.id)}>⧉</Btn>
                   <Btn sm v="red" onClick={()=>{
                     if(safeConfirm(`Move "${p.name}" to Trash? You can restore it from Settings.`)) onTrash(p.id);
                   }}>✕</Btn>
