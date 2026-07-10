@@ -537,7 +537,7 @@ function calc(p) {
     +((cc.installSiteSetupHours||0)*(cc.installHourlyRate||0)) : 0;
   const ovhd = sub * ((p.overhead||0)/100);
   const exGst = sub + ovhd + varTotal + extras;
-  const gstAmt = exGst * ((p.gst||0)/100);
+  const gstAmt = exGst * ((parseFloat(p.gst)||10)/100);
   const total = exGst + gstAmt;
   const actTotal = (p.actualCosts||[]).reduce((s,a)=>s+(a.amount||0),0);
   const claimedTotal = (p.claims||[]).reduce((s,c)=>s+(c.amount||0),0);
@@ -1052,7 +1052,12 @@ export default function App() {
           setUser(currentUser);
           setCompanyId(profile.company_id);
           setUserRole(profile.role || "owner");
-          setProjects((projectData || []).map(normalizeProject));
+          setProjects((projectData || []).map(p => normalizeProject({
+            ...p,
+            gst:      p.gst      ?? (companyRow?.default_gst      ?? 10),
+            margin:   p.margin   ?? (companyRow?.default_margin    ?? 20),
+            overhead: p.overhead ?? (companyRow?.default_overhead  ?? 12),
+          })));
           setSetupComplete(companyRow?.setup_complete ?? true);
           dbListTrashedProjects().then(({ data: td }) => { if (mounted) setTrash(td || []); });
 
