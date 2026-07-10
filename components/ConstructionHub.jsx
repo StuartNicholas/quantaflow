@@ -2955,7 +2955,7 @@ function OrderListModule({proj, pop}) {
 
   async function saveContingency(v){
     setContingency(v);
-    try{ await supabase.from("projects").update({sheet_contingency_pct:v}).eq("id",proj.id); }catch{}
+    try{ await dbUpdateProject(proj.id,{sheet_contingency_pct:v}); }catch{}
   }
 
   async function doPOCreate(boardRows, hardwareRows){
