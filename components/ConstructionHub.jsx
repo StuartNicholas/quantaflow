@@ -2681,7 +2681,8 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
       <Bdg color={sm.color}>{sm.label}</Bdg>
       {sm.next&&<Btn sm v="gho" onClick={async()=>{
         onMutate(p=>({...p,status:sm.next}));
-        await supabase.from("projects").update({status:sm.next}).eq("id",proj.id);
+        const {data} = await dbUpdateProject(proj.id,{status:sm.next});
+        if(data) onMutate(p=>({...p,updated_at:data.updated_at}));
         pop(`→ ${STATUS[sm.next].label}`);
       }}>Advance →</Btn>}
       <div style={{marginLeft:"auto",textAlign:"right"}}>
@@ -8998,30 +8999,26 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
 
   async function setBuilder(builderId) {
     onMutate(p=>({...p, builder_id: builderId||null}));
-    await supabase.from("projects").update({builder_id: builderId||null}).eq("id", proj.id);
+    const {data} = await dbUpdateProject(proj.id, {builder_id: builderId||null});
+    if(data) onMutate(p=>({...p, updated_at: data.updated_at}));
   }
 
   async function saveProject(){
     setSaving(true);
-    // Persist core fields — fall back gracefully if optional columns don't exist
-    try{
-      await supabase.from("projects").update({
-        name: proj.name,
-        client_name: proj.client,
-        client_id: proj.clientId||null,
-        address: proj.address||null,
-        status: proj.status,
-        description: proj.description||null,
-        notes: proj.notes||null,
-        due_date: proj.dueDate||null,
-      }).eq("id", proj.id);
-    }catch{
-      await supabase.from("projects").update({
-        name: proj.name, client_name: proj.client, client_id: proj.clientId||null,
-        address: proj.address||null, status: proj.status,
-      }).eq("id", proj.id);
-    }
-    // Persist margin/overhead/gst to estimates table (source of truth for financials)
+    const { data, error } = await dbUpdateProject(proj.id, {
+      name: proj.name,
+      client_name: proj.client,
+      client_id: proj.clientId||null,
+      address: proj.address||null,
+      status: proj.status,
+      description: proj.description||null,
+      notes: proj.notes||null,
+      due_date: proj.dueDate||null,
+    });
+    if(error){ setSaving(false); return pop(error,"error"); }
+    // Feed updated_at back into state so dashboard heuristics see fresh timestamps
+    if(data) onMutate(p=>({...p, updated_at: data.updated_at}));
+    // Persist margin/overhead to estimates table (source of truth for financials)
     try{
       await supabase.from("estimates").update({
         margin_pct: parseFloat(proj.margin)||0,
@@ -9165,7 +9162,7 @@ function ClientsModule({clients, reloadClients, clientsLoading, projects, pop}) 
       {/* Client list */}
       <div>
         {filtered.map(c=>{
-          const cProjs=projects.filter(p=>p.clientId===c.id||p.client===c.name);
+          const cProjs=projects.filter(p=>p.client_id===c.id||p.clientId===c.id||p.client===c.name);
           const cVal=cProjs.reduce((s,p)=>s+(p.quote_value||calc(p).total),0);
           return <div key={c.id} onClick={()=>{setSel(c.id===sel?null:c.id);setEditing(false);}} style={{
             display:"flex",justifyContent:"space-between",alignItems:"flex-start",
@@ -9206,14 +9203,14 @@ function ClientsModule({clients, reloadClients, clientsLoading, projects, pop}) 
               {clientProjs.length>0&&<div>
                 <div style={{fontWeight:600,fontSize:12,color:T.muted,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>Projects</div>
                 {clientProjs.map(p=>{
-                  const c2=calc(p); const sm=STATUS[p.status]||STATUS.draft;
+                  const qv=p.quote_value||calc(p).total; const sm=STATUS[p.status]||STATUS.draft;
                   return <div key={p.id} style={{display:"flex",justifyContent:"space-between",
                     padding:"7px 0",borderBottom:`1px solid ${T.border}`,fontSize:12}}>
                     <div>
                       <span style={{color:T.text,fontWeight:600}}>{p.name}</span>
                       <div style={{marginTop:2}}><Bdg color={sm.color} sm>{sm.label}</Bdg></div>
                     </div>
-                    <span style={{fontFamily:T.mono,color:T.accent,fontWeight:700}}>{$$(c2.total,true)}</span>
+                    <span style={{fontFamily:T.mono,color:qv>0?T.accent:T.faint,fontWeight:700}}>{qv>0?$$(qv,true):"—"}</span>
                   </div>;
                 })}
               </div>}
