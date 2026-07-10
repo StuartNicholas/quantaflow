@@ -6469,6 +6469,24 @@ function ScheduleModule({proj, onMutate, pop}) {
   const [nt,setNt]=useState({name:"",start:today,end:in7,assignee:"",status:"pending"});
   const tasks=proj.tasks||[];
 
+  useEffect(()=>{
+    if(!(proj.tasks||[]).length){
+      try{
+        const saved=localStorage.getItem(`qf_schedule_${proj.id}`);
+        if(saved){
+          const t=JSON.parse(saved);
+          if(Array.isArray(t)&&t.length) onMutate(p=>({...p,tasks:t}));
+        }
+      }catch{}
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[proj.id]);
+
+  function persistTasks(newTasks){
+    localStorage.setItem(`qf_schedule_${proj.id}`,JSON.stringify(newTasks));
+    onMutate(p=>({...p,tasks:newTasks}));
+  }
+
   // timeline range
   const dates=tasks.flatMap(t=>[t.start,t.end]).filter(Boolean).sort();
   const min=dates[0]?new Date(dates[0]).getTime():Date.now();
@@ -6499,7 +6517,7 @@ function ScheduleModule({proj, onMutate, pop}) {
       </div>
       <Row gap={8}><Btn v="pri" sm onClick={()=>{
         if(!nt.name) return pop("Task name required.","error");
-        onMutate(p=>({...p,tasks:[...(p.tasks||[]),{...nt,id:Date.now()}]}));
+        persistTasks([...(proj.tasks||[]),{...nt,id:Date.now()}]);
         setNt({name:"",start:today,end:in7,assignee:"",status:"pending"});
         setShowAdd(false); pop("Task added.");
       }}>Add</Btn><Btn sm onClick={()=>setShowAdd(false)}>Cancel</Btn></Row>
@@ -6515,14 +6533,14 @@ function ScheduleModule({proj, onMutate, pop}) {
                 <span style={{fontWeight:600,fontSize:13,color:t.status==="done"?T.muted:T.text,
                   textDecoration:t.status==="done"?"line-through":"none"}}>{t.name}</span>
                 {t.assignee&&<span style={{color:T.faint,fontSize:11}}>· {t.assignee}</span>}
-                <span style={{color:T.faint,fontSize:11,fontFamily:T.mono}}>{t.start} → {t.end}</span>
+                <span style={{color:T.faint,fontSize:11}}>{fmtDate(t.start,true)} → {fmtDate(t.end,true)}</span>
                 <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
-                  <select value={t.status} onChange={e=>onMutate(p=>({...p,tasks:p.tasks.map(x=>x.id===t.id?{...x,status:e.target.value}:x)}))}
+                  <select value={t.status} onChange={e=>persistTasks(tasks.map(x=>x.id===t.id?{...x,status:e.target.value}:x))}
                     style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:4,padding:"2px 6px",color:st.c,fontSize:11,fontWeight:600}}>
                     {Object.entries(STAT).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}
                   </select>
                   <span style={{cursor:"pointer",color:T.red,fontSize:12}}
-                    onClick={()=>onMutate(p=>({...p,tasks:p.tasks.filter(x=>x.id!==t.id)}))}>✕</span>
+                    onClick={()=>persistTasks(tasks.filter(x=>x.id!==t.id))}>✕</span>
                 </div>
               </Row>
               <div style={{position:"relative",height:10,background:T.bg,borderRadius:5}}>
@@ -7494,7 +7512,8 @@ function HandoverModule({proj, onMutate, pop}) {
     if(openDefects>0) return pop(`${openDefects} defect${openDefects>1?"s":""} still open — close them before marking complete.`,"error");
     if(unchecked>0)   return pop(`${unchecked} checklist item${unchecked>1?"s":""} not ticked — complete them first.`,"error");
     onMutate(p=>({...p,status:"complete"}));
-    await dbUpdateProject(proj.id, {status:"complete"});
+    const {data:cpData} = await dbUpdateProject(proj.id, {status:"complete"});
+    if(cpData) onMutate(p=>({...p, updated_at: cpData.updated_at}));
     pop("Project marked complete. Well done!");
   }
 
@@ -11456,7 +11475,7 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
               // Dynamic per-project keys (actual costs, production status, schemes)
               try{for(let i=0;i<localStorage.length;i++){
                 const k=localStorage.key(i);
-                if(k&&(k.startsWith("actual_costs_")||k.startsWith("qf_prod_")||k.startsWith("qf_schemes_"))){
+                if(k&&(k.startsWith("actual_costs_")||k.startsWith("qf_prod_")||k.startsWith("qf_schemes_")||k.startsWith("qf_schedule_"))){
                   const v=localStorage.getItem(k);if(v)try{dump.data[k]=JSON.parse(v);}catch{}
                 }
               }}catch{}
