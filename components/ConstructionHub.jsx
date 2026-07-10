@@ -2688,7 +2688,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
         pop(`→ ${STATUS[sm.next].label}`);
       }}>Advance →</Btn>}
       <div style={{marginLeft:"auto",textAlign:"right"}}>
-        <div style={{fontFamily:T.mono,fontSize:20,fontWeight:800,color:T.accent}}>{$$(c.total||proj.quote_value||0)}</div>
+        <div style={{fontFamily:T.mono,fontSize:20,fontWeight:800,color:T.accent}}>{$$((proj.lineItems||[]).length>0?c.total:proj.quote_value||0)}</div>
         <div style={{color:T.faint,fontSize:11}}>inc. GST{c.actTotal>0?` · ${$$(c.actTotal,true)} actual`:""}</div>
       </div>
     </Row>
