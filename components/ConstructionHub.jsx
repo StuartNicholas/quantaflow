@@ -6270,19 +6270,17 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
   async function setStatus(id, status) {
     const { data, error } = await dbUpdateQuoteStatus(id, status);
     if(error) return pop(error,"error");
-    if(status==="accepted") {
-      onMutate(p=>({...p,status:"approved"}));
-      await dbUpdateProject(proj.id, {status:"approved"});
-      pop("Quote accepted — project marked approved!");
-    } else if(status==="declined") {
-      onMutate(p=>({...p,status:"lost"}));
-      await dbUpdateProject(proj.id, {status:"lost"});
-      pop("Quote marked declined.","info");
-    } else if(status==="sent") {
-      onMutate(p=>({...p,status:"sent"}));
-      await dbUpdateProject(proj.id, {status:"sent"});
-      pop("Quote marked sent — project status updated to Sent.");
-    } else pop(`Quote marked ${status}.`,"info");
+    const projStatusMap = {accepted:"approved", declined:"lost", sent:"sent"};
+    const newProjStatus = projStatusMap[status];
+    if(newProjStatus) {
+      onMutate(p=>({...p,status:newProjStatus}));
+      const {data:pd} = await dbUpdateProject(proj.id, {status:newProjStatus});
+      if(pd) onMutate(p=>({...p, updated_at: pd.updated_at}));
+    }
+    if(status==="accepted")  pop("Quote accepted — project marked approved!");
+    else if(status==="declined") pop("Quote marked declined.","info");
+    else if(status==="sent") pop("Quote marked sent — project status updated to Sent.");
+    else pop(`Quote marked ${status}.`,"info");
     setVersions(vs=>vs.map(v=>v.id===id?{...v,...data}:v));
   }
 
@@ -10860,10 +10858,11 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
 
   function pushOne(proj) {
     const c=calc(proj);
+    const invoiced=c.total||proj.quote_value||0;
     const ref="INV-"+String(Math.floor(1000+Math.random()*9000));
-    mutProj(proj.id,p=>({...p,invoiced:c.total,xeroRef:ref,status:p.status==="approved"?"active":p.status}));
+    mutProj(proj.id,p=>({...p,invoiced,xeroRef:ref,status:p.status==="approved"?"active":p.status}));
     setXero(x=>({...x,log:[{ts:new Date().toLocaleTimeString(),
-      msg:`${ref} pushed — ${proj.name} ${$$(c.total,true)}`,ok:true},...(x.log||[])]}));
+      msg:`${ref} pushed — ${proj.name} ${$$(invoiced,true)}`,ok:true},...(x.log||[])]}));
     pop(`${ref} pushed to Xero!`);
   }
 
@@ -10953,7 +10952,7 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
             <Btn sm v="gho" onClick={()=>{
               const ref="INV-"+String(Math.floor(1000+Math.random()*9000));
               const c=calc(p);
-              mutProj(p.id,x=>({...x,invoiced:c.total,xeroRef:ref}));
+              mutProj(p.id,x=>({...x,invoiced:c.total||p.quote_value||0,xeroRef:ref}));
               setXero(x=>({...x,log:[{ts:new Date().toLocaleTimeString(),
                 msg:`${ref} re-pushed — ${p.name}`,ok:true},...(x.log||[])]}));
               pop(`Re-pushed as ${ref}`);
