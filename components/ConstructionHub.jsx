@@ -1054,9 +1054,7 @@ export default function App() {
           setUserRole(profile.role || "owner");
           setProjects((projectData || []).map(p => normalizeProject({
             ...p,
-            gst:      p.gst      ?? (companyRow?.default_gst      ?? 10),
-            margin:   p.margin   ?? (companyRow?.default_margin    ?? 20),
-            overhead: p.overhead ?? (companyRow?.default_overhead  ?? 12),
+            gst: p.gst ?? (companyRow?.default_gst ?? 10),
           })));
           setSetupComplete(companyRow?.setup_complete ?? true);
           dbListTrashedProjects().then(({ data: td }) => { if (mounted) setTrash(td || []); });
