@@ -1191,6 +1191,7 @@ export default function App() {
         status: "draft",
         quote_value: 0,
         created_by: user.id,
+        updated_by: user.id,
         builder_id: np.builder_id||null,
         client_id: np.client_id||null,
       };
@@ -1216,7 +1217,7 @@ export default function App() {
     try{
       // 1. Create new project row
       const { data:newProj, error:pErr } = await supabase.from("projects").insert({
-        company_id: companyId, created_by: user?.id,
+        company_id: companyId, created_by: user?.id, updated_by: user?.id,
         name: `Copy of ${src.name}`,
         client_name: src.client_name||src.client||null,
         address: src.address||null, status:"draft", quote_value:0,
