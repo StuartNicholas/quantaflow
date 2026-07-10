@@ -2343,10 +2343,16 @@ function Dashboard({projects, xero, onOpen, setNav}) {
   const today = new Date();
   const attention = [];
   projects.forEach(p=>{
-    const ageDays = (p.created_at||p.created) ? Math.floor((today - new Date(p.created_at||p.created)) / 86400000) : 0;
-    if(p.status==="sent"  && ageDays>14) attention.push({proj:p, msg:`Quote sent ${ageDays}d ago — awaiting decision`, color:T.yellow});
-    if(p.status==="active"&& !localStorage.getItem(`qf_prod_${p.id}`)) attention.push({proj:p, msg:"Active job — no production data yet", color:T.orange||T.accent});
+    // Use updated_at as the best proxy for when status last changed (set by every DB write)
+    const lastChange = p.updated_at||p.created_at||p.created;
+    const daysSince  = lastChange ? Math.floor((today - new Date(lastChange)) / 86400000) : 0;
+    if(p.status==="sent"   && daysSince>14) attention.push({proj:p, msg:`Quote sent — no response for ${daysSince}d`, color:T.yellow});
+    if(p.status==="quoting"&& daysSince>21) attention.push({proj:p, msg:`Quoting for ${daysSince}d — no quote issued yet`, color:T.yellow});
+    if(p.status==="active" && !localStorage.getItem(`qf_prod_${p.id}`)) attention.push({proj:p, msg:"Active job — no production data yet", color:T.orange||T.accent});
     if(["approved","active"].includes(p.status)&&!p.quote_value&&!calc(p).total) attention.push({proj:p, msg:"No estimate — job has no value", color:T.red});
+    const due=p.due_date||p.dueDate;
+    if(due&&new Date(due)<today&&!["complete","lost"].includes(p.status))
+      attention.push({proj:p, msg:`Due date passed (${fmtDate(due,true)})`, color:"#ef4444"});
   });
 
   // Activity icons + colours
@@ -2359,13 +2365,11 @@ function Dashboard({projects, xero, onOpen, setNav}) {
 
     {/* ── KPIs */}
     <Row wrap gap={10} sx={{marginBottom:18}}>
-      <KPI label="Total Pipeline"   value={$$(pipeline,true)}      sub={`${projects.length} project${projects.length!==1?"s":""}`}/>
-      <KPI label="Won & Active"    value={$$(wonVal,true)}         sub="approved + active"   color={T.green}/>
-      <KPI label="Quotes Pending"  value={$$(pendingVal,true)}     sub={`${pending} awaiting decision`} color={T.yellow}/>
-      <KPI label="Completed"       value={$$(completedVal,true)}   sub="finished jobs"       color={T.teal}/>
+      <KPI label="Total Pipeline"  value={$$(pipeline,true)}    sub={`${projects.length} project${projects.length!==1?"s":""}`}/>
+      <KPI label="Active & Won"    value={$$(wonVal,true)}      sub={`${activeJobs} active · approved`}   color={T.green}/>
+      <KPI label="Quotes Pending"  value={$$(pendingVal,true)}  sub={`${pending} awaiting decision`}      color={T.yellow}/>
+      <KPI label="Completed"       value={$$(completedVal,true)} sub="finished jobs"                      color={T.teal}/>
       <KPI label="Win Rate"        value={winRate!==null?`${winRate}%`:"—"} sub={`${won} won · ${lost} lost`} color={winRate!=null?(winRate>=50?T.green:T.yellow):T.faint}/>
-      <KPI label="Active Jobs"     value={activeJobs}             sub="on-site"              color={T.blue}/>
-      <KPI label="Pending Quotes"  value={pending}                sub="awaiting decision"    color={T.yellow}/>
     </Row>
 
     {/* ── Production summary across active jobs */}
