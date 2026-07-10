@@ -8896,7 +8896,7 @@ function ClaimsModule({proj, c, pop, company, clients}) {
           <span style={{fontFamily:T.mono,color:T.purple,fontWeight:800,fontSize:13}}>#{cl.claim_number}</span>
           <div style={{flex:1}}>
             <div style={{fontWeight:600,fontSize:13,color:T.text}}>{cl.description||"—"}</div>
-            {cl.period_end&&<div style={{fontSize:11,color:T.faint}}>Period ending {cl.period_end}</div>}
+            {cl.period_end&&<div style={{fontSize:11,color:T.faint}}>Period ending {fmtDate(cl.period_end,true)}</div>}
             {claimULs.length>0&&<div style={{marginTop:4,display:"flex",flexWrap:"wrap",gap:4}}>
               {claimULs.map(k=><span key={k} style={{fontSize:10,background:`${T.purple}18`,color:T.purple,
                 border:`1px solid ${T.purple}44`,borderRadius:4,padding:"1px 6px"}}>{k}</span>)}
@@ -10340,26 +10340,40 @@ function CabinetFormula({pop}) {
       </div>
 
       <div style={{fontWeight:600,fontSize:11,color:T.muted,textTransform:"uppercase",letterSpacing:"0.05em",margin:"12px 0 6px"}}>Sample rates (from catalogue)</div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:6}}>
-        <Inp label="Carc/m²" value={exRates.carcass} onChange={v=>setExRates(x=>({...x,carcass:+v||0}))} type="number" mono/>
-        <Inp label="Front/m²" value={exRates.front} onChange={v=>setExRates(x=>({...x,front:+v||0}))} type="number" mono/>
-        <Inp label="Hinge" value={exRates.hinge} onChange={v=>setExRates(x=>({...x,hinge:+v||0}))} type="number" mono/>
-        <Inp label="Handle" value={exRates.handle} onChange={v=>setExRates(x=>({...x,handle:+v||0}))} type="number" mono/>
-        <Inp label="Foot" value={exRates.foot} onChange={v=>setExRates(x=>({...x,foot:+v||0}))} type="number" mono/>
-      </div>
+      {(r.pricing_model||"spreadsheet")==="spreadsheet"
+        ? <Row gap={6}>
+            <Inp label="Carc board $/m²" value={exRates.carcass} onChange={v=>setExRates(x=>({...x,carcass:+v||0}))} type="number" mono sx={{flex:1}}/>
+            <Inp label="Fronts (finish) $/m²" value={exRates.front} onChange={v=>setExRates(x=>({...x,front:+v||0}))} type="number" mono sx={{flex:1}}/>
+          </Row>
+        : <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:6}}>
+            <Inp label="Carc/m²" value={exRates.carcass} onChange={v=>setExRates(x=>({...x,carcass:+v||0}))} type="number" mono/>
+            <Inp label="Front/m²" value={exRates.front} onChange={v=>setExRates(x=>({...x,front:+v||0}))} type="number" mono/>
+            <Inp label="Hinge" value={exRates.hinge} onChange={v=>setExRates(x=>({...x,hinge:+v||0}))} type="number" mono/>
+            <Inp label="Handle" value={exRates.handle} onChange={v=>setExRates(x=>({...x,handle:+v||0}))} type="number" mono/>
+            <Inp label="Foot" value={exRates.foot} onChange={v=>setExRates(x=>({...x,foot:+v||0}))} type="number" mono/>
+          </div>}
 
       <div style={{marginTop:14,background:T.bg,borderRadius:8,padding:14,border:`1px solid ${T.border}`}}>
-        {[
-          ["Carcass board",`${calc.carcassM2} m² × $${exRates.carcass}`,calc.carcassCost],
-          ["Door/drawer fronts",`${calc.frontM2} m² × $${exRates.front}`,calc.frontCost],
-          ["Hinges",`${calc.hinges} × $${exRates.hinge}`,calc.hingeCost],
-          ["Handles",`${calc.handles} × $${exRates.handle}`,calc.handleCost],
-          ["Feet",`${calc.feet} × $${exRates.foot}`,calc.footCost],
-          ["Assembly",``,calc.assembly],
-        ].map(([label,detail,val])=>(val>0||label==="Assembly")&&<div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6,fontSize:12}}>
+        {(calc.model==="spreadsheet" ? [
+          ["Carcass board",   `${calc.carcassM2} m² × $${exRates.carcass}/m²`,              calc.carcassCost],
+          ["Door hardware",   `${calc.doors} × $${r.door_hardware_cost??12}/door`,           calc.doorHwCost],
+          ["Drawer hardware", `${calc.drawers} × $${r.drawer_hardware_cost??95}/drawer`,     calc.drawerHwCost],
+          ["Assembly",        "",                                                              calc.assembly],
+          ["Fronts (finish)", `${calc.frontM2} m² × $${exRates.front}/m²`,                  calc.frontCost],
+        ] : [
+          ["Carcass board",      `${calc.carcassM2} m² × $${exRates.carcass}/m²`, calc.carcassCost],
+          ["Door/drawer fronts", `${calc.frontM2} m² × $${exRates.front}/m²`,     calc.frontCost],
+          ["Hinges",             `${calc.hinges} × $${exRates.hinge}`,             calc.hingeCost],
+          ["Handles",            `${calc.handles} × $${exRates.handle}`,           calc.handleCost],
+          ["Feet",               `${calc.feet} × $${exRates.foot}`,                calc.footCost],
+          ["Assembly",           "",                                                calc.assembly],
+        ]).map(([label,detail,val])=>(val>0||label==="Assembly")&&<div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6,fontSize:12}}>
           <span style={{color:T.text}}>{label} <span style={{color:T.faint,fontSize:11,fontFamily:T.mono}}>{detail}</span></span>
           <span style={{fontFamily:T.mono,color:T.muted}}>{$$(val)}</span>
         </div>)}
+        {calc.model==="spreadsheet"&&calc.calibration!==1&&<div style={{fontSize:11,color:T.yellow,marginBottom:6}}>
+          Supplier calibration ×{calc.calibration} applied to supply subtotal.
+        </div>}
         <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${T.border}`,paddingTop:9,marginTop:6}}>
           <span style={{fontWeight:800,fontSize:14}}>Cabinet cost</span>
           <span style={{fontFamily:T.mono,fontWeight:800,fontSize:16,color:T.accent}}>{$$(calc.total)}</span>
