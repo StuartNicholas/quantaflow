@@ -11373,9 +11373,8 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
             </Card>
 
             <Btn v="pri" full onClick={async()=>{
-              setCompany(local);
               if(companyId) {
-                await supabase.from("companies").update({
+                const { error } = await supabase.from("companies").update({
                   name:             local.name?.trim()    || undefined,
                   abn:              local.abn?.trim()     || undefined,
                   country:          local.country         || "AU",
@@ -11393,7 +11392,9 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
                   payment_terms:    local.paymentTerms    || null,
                   quote_validity:   local.quoteValidity   || null,
                 }).eq("id",companyId);
+                if(error) return pop(error.message||"Save failed.","error");
               }
+              setCompany(local);
               pop("Settings saved!");
             }}>
               Save All Settings
@@ -11434,9 +11435,17 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
           </div>
           <Row gap={8}>
             <Btn v="grn" onClick={()=>{
-              const keys=["qf_projects","qf_clients","qf_rates","qf_cablib","qf_company","qf_xero","qf_templates","qf_trash","qf_ai"];
+              const staticKeys=["qf_rates","qf_cablib","qf_company","qf_xero","qf_templates","qf_ai"];
               const dump={exportedAt:new Date().toISOString(),app:"Verixo",data:{}};
-              keys.forEach(k=>{try{const v=localStorage.getItem(k);if(v)dump.data[k]=JSON.parse(v);}catch{}});
+              // Static keys
+              staticKeys.forEach(k=>{try{const v=localStorage.getItem(k);if(v)dump.data[k]=JSON.parse(v);}catch{}});
+              // Dynamic per-project keys (actual costs, production status, schemes)
+              try{for(let i=0;i<localStorage.length;i++){
+                const k=localStorage.key(i);
+                if(k&&(k.startsWith("actual_costs_")||k.startsWith("qf_prod_")||k.startsWith("qf_schemes_"))){
+                  const v=localStorage.getItem(k);if(v)try{dump.data[k]=JSON.parse(v);}catch{}
+                }
+              }}catch{}
               const a=document.createElement("a");
               a.href=URL.createObjectURL(new Blob([JSON.stringify(dump,null,2)],{type:"application/json"}));
               a.download=`verixo-backup-${new Date().toISOString().slice(0,10)}.json`;
@@ -11475,7 +11484,7 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
                   <div>
                     <div style={{fontSize:13,fontWeight:600,color:T.text}}>{p.name}</div>
                     <div style={{fontSize:11,color:T.faint}}>
-                      {p.client_name||p.client||""}{(p.client_name||p.client)?" · ":""}trashed {String(p.trashed_at||p.trashedAt||"").slice(0,10)}
+                      {p.client_name||p.client||""}{(p.client_name||p.client)?" · ":""}trashed {fmtDate(p.trashed_at||p.trashedAt,true)}
                     </div>
                   </div>
                   <Row gap={6}>
