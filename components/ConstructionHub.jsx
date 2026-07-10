@@ -1052,10 +1052,11 @@ export default function App() {
           setUser(currentUser);
           setCompanyId(profile.company_id);
           setUserRole(profile.role || "owner");
-          setProjects((projectData || []).map(p => normalizeProject({
-            ...p,
-            gst: p.gst ?? (companyRow?.default_gst ?? 10),
-          })));
+          setProjects((projectData || []).map(p => {
+            let xeroData={};
+            try{ const s=localStorage.getItem(`qf_xero_${p.id}`); if(s) xeroData=JSON.parse(s)||{}; }catch{}
+            return normalizeProject({...p, gst: p.gst ?? (companyRow?.default_gst ?? 10), ...xeroData});
+          }));
           setSetupComplete(companyRow?.setup_complete ?? true);
           dbListTrashedProjects().then(({ data: td }) => { if (mounted) setTrash(td || []); });
 
@@ -1308,6 +1309,7 @@ export default function App() {
     const ref = "INV-"+String(Math.floor(1000+Math.random()*9000));
     mutProj(proj.id, p=>({...p, invoiced, xeroRef:ref,
       status:p.status==="approved"?"active":p.status}));
+    try{ localStorage.setItem(`qf_xero_${proj.id}`, JSON.stringify({xeroRef:ref, invoiced})); }catch{}
     setXero(x=>({...x, log:[{ts:new Date().toLocaleTimeString(),
       msg:`${ref} pushed — ${proj.name} ${$$(invoiced,true)}`,ok:true},...(x.log||[])]}));
     pop(`${ref} pushed to Xero!`);
@@ -2697,7 +2699,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
       </div>
     </Row>
     <Tabs tabs={TABS} active={tab} onChange={setTab}/>
-    {tab==="takeoff"  && <TakeoffModule proj={proj} cabLib={cabLib} onMutate={onMutate} onGotoLibrary={onGotoLibrary} pop={pop}/>}
+    {tab==="takeoff"  && <TakeoffModule proj={proj} cabLib={cabLib} company={company} onMutate={onMutate} onGotoLibrary={onGotoLibrary} pop={pop}/>}
     {tab==="preset"   && <CabinetPreset proj={proj} pop={pop}/>}
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
     {tab==="quote"    && <QuoteModule proj={proj} company={company} c={c} variations={variations} clients={clients} onMutate={onMutate} pop={pop}/>}
@@ -2708,7 +2710,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
     {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} company={company} clients={clients} onMutate={onMutate} pop={pop}/>}
     {tab==="handover"  && <HandoverModule proj={proj} onMutate={onMutate} pop={pop}/>}
     {tab==="claims"    && <ClaimsModule proj={proj} c={c} company={company} clients={clients} pop={pop}/>}
-    {tab==="info"     && <ProjectInfo proj={proj} clients={clients} onMutate={onMutate} pop={pop}/>}
+    {tab==="info"     && <ProjectInfo proj={proj} clients={clients} company={company} onMutate={onMutate} pop={pop}/>}
   </div>;
 }
 
@@ -3138,7 +3140,7 @@ function OrderListModule({proj, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // TAKEOFF MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function TakeoffModule({proj, cabLib, onMutate, onGotoLibrary, pop}) {
+function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
   const [activeTool, setActiveTool] = useState("select");
   const [activeLayer, setActiveLayer] = useState(null);
   const [pdfMeta, setPdfMeta] = useState(null); // {name, numPages, thumbs}
@@ -4082,7 +4084,7 @@ ${EXTRACT_SCHEMA}`;
         lvl:itemLevel(ti),
         description:ti.label+(ti.notes?` (${ti.notes})`:""),
         qty:ti.qty, unit:ti.unit||"ea", rate,
-        margin:proj.margin||20, source:"takeoff", cab:ti.cab||undefined,
+        margin:proj.margin??company?.defaultMargin??20, source:"takeoff", cab:ti.cab||undefined,
       };
     });
 
@@ -4104,7 +4106,7 @@ ${EXTRACT_SCHEMA}`;
         description:g.jcat,
         qty:parseFloat(g.qty.toFixed(2)), unit:g.unit,
         rate:g.qty>0?parseFloat((g.totalValue/g.qty).toFixed(2)):0,
-        margin:proj.margin||20, source:"takeoff",
+        margin:proj.margin??company?.defaultMargin??20, source:"takeoff",
       }));
     } else if(detailLevel==="high") {
       // One line per trade category, qty=count of items, rate=sum of all priced values
@@ -4120,7 +4122,7 @@ ${EXTRACT_SCHEMA}`;
         description:g.category,
         qty:1, unit:"set",
         rate:parseFloat(g.totalValue.toFixed(2)),
-        margin:proj.margin||20, source:"takeoff",
+        margin:proj.margin??company?.defaultMargin??20, source:"takeoff",
       }));
     }
 
@@ -5458,6 +5460,8 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
   }
   const grouped = buildEstGroups();
 
+  if(estLoading) return <Card sx={{textAlign:"center",padding:40,color:T.faint}}>Loading estimate…</Card>;
+
   return <div>
     <Row gap={8} sx={{marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
       <Btn v="pri" onClick={()=>setShowAdd(!showAdd)}>+ Add Item</Btn>
@@ -5726,9 +5730,10 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
   const dateStr = issuedAt
     ? new Date(issuedAt).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"})
     : new Date().toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+  const validDays = parseInt((company?.quoteValidity||"").match(/(\d+)\s*day/i)?.[1])||30;
   const expiryStr = issuedAt
-    ? new Date(new Date(issuedAt).getTime()+30*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"})
-    : new Date(Date.now()+30*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
+    ? new Date(new Date(issuedAt).getTime()+validDays*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"})
+    : new Date(Date.now()+validDays*86400000).toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
   return <><style>{`
     @media print {
       aside, .no-print { display: none !important; }
@@ -6382,8 +6387,7 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
 
         <Btn sm v="gho" onClick={()=>{ window.print(); pop("Browser print dialog opened — choose 'Save as PDF' to create a file you can send.","info"); }}>⎙ Save as PDF</Btn>
         <Btn sm v="gho" onClick={()=>{
-          const cl=(clients||[]).find(c=>c.id===(proj.clientId||proj.client_id)||c.name===proj.client);
-          const to=cl?.email?encodeURIComponent(cl.email):"";
+          const to=clientEmail?encodeURIComponent(clientEmail):"";
           const sub=encodeURIComponent(`Quote – ${proj.name}`);
           const body=encodeURIComponent(`Hi ${proj.client||""},\n\nPlease find attached our quote for the above project.\n\nIf you have any questions please don't hesitate to get in touch.\n\nKind regards`);
           window.open(`mailto:${to}?subject=${sub}&body=${body}`,"_self");
@@ -6758,7 +6762,9 @@ function ProcurementModule({proj, company, pop}) {
   },[proj.id]);
 
   function openNew(){
-    setNewPO({ref:`PO-${String(pos.length+1).padStart(3,"0")}`,supplier_id:"",supplier_name:"",notes:""});
+    const nums=pos.map(p=>parseInt((p.ref||"").split("-").pop())||0);
+    const next=(nums.length?Math.max(...nums):0)+1;
+    setNewPO({ref:`PO-${String(next).padStart(3,"0")}`,supplier_id:"",supplier_name:"",notes:""});
     setShowNew(true);
   }
 
@@ -7214,7 +7220,8 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
   const varTotal = approvedVars.reduce((s,v)=>s+(v.amount||0),0);
 
   function nextVarRef() {
-    return `VAR-${String(variations.length+1).padStart(3,"0")}`;
+    const nums=variations.map(v=>parseInt((v.ref||"").split("-").pop())||0);
+    return `VAR-${String((nums.length?Math.max(...nums):0)+1).padStart(3,"0")}`;
   }
 
   function openNewVar() {
@@ -8456,7 +8463,10 @@ function ClaimsModule({proj, c, pop, company, clients}) {
   const [wiz,          setWiz]         = useState(null); // {claimNum, description, periodEnd, selections:Set}
   const [viewClaim,    setViewClaim]   = useState(null);
   const [viewInvoice,  setViewInvoice] = useState(null);
-  const [retentionPct, setRetentionPctState] = useState(0);
+  const [retentionPct, setRetentionPctState] = useState(()=>{
+    try{ const r=localStorage.getItem(`qf_retention_${proj.id}`); if(r) return parseFloat(r)||0; }catch{}
+    return 0;
+  });
 
   const clientEmail = (()=>{
     const cl=(clients||[]).find(c=>c.id===(proj.clientId||proj.client_id)||c.name===proj.client);
@@ -9018,7 +9028,7 @@ function ClaimsModule({proj, c, pop, company, clients}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // PROJECT INFO
 // ═══════════════════════════════════════════════════════════════════════════
-function ProjectInfo({proj, clients, onMutate, pop}) {
+function ProjectInfo({proj, clients, company, onMutate, pop}) {
   const [builders, setBuilders] = useState([]);
   const [saving, setSaving] = useState(false);
   useEffect(()=>{
@@ -9093,9 +9103,9 @@ function ProjectInfo({proj, clients, onMutate, pop}) {
           <div style={{fontWeight:700,fontSize:13,marginBottom:12,color:T.accent}}>Financial Defaults</div>
           <div style={{color:T.faint,fontSize:11,marginBottom:10}}>Margin and overhead are shared with the Estimate — changes here apply project-wide.</div>
           <Grid3 gap={10}>
-            <Inp label="Margin %" value={proj.margin||0} onChange={v=>onMutate(p=>({...p,margin:v}))} type="number" mono/>
-            <Inp label="Overhead %" value={proj.overhead||0} onChange={v=>onMutate(p=>({...p,overhead:v}))} type="number" mono/>
-            <Inp label="GST %" value={proj.gst||0} onChange={v=>onMutate(p=>({...p,gst:v}))} type="number" mono/>
+            <Inp label="Margin %" value={proj.margin??company?.defaultMargin??20} onChange={v=>onMutate(p=>({...p,margin:v}))} type="number" mono/>
+            <Inp label="Overhead %" value={proj.overhead??company?.defaultOverhead??12} onChange={v=>onMutate(p=>({...p,overhead:v}))} type="number" mono/>
+            <Inp label="GST %" value={proj.gst??company?.defaultGst??10} onChange={v=>onMutate(p=>({...p,gst:v}))} type="number" mono/>
           </Grid3>
           <Inp label="Xero Invoice Ref" value={proj.xeroRef||""} onChange={v=>onMutate(p=>({...p,xeroRef:v}))}/>
           <div style={{marginTop:8}}>
@@ -10874,6 +10884,7 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
     const invoiced=c.total||proj.quote_value||0;
     const ref="INV-"+String(Math.floor(1000+Math.random()*9000));
     mutProj(proj.id,p=>({...p,invoiced,xeroRef:ref,status:p.status==="approved"?"active":p.status}));
+    try{ localStorage.setItem(`qf_xero_${proj.id}`, JSON.stringify({xeroRef:ref, invoiced})); }catch{}
     setXero(x=>({...x,log:[{ts:new Date().toLocaleTimeString(),
       msg:`${ref} pushed — ${proj.name} ${$$(invoiced,true)}`,ok:true},...(x.log||[])]}));
     pop(`${ref} pushed to Xero!`);
