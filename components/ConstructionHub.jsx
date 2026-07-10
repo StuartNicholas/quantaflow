@@ -2955,7 +2955,10 @@ function OrderListModule({proj, pop}) {
 
   async function saveContingency(v){
     setContingency(v);
-    try{ await dbUpdateProject(proj.id,{sheet_contingency_pct:v}); }catch{}
+    try{
+      const {data} = await dbUpdateProject(proj.id,{sheet_contingency_pct:v});
+      if(data) onMutate(p=>({...p, updated_at: data.updated_at}));
+    }catch{}
   }
 
   async function doPOCreate(boardRows, hardwareRows){
