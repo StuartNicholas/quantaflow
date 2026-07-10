@@ -1267,7 +1267,7 @@ export default function App() {
     setTrash(t=>t.filter(x=>x.id!==id));
     // Re-fetch the full project row from Supabase so the restored project is complete
     const { data } = await supabase.from("projects").select("*").eq("id", id).maybeSingle();
-    if (data) setProjects(ps=>[normalizeProject(data),...ps]);
+    if (data) setProjects(ps=>[normalizeProject({...data, gst: data.gst ?? (company.defaultGst ?? 10)}),...ps]);
     pop(`"${p.name}" restored.`);
   }
   const [nav,       setNav]       = useState("dashboard");
