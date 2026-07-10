@@ -1299,11 +1299,12 @@ export default function App() {
 
   function pushXero(proj) {
     const c = calc(proj);
+    const invoiced = c.total||proj.quote_value||0;
     const ref = "INV-"+String(Math.floor(1000+Math.random()*9000));
-    mutProj(proj.id, p=>({...p, invoiced:c.total, xeroRef:ref,
+    mutProj(proj.id, p=>({...p, invoiced, xeroRef:ref,
       status:p.status==="approved"?"active":p.status}));
     setXero(x=>({...x, log:[{ts:new Date().toLocaleTimeString(),
-      msg:`${ref} pushed — ${proj.name} ${$$(c.total,true)}`,ok:true},...(x.log||[])]}));
+      msg:`${ref} pushed — ${proj.name} ${$$(invoiced,true)}`,ok:true},...(x.log||[])]}));
     pop(`${ref} pushed to Xero!`);
   }
 
