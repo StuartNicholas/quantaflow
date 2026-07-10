@@ -11476,7 +11476,7 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
               // Dynamic per-project keys (actual costs, production status, schemes)
               try{for(let i=0;i<localStorage.length;i++){
                 const k=localStorage.key(i);
-                if(k&&(k.startsWith("actual_costs_")||k.startsWith("qf_prod_")||k.startsWith("qf_schemes_")||k.startsWith("qf_schedule_")||k.startsWith("qf_unitreg_")||k.startsWith("qf_retention_"))){
+                if(k&&(k.startsWith("actual_costs_")||k.startsWith("qf_prod_")||k.startsWith("qf_prodnotes_")||k.startsWith("qf_schemes_")||k.startsWith("qf_schedule_")||k.startsWith("qf_unitreg_")||k.startsWith("qf_retention_"))){
                   const v=localStorage.getItem(k);if(v)try{dump.data[k]=JSON.parse(v);}catch{}
                 }
               }}catch{}
