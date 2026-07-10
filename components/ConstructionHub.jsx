@@ -1244,9 +1244,10 @@ export default function App() {
             return s+(it.qty||0)*(it.rate||0)*(1+m);
           },0);
           const ovhd = total*(srcEst.overhead_pct||0)/100;
-          const incGst = (total+ovhd)*1.10;
-          await supabase.from("projects").update({quote_value:parseFloat(incGst.toFixed(2))}).eq("id",newProj.id);
-          newProj.quote_value = parseFloat(incGst.toFixed(2));
+          const gstRate = (company.defaultGst||15)/100;
+          const incGst = parseFloat(((total+ovhd)*(1+gstRate)).toFixed(2));
+          await dbUpdateProject(newProj.id, {quote_value:incGst});
+          newProj.quote_value = incGst;
         }
       }
       const project = normalizeProject({...mkProject({overhead:company.defaultOverhead,margin:company.defaultMargin,gst:company.defaultGst||15}),...newProj});
