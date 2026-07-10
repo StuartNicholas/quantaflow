@@ -6565,7 +6565,8 @@ function PODocument({po, proj, company}) {
   const items = po.purchase_order_items||[];
   const subtotal = items.reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
   const hasPrice = subtotal > 0;
-  const gstAmt   = subtotal * 0.10;
+  const gstRate  = (parseFloat(proj?.gst)||10)/100;
+  const gstAmt   = subtotal * gstRate;
   const totalInc = subtotal + gstAmt;
 
   const dateStr = po.created_at
@@ -7003,13 +7004,13 @@ function ProcurementModule({proj, company, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 function VariationDocument({variation, proj, company, variations, c}) {
   const v = variation;
+  const gstPctV = parseFloat(proj.gst)||10;
   const varAmtExGst = v.amount||0;
-  const gstAmt      = varAmtExGst * 0.10;
+  const gstAmt      = varAmtExGst * (gstPctV/100);
   const varAmtIncGst = varAmtExGst + gstAmt;
 
   // Original quote (ex. GST, before any variations)
   // c.exGst is 0 for DB-loaded projects until Estimate tab is opened; fall back to quote_value / (1+gst)
-  const gstPctV = parseFloat(proj.gst)||10;
   const baseExGst = c.exGst || (proj.quote_value ? proj.quote_value/(1+gstPctV/100) : 0);
   const origExGst = baseExGst - (c.varTotal||0);
 
@@ -7019,7 +7020,7 @@ function VariationDocument({variation, proj, company, variations, c}) {
 
   // Revised contract
   const revisedExGst   = origExGst + priorTotal + varAmtExGst;
-  const revisedGst     = revisedExGst * 0.10;
+  const revisedGst     = revisedExGst * (gstPctV/100);
   const revisedIncGst  = revisedExGst + revisedGst;
 
   const varRef  = v.ref || `VAR-${String(v.id||"").slice(-3).toUpperCase()}`;
@@ -8130,9 +8131,10 @@ function SchemesModule({proj, pop}) {
 // CLAIMS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
 function ClaimDocument({claim, proj, company, contractTotal, allClaims, retentionPct}) {
+  const gstRate = (parseFloat(proj?.gst)||10)/100;
   const items = claim.claim_items||[];
   const claimExGst = items.reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
-  const gstAmt = claimExGst*0.10;
+  const gstAmt = claimExGst*gstRate;
   const claimIncGst = claimExGst+gstAmt;
   const retPct = parseFloat(retentionPct)||0;
   const retentionAmt = claimIncGst * retPct / 100;
@@ -8140,7 +8142,7 @@ function ClaimDocument({claim, proj, company, contractTotal, allClaims, retentio
 
   const prevClaims=(allClaims||[]).filter(cl=>cl.id!==claim.id&&["submitted","approved","paid"].includes(cl.status));
   const prevExGst=prevClaims.reduce((s,cl)=>s+(cl.claim_items||[]).reduce((s2,i)=>s2+(i.qty||0)*(i.unit_cost||0),0),0);
-  const prevIncGst=prevExGst*1.10;
+  const prevIncGst=prevExGst*(1+gstRate);
   const prevRetentionHeld=prevIncGst*retPct/100;
   const retentionToDate=prevRetentionHeld+retentionAmt;
 
@@ -8312,9 +8314,10 @@ function ClaimDocument({claim, proj, company, contractTotal, allClaims, retentio
 // ─── Tax Invoice document (green #15803d) ────────────────────────────────────
 function InvoiceDocument({claim, proj, company}) {
   const green = "#15803d";
+  const gstRate = (parseFloat(proj?.gst)||10)/100;
   const items = claim.claim_items||[];
   const exGst = items.reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
-  const gstAmt = exGst*0.10;
+  const gstAmt = exGst*gstRate;
   const incGst = exGst+gstAmt;
   const invoiceNum = `INV-${String(claim.claim_number).padStart(3,"0")}-${(proj.id||"").slice(0,6).toUpperCase()}`;
   const issuedDate = new Date().toLocaleDateString("en-AU",{day:"numeric",month:"long",year:"numeric"});
@@ -8622,9 +8625,10 @@ function ClaimsModule({proj, c, pop, company, clients}) {
     await reload();
   }
 
+  const gstMult        = 1+(parseFloat(proj.gst)||10)/100;
   const claimTotal     = cl => (cl.claim_items||[]).reduce((s,i)=>s+(i.qty||0)*(i.unit_cost||0),0);
-  const claimNet       = cl => { const g=claimTotal(cl)*1.10; return g - g*retentionPct/100; }; // inc-gst net of retention
-  const retHeld        = cl => claimTotal(cl)*1.10*retentionPct/100;
+  const claimNet       = cl => { const g=claimTotal(cl)*gstMult; return g - g*retentionPct/100; }; // inc-gst net of retention
+  const retHeld        = cl => claimTotal(cl)*gstMult*retentionPct/100;
   const totalClaimed   = claims.reduce((s,cl)=>s+claimTotal(cl),0);
   const totalApproved  = claims.filter(cl=>["approved","paid"].includes(cl.status)).reduce((s,cl)=>s+claimTotal(cl),0);
   const totalPaid      = claims.filter(cl=>cl.status==="paid").reduce((s,cl)=>s+claimTotal(cl),0);
@@ -8925,7 +8929,7 @@ function ClaimsModule({proj, c, pop, company, clients}) {
           <div style={{textAlign:"right",minWidth:90}}>
             <div style={{fontFamily:T.mono,fontWeight:700,fontSize:14,color:T.accent}}>{$$(total)}</div>
             {retentionPct>0&&cl.status!=="draft"&&<div style={{fontFamily:T.mono,fontSize:11,color:"#b45309"}}>
-              net {$$(total*1.10*(1-retentionPct/100))}
+              net {$$(total*gstMult*(1-retentionPct/100))}
             </div>}
           </div>
           <div onClick={e=>{e.stopPropagation();setViewClaim(cl);}}
