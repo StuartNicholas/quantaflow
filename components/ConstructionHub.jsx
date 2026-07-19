@@ -441,6 +441,14 @@ const STATUS = {
   complete:{label:"Complete",color:"#8b5cf6", next:null},
   lost:    {label:"Lost",    color:"#ef4444", next:null},
 };
+const PROD_STATUSES = [
+  {key:"pending",   label:"Pending",    color:"#6b7280"},
+  {key:"cutting",   label:"Cutting",    color:"#d97706"},
+  {key:"assembled", label:"Assembled",  color:"#7c3aed"},
+  {key:"qc",        label:"QC Check",   color:"#2563eb"},
+  {key:"dispatched",label:"Dispatched", color:"#0891b2"},
+  {key:"installed", label:"Installed",  color:"#16a34a"},
+];
 
 // ── TRADE SCOPES ─────────────────────────────────────────────────────────────
 // Each trade defines: which CATS it uses, which page types to scan for, and
@@ -562,6 +570,11 @@ function fmtDate(d,short=false){
     if(short) return dt.toLocaleDateString("en-AU",{day:"numeric",month:"short"});
     return dt.toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"});
   }catch{return d||"";}
+}
+
+function findClientEmail(clients, proj) {
+  const cl = (clients||[]).find(c => c.id===(proj.clientId||proj.client_id) || c.name===proj.client);
+  return cl?.email || "";
 }
 
 // ── MICRO COMPONENTS ─────────────────────────────────────────────────────────
@@ -891,6 +904,17 @@ function ThemePanel({prefs, onChange, onClose}){
     </div>
   </div>;
 }
+
+const NAV = [
+  {id:"dashboard", icon:"▦", label:"Dashboard"},
+  {id:"projects",  icon:"◧", label:"Projects"},
+  {id:"clients",   icon:"◎", label:"Clients"},
+  {id:"builders",  icon:"🏗", label:"Builders"},
+  {id:"suppliers", icon:"📦", label:"Suppliers"},
+  {id:"rates",     icon:"≡", label:"Rate Library"},
+  {id:"reporting", icon:"◈", label:"Reporting"},
+  {id:"settings",  icon:"⚙", label:"Settings"},
+];
 
 // APP ROOT
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1317,17 +1341,6 @@ export default function App() {
 
   const curProj = projId ? projects.find(p=>p.id===projId) : null;
   const pipeline = projects.reduce((s,p)=>s+(p.quote_value||calc(p).total), 0);
-
-  const NAV = [
-    {id:"dashboard", icon:"▦",label:"Dashboard"},
-    {id:"projects",  icon:"◧",label:"Projects"},
-    {id:"clients",   icon:"◎",label:"Clients"},
-    {id:"builders",  icon:"🏗",label:"Builders"},
-    {id:"suppliers", icon:"📦",label:"Suppliers"},
-    {id:"rates",     icon:"≡",label:"Rate Library"},
-    {id:"reporting", icon:"◈",label:"Reporting"},
-    {id:"settings",  icon:"⚙",label:"Settings"},
-  ];
 
   // Apply company theme on every render so all child components see current T
   T = buildT(themePrefs);
@@ -2356,7 +2369,7 @@ function Dashboard({projects, xero, onOpen, setNav}) {
     const daysSince  = lastChange ? Math.floor((today - new Date(lastChange)) / 86400000) : 0;
     if(p.status==="sent"   && daysSince>14) attention.push({proj:p, msg:`Quote sent — no response for ${daysSince}d`, color:T.yellow});
     if(p.status==="quoting"&& daysSince>21) attention.push({proj:p, msg:`Quoting for ${daysSince}d — no quote issued yet`, color:T.yellow});
-    if(p.status==="active" && !localStorage.getItem(`qf_prod_${p.id}`)) attention.push({proj:p, msg:"Active job — no production data yet", color:T.orange||T.accent});
+    if(p.status==="active" && !localStorage.getItem(`qf_prod_${p.id}`)) attention.push({proj:p, msg:"Active job — no production data yet", color:T.accent});
     if(["approved","active"].includes(p.status)&&!p.quote_value&&!calc(p).total) attention.push({proj:p, msg:"No estimate — job has no value", color:T.red});
     const due=p.due_date||p.dueDate;
     if(due&&new Date(due)<today&&!["complete","lost"].includes(p.status))
@@ -2641,6 +2654,21 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
   </div>;
 }
 
+const WORKSPACE_TABS = [
+  {id:"takeoff",     label:"① Takeoff"},
+  {id:"schemes",     label:"🎨 Schemes"},
+  {id:"preset",      label:"② Cabinet Preset"},
+  {id:"estimate",    label:"③ Estimate"},
+  {id:"quote",       label:"④ Quote"},
+  {id:"orderlist",   label:"🧾 Order List"},
+  {id:"production",  label:"🏗️ Production"},
+  {id:"procurement", label:"Procurement"},
+  {id:"jobcost",     label:"Job Costs"},
+  {id:"handover",    label:"Handover"},
+  {id:"claims",      label:"Claims"},
+  {id:"info",        label:"Project Info"},
+];
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PROJECT WORKSPACE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2659,28 +2687,6 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
   const c = calc({...proj, variations});
   const sm = STATUS[proj.status]||STATUS.draft;
 
-  const TABS = [
-    {id:"takeoff",    label:"① Takeoff"},
-    {id:"schemes",    label:"🎨 Schemes"},
-    {id:"preset",     label:"② Cabinet Preset"},
-    {id:"estimate",   label:"③ Estimate"},
-    {id:"quote",      label:"④ Quote"},
-    {id:"orderlist",  label:"🧾 Order List"},
-    {id:"production", label:"🏗️ Production"},
-    {id:"procurement",label:"Procurement"},
-    {id:"jobcost",      label:"Job Costs"},
-    {id:"handover",     label:"Handover"},
-    {id:"claims",       label:"Claims"},
-    {id:"info",     label:"Project Info"},
-  ];
-
-  const Parked = ({name,desc}) => <Card sx={{textAlign:"center",padding:48}}>
-    <div style={{fontSize:30,marginBottom:10,opacity:0.5}}>🔒</div>
-    <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>{name}</div>
-    <div style={{color:T.muted,fontSize:13,maxWidth:440,marginInline:"auto"}}>{desc}</div>
-    <div style={{marginTop:12}}><Bdg color={T.faint}>Coming in a later version</Bdg></div>
-  </Card>;
-
   return <div>
     <Row gap={8} sx={{marginBottom:14,flexWrap:"wrap"}}>
       <span style={{color:T.muted,cursor:"pointer",fontSize:13}} onClick={onBack}>Projects</span>
@@ -2698,7 +2704,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
         <div style={{color:T.faint,fontSize:11}}>inc. GST{c.actTotal>0?` · ${$$(c.actTotal,true)} actual`:""}</div>
       </div>
     </Row>
-    <Tabs tabs={TABS} active={tab} onChange={setTab}/>
+    <Tabs tabs={WORKSPACE_TABS} active={tab} onChange={setTab}/>
     {tab==="takeoff"  && <TakeoffModule proj={proj} cabLib={cabLib} company={company} onMutate={onMutate} onGotoLibrary={onGotoLibrary} pop={pop}/>}
     {tab==="preset"   && <CabinetPreset proj={proj} pop={pop}/>}
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
@@ -6231,10 +6237,7 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
   const [quoteView,    setQuoteView]    = useState("category"); // "category"|"joinery"|"unit"|"byunit"|"unit-individual"|"level"
   const [schemes,      setSchemes]      = useState(null);
   const [viewDepInv,   setViewDepInv]   = useState(null); // quote version to show deposit invoice for
-  const clientEmail = (()=>{
-    const cl=(clients||[]).find(cl=>cl.id===(proj.clientId||proj.client_id)||cl.name===proj.client);
-    return cl?.email||"";
-  })();
+  const clientEmail = findClientEmail(clients, proj);
 
   useEffect(()=>{
     try{ const s=localStorage.getItem(`qf_schemes_${proj.id}`); if(s) setSchemes(JSON.parse(s)); }catch{}
@@ -6467,105 +6470,6 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
             variations={variations}
             schemes={schemes}/>
     }
-  </div>;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SCHEDULE MODULE — task list with timeline bars
-// ═══════════════════════════════════════════════════════════════════════════
-function ScheduleModule({proj, onMutate, pop}) {
-  const [showAdd,setShowAdd]=useState(false);
-  const today=new Date().toISOString().slice(0,10);
-  const in7=new Date(Date.now()+7*86400000).toISOString().slice(0,10);
-  const [nt,setNt]=useState({name:"",start:today,end:in7,assignee:"",status:"pending"});
-  const tasks=proj.tasks||[];
-
-  useEffect(()=>{
-    if(!(proj.tasks||[]).length){
-      try{
-        const saved=localStorage.getItem(`qf_schedule_${proj.id}`);
-        if(saved){
-          const t=JSON.parse(saved);
-          if(Array.isArray(t)&&t.length) onMutate(p=>({...p,tasks:t}));
-        }
-      }catch{}
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[proj.id]);
-
-  function persistTasks(newTasks){
-    localStorage.setItem(`qf_schedule_${proj.id}`,JSON.stringify(newTasks));
-    onMutate(p=>({...p,tasks:newTasks}));
-  }
-
-  // timeline range
-  const dates=tasks.flatMap(t=>[t.start,t.end]).filter(Boolean).sort();
-  const min=dates[0]?new Date(dates[0]).getTime():Date.now();
-  const max=dates[dates.length-1]?new Date(dates[dates.length-1]).getTime():Date.now()+30*86400000;
-  const span=Math.max(max-min,86400000);
-  const pos=d=>Math.max(0,Math.min(100,(new Date(d).getTime()-min)/span*100));
-  const STAT={pending:{c:T.faint,l:"Pending"},progress:{c:T.blue,l:"In Progress"},done:{c:T.green,l:"Done"},blocked:{c:T.red,l:"Blocked"}};
-  const doneN=tasks.filter(t=>t.status==="done").length;
-
-  return <div>
-    <Row gap={12} wrap sx={{marginBottom:16}}>
-      <KPI label="Tasks" value={tasks.length} sub={`${doneN} complete`}/>
-      <KPI label="Progress" value={tasks.length?`${Math.round(doneN/tasks.length*100)}%`:"—"} sub="of schedule" color={T.green}/>
-      <KPI label="In Progress" value={tasks.filter(t=>t.status==="progress").length} sub="active now" color={T.blue}/>
-      <KPI label="Blocked" value={tasks.filter(t=>t.status==="blocked").length} sub="need attention" color={T.red}/>
-    </Row>
-
-    <Row gap={8} sx={{marginBottom:14}}>
-      <Btn v="pri" onClick={()=>setShowAdd(!showAdd)}>+ Add Task</Btn>
-    </Row>
-
-    {showAdd&&<Card hi sx={{marginBottom:14}}>
-      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:10}}>
-        <Inp label="Task" value={nt.name} onChange={v=>setNt(x=>({...x,name:v}))} placeholder="e.g. Carcass manufacture"/>
-        <Inp label="Start" value={nt.start} onChange={v=>setNt(x=>({...x,start:v}))} type="date"/>
-        <Inp label="End" value={nt.end} onChange={v=>setNt(x=>({...x,end:v}))} type="date"/>
-        <Inp label="Assignee / Crew" value={nt.assignee} onChange={v=>setNt(x=>({...x,assignee:v}))} placeholder="Optional"/>
-      </div>
-      <Row gap={8}><Btn v="pri" sm onClick={()=>{
-        if(!nt.name) return pop("Task name required.","error");
-        persistTasks([...(proj.tasks||[]),{...nt,id:Date.now()}]);
-        setNt({name:"",start:today,end:in7,assignee:"",status:"pending"});
-        setShowAdd(false); pop("Task added.");
-      }}>Add</Btn><Btn sm onClick={()=>setShowAdd(false)}>Cancel</Btn></Row>
-    </Card>}
-
-    {tasks.length>0
-      ? <Card sx={{padding:0,overflow:"hidden"}}>
-          {tasks.map(t=>{
-            const st=STAT[t.status]||STAT.pending;
-            const l=pos(t.start), r=pos(t.end);
-            return <div key={t.id} style={{borderBottom:`1px solid ${T.border}`,padding:"10px 16px"}}>
-              <Row gap={10} sx={{marginBottom:6}}>
-                <span style={{fontWeight:600,fontSize:13,color:t.status==="done"?T.muted:T.text,
-                  textDecoration:t.status==="done"?"line-through":"none"}}>{t.name}</span>
-                {t.assignee&&<span style={{color:T.faint,fontSize:11}}>· {t.assignee}</span>}
-                <span style={{color:T.faint,fontSize:11}}>{fmtDate(t.start,true)} → {fmtDate(t.end,true)}</span>
-                <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
-                  <select value={t.status} onChange={e=>persistTasks(tasks.map(x=>x.id===t.id?{...x,status:e.target.value}:x))}
-                    style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:4,padding:"2px 6px",color:st.c,fontSize:11,fontWeight:600}}>
-                    {Object.entries(STAT).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}
-                  </select>
-                  <span style={{cursor:"pointer",color:T.red,fontSize:12}}
-                    onClick={()=>persistTasks(tasks.filter(x=>x.id!==t.id))}>✕</span>
-                </div>
-              </Row>
-              <div style={{position:"relative",height:10,background:T.bg,borderRadius:5}}>
-                <div style={{position:"absolute",left:`${l}%`,width:`${Math.max(r-l,1.5)}%`,top:0,height:"100%",
-                  borderRadius:5,background:st.c,opacity:t.status==="done"?0.45:0.9,transition:"all 0.3s"}}/>
-                {/* today marker */}
-                <div style={{position:"absolute",left:`${pos(today)}%`,top:-2,bottom:-2,width:2,background:T.accent,borderRadius:1}}/>
-              </div>
-            </div>;
-          })}
-        </Card>
-      : <Card sx={{textAlign:"center",padding:36,color:T.faint}}>
-          No tasks yet. Build the job programme — manufacture, delivery, install stages — and track progress against the timeline. The amber line marks today.
-        </Card>}
   </div>;
 }
 
@@ -7182,20 +7086,20 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
   const [nv, setNv] = useState({ref:"",description:"",amount:0,status:"pending",date:new Date().toISOString().slice(0,10),notes:""});
   const [poCommitted, setPoCommitted] = useState(0);
   const [poCount,     setPoCount]     = useState(0);
-  const clientEmail = (()=>{
-    const cl=(clients||[]).find(c=>c.id===(proj.clientId||proj.client_id)||c.name===proj.client);
-    return cl?.email||"";
-  })();
+  const clientEmail = findClientEmail(clients, proj);
 
-  // Restore actual costs from localStorage (actualCosts has no DB table yet — localStorage bridge
-  // prevents data loss on page refresh; a future migration will move these to a proper table)
+  // Restore actual costs from localStorage (actualCosts has no DB table yet)
   useEffect(()=>{
     if(!(proj.actualCosts||[]).length){
       try{
-        const saved=localStorage.getItem(`actual_costs_${proj.id}`);
+        const key=`qf_actcosts_${proj.id}`;
+        const saved=localStorage.getItem(key)||localStorage.getItem(`actual_costs_${proj.id}`);
         if(saved){
           const costs=JSON.parse(saved);
-          if(Array.isArray(costs)&&costs.length) onMutate(p=>({...p,actualCosts:costs}));
+          if(Array.isArray(costs)&&costs.length){
+            onMutate(p=>({...p,actualCosts:costs}));
+            localStorage.setItem(key,saved); // migrate old key on read
+          }
         }
       }catch{}
     }
@@ -7203,7 +7107,7 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
   },[proj.id]);
 
   function persistCosts(costs){
-    localStorage.setItem(`actual_costs_${proj.id}`,JSON.stringify(costs));
+    localStorage.setItem(`qf_actcosts_${proj.id}`,JSON.stringify(costs));
     onMutate(p=>({...p,actualCosts:costs}));
   }
 
@@ -7681,14 +7585,6 @@ function HandoverModule({proj, onMutate, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // PRODUCTION MODULE — Level × Unit Type status grid (factory → site tracking)
 // ═══════════════════════════════════════════════════════════════════════════
-const PROD_STATUSES=[
-  {key:"pending",   label:"Pending",    color:"#6b7280"},
-  {key:"cutting",   label:"Cutting",    color:"#d97706"},
-  {key:"assembled", label:"Assembled",  color:"#7c3aed"},
-  {key:"qc",        label:"QC Check",   color:"#2563eb"},
-  {key:"dispatched",label:"Dispatched", color:"#0891b2"},
-  {key:"installed", label:"Installed",  color:"#16a34a"},
-];
 function nextProdStatus(key){ const i=PROD_STATUSES.findIndex(s=>s.key===key); return PROD_STATUSES[(i+1)%PROD_STATUSES.length].key; }
 
 function ProductionModule({proj, pop}) {
@@ -8468,10 +8364,7 @@ function ClaimsModule({proj, c, pop, company, clients}) {
     return 0;
   });
 
-  const clientEmail = (()=>{
-    const cl=(clients||[]).find(c=>c.id===(proj.clientId||proj.client_id)||c.name===proj.client);
-    return cl?.email||"";
-  })();
+  const clientEmail = findClientEmail(clients, proj);
 
   // Persist retention % per project in localStorage
   useEffect(()=>{
@@ -11262,10 +11155,10 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
   const usageKB=(()=>{try{let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);n+=(k.length+(localStorage.getItem(k)||"").length)*2;}return Math.round(n/1024);}catch{return 0;}})();
   const usagePct=Math.min(100,Math.round(usageKB/5120*100));
 
-  const previewCost = 10000;
-  const previewMargin   = previewCost * (1+local.defaultMargin/100);
-  const previewOverhead = previewMargin * (1+local.defaultOverhead/100);
-  const previewGst      = previewOverhead * (1+local.defaultGst/100);
+  const previewCost    = 10000;
+  const previewSub     = previewCost * (1 + local.defaultMargin/100);       // cost + margin
+  const previewExGst   = previewSub  * (1 + local.defaultOverhead/100);     // + overhead
+  const previewIncGst  = previewExGst * (1 + local.defaultGst/100);         // + GST
 
   return <div>
     <Hdr sub="Company profile, branding, quote defaults and financial settings.">Settings</Hdr>
@@ -11415,16 +11308,16 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
               <div style={{color:T.muted,fontSize:11,marginBottom:10}}>How a $10,000 cost item builds to a quote total:</div>
               {[
                 {l:"Raw cost",         v:"$10,000",                            c:T.muted},
-                {l:`+ ${local.defaultMargin}% margin`, v:`$${previewMargin.toFixed(0)}`,  c:T.text},
-                {l:`+ ${local.defaultOverhead}% overhead`, v:`$${previewOverhead.toFixed(0)}`, c:T.text},
-                {l:`+ ${local.defaultGst}% GST`,       v:`$${previewGst.toFixed(0)}`,     c:T.accent, bold:true},
+                {l:`+ ${local.defaultMargin}% margin`,   v:`$${previewSub.toFixed(0)}`,    c:T.text},
+                {l:`+ ${local.defaultOverhead}% overhead`, v:`$${previewExGst.toFixed(0)}`, c:T.text},
+                {l:`+ ${local.defaultGst}% GST`,       v:`$${previewIncGst.toFixed(0)}`, c:T.accent, bold:true},
               ].map(r=><div key={r.l} style={{display:"flex",justifyContent:"space-between",
                 padding:"6px 0",borderBottom:`1px solid ${T.border}`,fontSize:13}}>
                 <span style={{color:T.muted}}>{r.l}</span>
                 <span style={{fontFamily:T.mono,color:r.c,fontWeight:r.bold?800:600}}>{r.v}</span>
               </div>)}
               <div style={{marginTop:8,fontSize:11,color:T.faint}}>
-                Effective multiplier: {(previewGst/previewCost).toFixed(3)}×
+                Effective multiplier: {(previewIncGst/previewCost).toFixed(3)}×
               </div>
             </Card>
 
@@ -11498,7 +11391,7 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
               // Dynamic per-project keys (actual costs, production status, schemes)
               try{for(let i=0;i<localStorage.length;i++){
                 const k=localStorage.key(i);
-                if(k&&(k.startsWith("actual_costs_")||k.startsWith("qf_prod_")||k.startsWith("qf_prodnotes_")||k.startsWith("qf_schemes_")||k.startsWith("qf_schedule_")||k.startsWith("qf_unitreg_")||k.startsWith("qf_retention_"))){
+                if(k&&(k.startsWith("qf_actcosts_")||k.startsWith("actual_costs_")||k.startsWith("qf_prod_")||k.startsWith("qf_prodnotes_")||k.startsWith("qf_schemes_")||k.startsWith("qf_schedule_")||k.startsWith("qf_unitreg_")||k.startsWith("qf_retention_")||k.startsWith("qf_xero_"))){
                   const v=localStorage.getItem(k);if(v)try{dump.data[k]=JSON.parse(v);}catch{}
                 }
               }}catch{}
