@@ -1,6 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef, Component, Fragment } from "react";
+import dynamic from "next/dynamic";
+const QuotePDFButton = dynamic(
+  () => import("./pdf/QuotePDF").then(m => m.QuotePDFButton),
+  { ssr: false, loading: () => <span style={{fontSize:12,color:"#64748b"}}>…</span> }
+);
 import { supabase } from "../lib/supabase";
 import { listClients as dbListClients, createClient as dbCreateClient, updateClient as dbUpdateClient, deleteClient as dbDeleteClient } from "../lib/db/clients";
 import { listBuilders as dbListBuilders, createBuilder as dbCreateBuilder, updateBuilder as dbUpdateBuilder, deleteBuilder as dbDeleteBuilder } from "../lib/db/builders";
@@ -6518,7 +6523,14 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
           style={{background:"#ea580c",color:"#fff",border:"none"}}
           onClick={()=>{ setViewDepInv(selVersion); }}>⎙ Deposit Invoice</Btn>}
 
-        <Btn sm v="gho" onClick={()=>{ window.print(); pop("Browser print dialog opened — choose 'Save as PDF' to create a file you can send.","info"); }}>⎙ Save as PDF</Btn>
+        <QuotePDFButton
+          items={docItems} proj={proj} company={company}
+          marginPct={docMargin} overheadPct={docOverhd}
+          gstPct={docGst} depositPct={docDeposit}
+          versionNum={selVersion?.version_number} issuedAt={selVersion?.issued_at}
+          variations={variations}
+        />
+        <Btn sm v="gho" onClick={()=>{ window.print(); }}>⎙ Print</Btn>
         <Btn sm v="gho" onClick={()=>{
           const to=clientEmail?encodeURIComponent(clientEmail):"";
           const sub=encodeURIComponent(`Quote – ${proj.name}`);

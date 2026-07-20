@@ -161,6 +161,15 @@ export default function AuthGate({ children }: AuthGateProps) {
                 : mode === "signup" ? "Create Account"
                 : "Send Reset Email"}
             </button>
+
+            {mode === "signup" && (
+              <p style={{ fontSize: 11, color: "#475569", textAlign: "center", margin: "8px 0 0", lineHeight: 1.6 }}>
+                By creating an account you agree to our{" "}
+                <a href="/terms" target="_blank" rel="noopener noreferrer" style={{ color: "#94a3b8" }}>Terms of Service</a>
+                {" "}and{" "}
+                <a href="/privacy" target="_blank" rel="noopener noreferrer" style={{ color: "#94a3b8" }}>Privacy Policy</a>.
+              </p>
+            )}
           </form>
 
           {mode === "forgot" && (

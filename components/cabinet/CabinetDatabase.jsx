@@ -7,10 +7,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { supabase } from "../../lib/supabase";
 import {
   listCabinets,
   listDraftCabinets,
   createCabinet,
+  createCabinets,
   updateCabinet,
   deleteCabinet,
   approveDraftCabinet,
@@ -381,6 +383,11 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
   const [search,        setSearch]        = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [sortDir, setSortDir] = useState("asc");
+  const [aiOpen,    setAiOpen]    = useState(false);
+  const [aiFiles,   setAiFiles]   = useState([]);
+  const [aiLog,     setAiLog]     = useState([]);
+  const [aiRunning, setAiRunning] = useState(false);
+  const aiFileRef = useRef(null);
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -479,6 +486,165 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
     setCollapsedGroups(g => ({ ...g, [k]: !g[k] }));
   }
 
+  // ── AI Extraction from Plans ────────────────────────────────────────────────
+
+  function addLog(msg, type = "info") {
+    setAiLog(l => [...l, { msg, type, t: Date.now() }]);
+  }
+
+  async function loadPdfJs() {
+    if (window.pdfjsLib) return window.pdfjsLib;
+    await new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+      s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
+    });
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    return window.pdfjsLib;
+  }
+
+  async function fileToBase64Images(file) {
+    if (file.type === "application/pdf") {
+      addLog(`Rasterising PDF: ${file.name}…`);
+      const lib = await loadPdfJs();
+      const buf = await file.arrayBuffer();
+      const pdf = await lib.getDocument({ data: buf }).promise;
+      const imgs = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const pg = await pdf.getPage(i);
+        const scale = 150 / 72;
+        const vp = pg.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        canvas.width = vp.width; canvas.height = vp.height;
+        await pg.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+        imgs.push({ data: canvas.toDataURL("image/jpeg", 0.85).split(",")[1], media_type: "image/jpeg" });
+      }
+      addLog(`  → ${imgs.length} page(s) ready`);
+      return imgs;
+    } else {
+      const reader = new FileReader();
+      const b64 = await new Promise((res, rej) => {
+        reader.onload = e => res(e.target.result.split(",")[1]);
+        reader.onerror = rej;
+        reader.readAsDataURL(file);
+      });
+      return [{ data: b64, media_type: file.type }];
+    }
+  }
+
+  async function runAiExtract() {
+    if (!aiFiles.length) { pop?.("Upload at least one plan image or PDF.", "error"); return; }
+    setAiRunning(true);
+    setAiLog([]);
+    try {
+      addLog("Preparing plan images…");
+      const imageBlocks = [];
+      for (const f of aiFiles) {
+        const imgs = await fileToBase64Images(f);
+        imageBlocks.push(...imgs);
+      }
+      if (imageBlocks.length > 6) {
+        addLog(`Warning: only using first 6 pages (${imageBlocks.length} provided)`, "warn");
+        imageBlocks.splice(6);
+      }
+      addLog(`Sending ${imageBlocks.length} image(s) to AI for cabinet extraction…`);
+
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = { "Content-Type": "application/json" };
+      if (session?.access_token) headers["Authorization"] = `Bearer ${session.access_token}`;
+
+      const promptText = [
+        `You are a cabinet joinery expert analyzing architectural drawings and joinery schedules for project: "${proj.name}".`,
+        `Identify ALL cabinet, joinery, and millwork items visible in the drawings.`,
+        `For each item return a JSON object with these exact keys:`,
+        `description (string), room (string), cabinet_type (one of: "Base Cabinet","Overhead Cabinet","Pantry Cabinet","Tall Cabinet","Island / Peninsula","Vanity","Linen Tower","Wardrobe","Laundry Cabinet","TV Unit","Custom"),`,
+        `width (mm, number), height (mm, number), depth (mm, number), qty (number),`,
+        `material (string or ""), door_style (string or ""), door_qty (number), drawer_qty (number),`,
+        `has_benchtop (boolean), has_kickboard (boolean),`,
+        `unit_type (string, apartment unit type if applicable or ""), level (string, floor level if applicable or ""),`,
+        `labour_hours (estimated fabrication hours, number), sell_price (estimated AUD sell price, number),`,
+        `ai_confidence (0-100, your confidence this is correct), ai_explanation (brief string).`,
+        `Default dimensions: Base 600×720×580mm, Overhead 600×720×350mm, Pantry 600×2100×580mm, Vanity 750×850×450mm.`,
+        `Return ONLY a valid JSON array starting with [ and ending with ]. No markdown, no code fences, no explanation outside the array.`,
+      ].join(" ");
+
+      const content = [
+        { type: "text", text: promptText },
+        ...imageBlocks.map(img => ({ type: "image", source: { type: "base64", media_type: img.media_type, data: img.data } })),
+      ];
+
+      const r = await fetch("/api/ai", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 8000,
+          messages: [{ role: "user", content }],
+          meta: { feature: "ai_cabinet_extract", projectId: projectId },
+        }),
+      });
+
+      const d = await r.json();
+      if (d.error) throw new Error(typeof d.error === "object" ? d.error.message : String(d.error));
+      const raw = d.content?.map(b => b.text || "").join("") || "";
+
+      addLog("Parsing AI response…");
+      let cabinets_parsed;
+      try {
+        const match = raw.match(/\[[\s\S]*\]/);
+        if (!match) throw new Error("No JSON array found in response.");
+        cabinets_parsed = JSON.parse(match[0]);
+      } catch (e) {
+        throw new Error(`Could not parse cabinet data: ${e.message}. Raw response: ${raw.slice(0, 200)}`);
+      }
+
+      if (!Array.isArray(cabinets_parsed) || cabinets_parsed.length === 0) {
+        throw new Error("AI returned no cabinets. Try a clearer plan image or a more detailed drawing.");
+      }
+
+      addLog(`AI identified ${cabinets_parsed.length} cabinet(s). Saving as drafts…`);
+      const rows = cabinets_parsed.map((c, i) => ({
+        description:     String(c.description || "Cabinet"),
+        room:            String(c.room || ""),
+        cabinet_type:    String(c.cabinet_type || "Custom"),
+        width:           Number(c.width)  || 600,
+        height:          Number(c.height) || 720,
+        depth:           Number(c.depth)  || 580,
+        qty:             Number(c.qty)    || 1,
+        material:        String(c.material    || ""),
+        door_style:      String(c.door_style  || ""),
+        door_qty:        Number(c.door_qty)   || 0,
+        drawer_qty:      Number(c.drawer_qty) || 0,
+        has_benchtop:    Boolean(c.has_benchtop),
+        has_kickboard:   c.has_kickboard !== false,
+        unit_type:       String(c.unit_type || ""),
+        level:           String(c.level    || ""),
+        labour_hours:    Number(c.labour_hours) || 0,
+        sell_price:      Number(c.sell_price)   || 0,
+        ai_draft:        true,
+        ai_source:       "ai_takeoff",
+        ai_confidence:   Math.min(100, Math.max(0, Number(c.ai_confidence) || 70)),
+        ai_explanation:  String(c.ai_explanation || ""),
+        sort_order:      i,
+      }));
+
+      const { error } = await createCabinets(projectId, rows);
+      if (error) throw new Error(error);
+
+      addLog(`✓ ${rows.length} draft cabinet(s) created. Review them in the Draft Review banner above.`, "success");
+      setAiFiles([]);
+      if (aiFileRef.current) aiFileRef.current.value = "";
+      load();
+    } catch (e) {
+      addLog(`Error: ${e.message}`, "error");
+      pop?.(e.message, "error");
+    } finally {
+      setAiRunning(false);
+    }
+  }
+
   const fmt = v => `$${Number(v).toLocaleString("en-AU", { minimumFractionDigits: 0 })}`;
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -507,6 +673,85 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
             <div style={{ fontSize: 18, fontWeight: 800, color: T.accent, fontFamily: "monospace" }}>{kpi.value}</div>
           </div>
         ))}
+      </div>
+
+      {/* ── AI Extract from Plans ── */}
+      <div style={{ marginBottom: 14 }}>
+        <button
+          onClick={() => { setAiOpen(o => !o); setAiLog([]); }}
+          style={{
+            background: aiOpen ? "rgba(139,92,246,0.15)" : T.card,
+            color: aiOpen ? "#a78bfa" : T.muted,
+            border: `1px solid ${aiOpen ? "rgba(139,92,246,0.4)" : T.border}`,
+            borderRadius: 6, padding: "7px 14px", fontSize: 12, fontWeight: 700,
+            cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+          }}>
+          ✦ AI Extract from Plans {aiOpen ? "▲" : "▼"}
+        </button>
+
+        {aiOpen && (
+          <div style={{
+            marginTop: 8, background: "rgba(139,92,246,0.06)",
+            border: "1px solid rgba(139,92,246,0.25)", borderRadius: 8, padding: "16px 18px",
+          }}>
+            <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 12 }}>
+              Upload architectural drawings or joinery schedules (PDF, PNG, JPG). The AI will identify all cabinets and create them as drafts for your review.
+            </div>
+
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+              <input
+                ref={aiFileRef}
+                type="file"
+                accept=".pdf,.png,.jpg,.jpeg"
+                multiple
+                onChange={e => setAiFiles(Array.from(e.target.files || []))}
+                style={{ display: "none" }}
+              />
+              <button
+                onClick={() => aiFileRef.current?.click()}
+                style={{
+                  background: T.card, color: T.text, border: `1px solid ${T.border}`,
+                  borderRadius: 5, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                }}>
+                📁 {aiFiles.length ? `${aiFiles.length} file(s) selected` : "Choose plans…"}
+              </button>
+              {aiFiles.length > 0 && (
+                <span style={{ fontSize: 11, color: "#94a3b8" }}>
+                  {aiFiles.map(f => f.name).join(", ")}
+                </span>
+              )}
+              <button
+                onClick={runAiExtract}
+                disabled={aiRunning || !aiFiles.length}
+                style={{
+                  background: aiRunning || !aiFiles.length ? "#1e293b" : "#7c3aed",
+                  color: aiRunning || !aiFiles.length ? "#475569" : "#fff",
+                  border: "none", borderRadius: 5, padding: "7px 18px",
+                  fontSize: 12, fontWeight: 700, cursor: aiRunning || !aiFiles.length ? "not-allowed" : "pointer",
+                }}>
+                {aiRunning ? "Extracting…" : "✦ Extract Cabinets"}
+              </button>
+            </div>
+
+            {aiLog.length > 0 && (
+              <div style={{
+                background: "#0d1117", borderRadius: 5, padding: "10px 12px",
+                fontFamily: "monospace", fontSize: 11, lineHeight: 1.8, maxHeight: 180, overflowY: "auto",
+              }}>
+                {aiLog.map((entry, i) => (
+                  <div key={i} style={{
+                    color: entry.type === "error" ? "#f87171"
+                         : entry.type === "success" ? "#4ade80"
+                         : entry.type === "warn" ? "#fbbf24"
+                         : "#94a3b8",
+                  }}>
+                    {entry.msg}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Draft review banner ── */}
