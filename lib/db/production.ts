@@ -18,6 +18,30 @@ export async function getProductionStatus(
   return { data: data || [], error: null };
 }
 
+export async function getProductionSummaryForProjects(
+  projectIds: string[]
+): Promise<DbResult<{ status: string; count: number; project_count: number }[]>> {
+  if (!projectIds.length) return { data: [], error: null };
+  const { data, error } = await supabase
+    .from("project_production_status")
+    .select("project_id, status")
+    .in("project_id", projectIds);
+  if (error) return { data: null, error: error.message };
+  const counts: Record<string, number> = {};
+  const projects: Record<string, Set<string>> = {};
+  (data || []).forEach(row => {
+    counts[row.status] = (counts[row.status] || 0) + 1;
+    if (!projects[row.status]) projects[row.status] = new Set();
+    projects[row.status].add(row.project_id);
+  });
+  return {
+    data: Object.entries(counts).map(([status, count]) => ({
+      status, count, project_count: projects[status]?.size || 0,
+    })),
+    error: null,
+  };
+}
+
 export async function upsertProductionCell(
   projectId: string,
   cellKey:   string,

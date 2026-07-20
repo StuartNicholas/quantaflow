@@ -16,7 +16,7 @@ import { getActivityFeed as dbGetActivityFeed, getQuoteVersionStats as dbGetQuot
 import { listClaims as dbListClaims, createClaim as dbCreateClaim, updateClaim as dbUpdateClaim, deleteClaim as dbDeleteClaim, addClaimItem as dbAddClaimItem, addClaimItems as dbAddClaimItems, deleteClaimItem as dbDeleteClaimItem } from "../lib/db/claims";
 import { createCompany as dbCreateCompany, submitJoinRequest as dbSubmitJoinRequest, approveJoinRequest as dbApproveJoinRequest, rejectJoinRequest as dbRejectJoinRequest, listJoinRequests as dbListJoinRequests, listTeamMembers as dbListTeamMembers, getMyPendingRequest as dbGetMyPendingRequest } from "../lib/db/team";
 import { getEntitlement } from "../lib/db/entitlements";
-import { getProductionStatus, upsertProductionCell } from "../lib/db/production";
+import { getProductionStatus, upsertProductionCell, getProductionSummaryForProjects } from "../lib/db/production";
 import { getSchemes, saveSchemes } from "../lib/db/schemes";
 import { listCabinets } from "../lib/db/cabinets";
 import CabinetDatabase from "./cabinet/CabinetDatabase";
@@ -1088,11 +1088,9 @@ export default function App() {
           setUserRole(profile.role || "owner");
           // Load company entitlement (AI access, plan, limits)
           getEntitlement(profile.company_id).then(({ data }) => { if (mounted) setEntitlement(data); });
-          setProjects((projectData || []).map(p => {
-            let xeroData={};
-            try{ const s=localStorage.getItem(`qf_xero_${p.id}`); if(s) xeroData=JSON.parse(s)||{}; }catch{}
-            return normalizeProject({...p, gst: p.gst ?? (companyRow?.default_gst ?? 10), ...xeroData});
-          }));
+          setProjects((projectData || []).map(p =>
+            normalizeProject({...p, gst: p.gst ?? (companyRow?.default_gst ?? 10)})
+          ));
           setSetupComplete(companyRow?.setup_complete ?? true);
           dbListTrashedProjects().then(({ data: td }) => { if (mounted) setTrash(td || []); });
 
@@ -2395,22 +2393,17 @@ function Dashboard({projects, xero, onOpen, setNav}) {
   const [prodJobs,   setProdJobs]   = useState(0);  // how many active jobs have production data
 
   useEffect(()=>{
-    // Cross-project production summary from localStorage
+    const activeIds=projects.filter(p=>["approved","active"].includes(p.status)).map(p=>p.id);
     const counts={};
     PROD_STATUSES.forEach(s=>{ counts[s.key]=0; });
-    let jobsWithData=0;
-    projects.filter(p=>["approved","active"].includes(p.status)).forEach(p=>{
-      try{
-        const raw=localStorage.getItem(`qf_prod_${p.id}`);
-        if(!raw) return;
-        const data=JSON.parse(raw);
-        const vals=Object.values(data);
-        if(vals.length){ jobsWithData++; vals.forEach(st=>{ if(counts[st]!==undefined) counts[st]++; }); }
-      }catch{}
+    getProductionSummaryForProjects(activeIds).then(({data})=>{
+      if(data){
+        data.forEach(({status,count})=>{ if(counts[status]!==undefined) counts[status]+=count; });
+        const total=Object.values(counts).reduce((s,n)=>s+n,0);
+        setProdJobs(total>0 ? data.reduce((s,{project_count})=>Math.max(s,project_count),0) : 0);
+      }
+      setProdCounts({...counts});
     });
-    setProdCounts(counts);
-    setProdJobs(jobsWithData);
-    // Recent activity feed
     dbGetActivityFeed(10).then(({data})=>setActFeed(data||[]));
   },[projects]);
 
@@ -2437,7 +2430,7 @@ function Dashboard({projects, xero, onOpen, setNav}) {
     const daysSince  = lastChange ? Math.floor((today - new Date(lastChange)) / 86400000) : 0;
     if(p.status==="sent"   && daysSince>14) attention.push({proj:p, msg:`Quote sent — no response for ${daysSince}d`, color:T.yellow});
     if(p.status==="quoting"&& daysSince>21) attention.push({proj:p, msg:`Quoting for ${daysSince}d — no quote issued yet`, color:T.yellow});
-    if(p.status==="active" && !localStorage.getItem(`qf_prod_${p.id}`)) attention.push({proj:p, msg:"Active job — no production data yet", color:T.accent});
+    if(p.status==="active" && !(prodCounts && Object.values(prodCounts).some(n=>n>0))) attention.push({proj:p, msg:"Active job — no Box Matrix data yet", color:T.accent});
     if(["approved","active"].includes(p.status)&&!p.quote_value&&!calc(p).total) attention.push({proj:p, msg:"No estimate — job has no value", color:T.red});
     const due=p.due_date||p.dueDate;
     if(due&&new Date(due)<today&&!["complete","lost"].includes(p.status))
@@ -3294,14 +3287,15 @@ function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[proj.id]);
 
-  // ── Load scheme data from localStorage on mount (for finishes display in list)
+  // ── Load scheme data and unit register from DB on mount
   useEffect(()=>{
-    try{ const s=localStorage.getItem(`qf_schemes_${proj.id}`); if(s) setSchemeData(JSON.parse(s)); }catch{}
-  },[proj.id]);
-
-  // ── Load unit register from localStorage on mount
-  useEffect(()=>{
-    try{ const s=localStorage.getItem(`qf_unitreg_${proj.id}`); if(s) setUnitReg(JSON.parse(s)); }catch{}
+    let on=true;
+    getSchemes(proj.id).then(({data:d})=>{
+      if(!on || !d) return;
+      setSchemeData(d);
+      if(d.units?.length) setUnitReg({units:d.units});
+    });
+    return ()=>{on=false;};
   },[proj.id]);
 
   // ── Auto-resolve unit type when pickUnit or pickLevel changes
@@ -3311,7 +3305,13 @@ function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
     if(u){ const t=u.overrides?.[pickLevel]||u.defaultType||""; if(t) setPickUnitType(t); }
   },[pickUnit, pickLevel, unitReg]);
 
-  function saveUnitReg(reg){ setUnitReg(reg); try{ localStorage.setItem(`qf_unitreg_${proj.id}`,JSON.stringify(reg)); }catch{} }
+  function saveUnitReg(reg){
+    setUnitReg(reg);
+    // Merge into scheme_data in DB (unit register lives in schemes.units)
+    getSchemes(proj.id).then(({data:existing})=>{
+      saveSchemes(proj.id, {...(existing||SCHEME_DEFAULTS), units: reg.units||[]});
+    });
+  }
   function resolveRegType(unitNumber, level){
     const u=(unitReg.units||[]).find(u=>u.number===unitNumber); if(!u) return "";
     return u.overrides?.[level]||u.defaultType||"";
@@ -3757,9 +3757,8 @@ ${EXTRACT_SCHEMA}`;
       // ── Auto-populate Schemes from AI-detected finishes schedule
       if(cabinetryActive && (merged.finishesSchedule||[]).length>0){
         try{
-          const schKey=`qf_schemes_${proj.id}`;
-          const existing=JSON.parse(localStorage.getItem(schKey)||"{}");
-          if(!(existing.schemes||[]).length){
+          const {data:existing} = await getSchemes(proj.id);
+          if(!(existing?.schemes||[]).length){
             const autoSchemes=(merged.finishesSchedule||[]).map((fs,i)=>({
               id:`ai${Date.now()}${i}`,
               name:fs.schemeName||`Scheme ${String.fromCharCode(65+i)}`,
@@ -3772,7 +3771,9 @@ ${EXTRACT_SCHEMA}`;
             const hasMulti=autoSchemes.length>1;
             const hasRoomSch=Object.keys(merged.roomSchemes||{}).length>0;
             const mode=hasMulti?(hasRoomSch?"byUnit":"byUnitType"):"single";
-            localStorage.setItem(schKey,JSON.stringify({...SCHEME_DEFAULTS,...existing,mode,schemes:autoSchemes}));
+            const merged2={...SCHEME_DEFAULTS,...(existing||{}),mode,schemes:autoSchemes};
+            await saveSchemes(proj.id, merged2);
+            setSchemeData(merged2);
             log(`✓ ${autoSchemes.length} colour scheme${autoSchemes.length!==1?"s":""} auto-detected: ${autoSchemes.map(s=>s.name).join(", ")}. Review in the Schemes tab.`,"success");
           }
         }catch{}
@@ -3882,7 +3883,7 @@ ${EXTRACT_SCHEMA}`;
       log(`✓ ${newItems.length} takeoff items created (${totalCabLines} cabinetry lines). Push to Estimate when ready.`,"success");
 
       // Refresh scheme data in case AI auto-populated Schemes
-      try{ const s=localStorage.getItem(`qf_schemes_${proj.id}`); if(s) setSchemeData(JSON.parse(s)); }catch{}
+      getSchemes(proj.id).then(({data:d})=>{ if(d) setSchemeData(d); });
 
     } catch(e) {
       if(e.code==="limit_reached"){
@@ -7919,6 +7920,9 @@ function SchemesModule({proj, pop}) {
     return ()=>{on=false;};
   },[proj.id]);
 
+  // Clear pending debounce on unmount to prevent save after navigation
+  useEffect(()=>()=>clearTimeout(_saveTimer.current), []);
+
   function save(next){
     setData(next);
     clearTimeout(_saveTimer.current);
@@ -8549,7 +8553,12 @@ function ClaimsModule({proj, c, pop, company, clients}) {
 
   // Load building register for unit-level claim matrix
   useEffect(()=>{
-    try{ const s=localStorage.getItem(`qf_unitreg_${proj.id}`); if(s) setUnitReg(JSON.parse(s)); }catch{}
+    let on=true;
+    getSchemes(proj.id).then(({data:d})=>{
+      if(!on || !d?.units?.length) return;
+      setUnitReg({units:d.units});
+    });
+    return ()=>{on=false;};
   },[proj.id]);
 
   // Matrix data — units/levels derived from building register + estimate items
@@ -9153,7 +9162,10 @@ function ProjectInfo({proj, clients, company, onMutate, pop}) {
             <Inp label="Overhead %" value={proj.overhead??company?.defaultOverhead??12} onChange={v=>onMutate(p=>({...p,overhead:v}))} type="number" mono/>
             <Inp label="GST %" value={proj.gst??company?.defaultGst??10} onChange={v=>onMutate(p=>({...p,gst:v}))} type="number" mono/>
           </Grid3>
-          <Inp label="Xero Invoice Ref" value={proj.xeroRef||""} onChange={v=>onMutate(p=>({...p,xeroRef:v}))}/>
+          <div style={{marginTop:8,padding:"9px 12px",borderRadius:7,border:`1px solid ${T.border}`,background:T.bg,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:12,color:T.faint,flex:1}}>Xero Invoice Ref</span>
+            <span style={{fontSize:11,fontWeight:700,color:T.amber||"#f59e0b",background:"rgba(245,158,11,0.1)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:4,padding:"2px 8px"}}>Coming Soon</span>
+          </div>
           <div style={{marginTop:8}}>
             <div style={{color:T.muted,fontSize:11,marginBottom:5,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em"}}>Status</div>
             <Sel value={proj.status} onChange={v=>onMutate(p=>({...p,status:v}))}
