@@ -15,6 +15,12 @@ import { listDefects as dbListDefects, createDefect as dbCreateDefect, updateDef
 import { getActivityFeed as dbGetActivityFeed, getQuoteVersionStats as dbGetQuoteVersionStats } from "../lib/db/reporting";
 import { listClaims as dbListClaims, createClaim as dbCreateClaim, updateClaim as dbUpdateClaim, deleteClaim as dbDeleteClaim, addClaimItem as dbAddClaimItem, addClaimItems as dbAddClaimItems, deleteClaimItem as dbDeleteClaimItem } from "../lib/db/claims";
 import { createCompany as dbCreateCompany, submitJoinRequest as dbSubmitJoinRequest, approveJoinRequest as dbApproveJoinRequest, rejectJoinRequest as dbRejectJoinRequest, listJoinRequests as dbListJoinRequests, listTeamMembers as dbListTeamMembers, getMyPendingRequest as dbGetMyPendingRequest } from "../lib/db/team";
+import { getEntitlement } from "../lib/db/entitlements";
+import CabinetDatabase from "./cabinet/CabinetDatabase";
+import BoxMatrix from "./cabinet/BoxMatrix";
+import ProjectSetup from "./project/ProjectSetup";
+import WorkflowSelector from "./project/WorkflowSelector";
+import BillingPage from "./billing/BillingPage";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // QUANTAFLOW — Standalone Construction Estimating Platform
@@ -913,6 +919,7 @@ const NAV = [
   {id:"suppliers", icon:"📦", label:"Suppliers"},
   {id:"rates",     icon:"≡", label:"Rate Library"},
   {id:"reporting", icon:"◈", label:"Reporting"},
+  {id:"billing",   icon:"💳", label:"Billing"},
   {id:"settings",  icon:"⚙", label:"Settings"},
 ];
 
@@ -1076,6 +1083,8 @@ export default function App() {
           setUser(currentUser);
           setCompanyId(profile.company_id);
           setUserRole(profile.role || "owner");
+          // Load company entitlement (AI access, plan, limits)
+          getEntitlement(profile.company_id).then(({ data }) => { if (mounted) setEntitlement(data); });
           setProjects((projectData || []).map(p => {
             let xeroData={};
             try{ const s=localStorage.getItem(`qf_xero_${p.id}`); if(s) xeroData=JSON.parse(s)||{}; }catch{}
@@ -1231,6 +1240,9 @@ export default function App() {
       });
       setProjects(ps=>[project,...ps]);
       pop("Project created!");
+      // Open directly into the setup wizard for new projects
+      setProjId(project.id);
+      setProjectStep("setup");
       return project;
     } catch (err) {
       pop(err?.message||String(err), "error");
@@ -1297,8 +1309,11 @@ export default function App() {
   }
   const [nav,       setNav]       = useState("dashboard");
   const [projId,    setProjId]    = useState(null);
-  const [projTab,   setProjTab]   = useState("takeoff");
+  const [projTab,   setProjTab]   = useState("cabinets");
   const [toast,     setToast]     = useState(null);
+  // projectStep: null = workspace, "setup" = project presets, "workflow" = choose mode
+  const [projectStep, setProjectStep] = useState(null);
+  const [entitlement, setEntitlement] = useState(null);
 
   const pop = (msg, type="success") => setToast({msg,type});
 
@@ -1311,8 +1326,18 @@ export default function App() {
     setProjects(ps => ps.map(p => p.id===id ? fn(p) : p));
   }
 
-  function openProj(id, tab="takeoff") { setProjId(id); setProjTab(tab); }
-  function closeProj() { setProjId(null); }
+  function openProj(id, tab="cabinets") {
+    setProjId(id);
+    setProjTab(tab);
+    const p = projects.find(pr => pr.id === id);
+    // Show setup wizard for projects that haven't been configured yet
+    if (p && !p.project_setup_complete) {
+      setProjectStep("setup");
+    } else {
+      setProjectStep(null);
+    }
+  }
+  function closeProj() { setProjId(null); setProjectStep(null); }
 
   // "Jump to Rate Library, keep my place" — used by the takeoff library picker
   // when an item needs adding. Remembers the project+tab so the user returns
@@ -1486,12 +1511,59 @@ export default function App() {
         {/* Supabase project sync is now active, so the old local-browser backup warning has been removed. */}
 
         <ErrorBoundary>
-        {curProj
+        {curProj && projectStep === "setup"
+          ? <ProjectSetup
+              proj={curProj}
+              clients={clients}
+              builders={builders}
+              company={company}
+              T={T}
+              onSave={async patch => {
+                const {data} = await dbUpdateProject(curProj.id, {
+                  name: patch.name,
+                  address: patch.address,
+                  client_id: patch.client_id||null,
+                  builder_id: patch.builder_id||null,
+                  tender_number: patch.tender_number||"",
+                  project_number: patch.project_number||"",
+                  revision: patch.revision||"1",
+                  estimator: patch.estimator||"",
+                  currency: patch.currency||"AUD",
+                  breakdown_preference: patch.breakdown_preference||"unit_type",
+                  default_trade_scope: patch.default_trade_scope||"",
+                  default_pricing_library: patch.default_pricing_library||"",
+                  default_material_library: patch.default_material_library||"",
+                  default_hardware_library: patch.default_hardware_library||"",
+                  gst: parseFloat(patch.gst)||10,
+                  project_setup_complete: true,
+                });
+                if (data) mutProj(curProj.id, p=>({...p,...data,clientId:data.client_id,project_setup_complete:true}));
+                setProjectStep("workflow");
+              }}
+              onCancel={() => setProjectStep(null)}
+            />
+          : curProj && projectStep === "workflow"
+          ? <WorkflowSelector
+              proj={curProj}
+              entitlement={entitlement}
+              T={T}
+              onBack={() => setProjectStep("setup")}
+              onSelect={async mode => {
+                const {data} = await dbUpdateProject(curProj.id, {workflow_mode: mode});
+                if (data) mutProj(curProj.id, p=>({...p, workflow_mode: mode}));
+                setProjectStep(null);
+                setProjTab("cabinets");
+                pop(`Workflow: ${mode.replace(/_/g," ")}`);
+              }}
+            />
+          : curProj
           ? <ProjectWorkspace
               proj={curProj} tab={projTab} setTab={setProjTab}
               clients={clients} rates={rates} cabLib={cabLib} company={company}
+              entitlement={entitlement}
               onMutate={fn=>mutProj(curProj.id,fn)}
               onBack={closeProj} onPushXero={pushXero} onGotoLibrary={gotoLibrary} pop={pop}
+              onOpenSetup={() => setProjectStep("setup")}
             />
           : <>
               {returnTo && nav==="rates" && <div style={{background:T.accentDim,border:`1px solid ${T.accentBrd}`,borderRadius:7,
@@ -1506,6 +1578,7 @@ export default function App() {
               {nav==="suppliers" && <SuppliersModule pop={pop}/>}
               {nav==="rates"      && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} companyId={companyId} pop={pop}/>}
               {nav==="reporting"  && <ReportingModule projects={projects} clients={clients}/>}
+              {nav==="billing"    && <BillingPage entitlement={entitlement} company={company} T={T}/>}
               {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} userRole={userRole} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} onTeamCountChange={setPendingTeamCount} pop={pop}/>}
             </>
         }
@@ -2655,6 +2728,8 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
 }
 
 const WORKSPACE_TABS = [
+  {id:"cabinets",    label:"🗄 Cabinets"},
+  {id:"boxmatrix",   label:"📊 Box Matrix"},
   {id:"takeoff",     label:"① Takeoff"},
   {id:"schemes",     label:"🎨 Schemes"},
   {id:"preset",      label:"② Cabinet Preset"},
@@ -2672,7 +2747,7 @@ const WORKSPACE_TABS = [
 // ═══════════════════════════════════════════════════════════════════════════
 // PROJECT WORKSPACE
 // ═══════════════════════════════════════════════════════════════════════════
-function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate,onBack,onPushXero,onGotoLibrary,pop}) {
+function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,entitlement,onMutate,onBack,onPushXero,onGotoLibrary,onOpenSetup,pop}) {
   const [variations,    setVariations]    = useState([]);
   const [varsLoading,   setVarsLoading]   = useState(true);
 
@@ -2699,12 +2774,15 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,onMutate
         if(data) onMutate(p=>({...p,updated_at:data.updated_at}));
         pop(`→ ${STATUS[sm.next].label}`);
       }}>Advance →</Btn>}
+      {onOpenSetup && <Btn sm v="gho" onClick={onOpenSetup}>⚙ Project Setup</Btn>}
       <div style={{marginLeft:"auto",textAlign:"right"}}>
         <div style={{fontFamily:T.mono,fontSize:20,fontWeight:800,color:T.accent}}>{$$((proj.lineItems||[]).length>0?c.total:proj.quote_value||0)}</div>
         <div style={{color:T.faint,fontSize:11}}>inc. GST{c.actTotal>0?` · ${$$(c.actTotal,true)} actual`:""}</div>
       </div>
     </Row>
     <Tabs tabs={WORKSPACE_TABS} active={tab} onChange={setTab}/>
+    {tab==="cabinets"    && <CabinetDatabase proj={proj} company={company} T={T} pop={pop}/>}
+    {tab==="boxmatrix"   && <BoxMatrix proj={proj} T={T} pop={pop}/>}
     {tab==="takeoff"  && <TakeoffModule proj={proj} cabLib={cabLib} company={company} onMutate={onMutate} onGotoLibrary={onGotoLibrary} pop={pop}/>}
     {tab==="preset"   && <CabinetPreset proj={proj} pop={pop}/>}
     {tab==="estimate" && <EstimateModule proj={proj} rates={rates} cabLib={cabLib} onMutate={onMutate} c={c} pop={pop}/>}
