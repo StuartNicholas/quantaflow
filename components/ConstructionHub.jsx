@@ -16,6 +16,9 @@ import { getActivityFeed as dbGetActivityFeed, getQuoteVersionStats as dbGetQuot
 import { listClaims as dbListClaims, createClaim as dbCreateClaim, updateClaim as dbUpdateClaim, deleteClaim as dbDeleteClaim, addClaimItem as dbAddClaimItem, addClaimItems as dbAddClaimItems, deleteClaimItem as dbDeleteClaimItem } from "../lib/db/claims";
 import { createCompany as dbCreateCompany, submitJoinRequest as dbSubmitJoinRequest, approveJoinRequest as dbApproveJoinRequest, rejectJoinRequest as dbRejectJoinRequest, listJoinRequests as dbListJoinRequests, listTeamMembers as dbListTeamMembers, getMyPendingRequest as dbGetMyPendingRequest } from "../lib/db/team";
 import { getEntitlement } from "../lib/db/entitlements";
+import { getProductionStatus, upsertProductionCell } from "../lib/db/production";
+import { getSchemes, saveSchemes } from "../lib/db/schemes";
+import { listCabinets } from "../lib/db/cabinets";
 import CabinetDatabase from "./cabinet/CabinetDatabase";
 import BoxMatrix from "./cabinet/BoxMatrix";
 import ProjectSetup from "./project/ProjectSetup";
@@ -1352,16 +1355,8 @@ export default function App() {
     if(returnTo){ setProjId(returnTo.projId); setProjTab(returnTo.tab||"takeoff"); setReturnTo(null); }
   }
 
-  function pushXero(proj) {
-    const c = calc(proj);
-    const invoiced = c.total||proj.quote_value||0;
-    const ref = "INV-"+String(Math.floor(1000+Math.random()*9000));
-    mutProj(proj.id, p=>({...p, invoiced, xeroRef:ref,
-      status:p.status==="approved"?"active":p.status}));
-    try{ localStorage.setItem(`qf_xero_${proj.id}`, JSON.stringify({xeroRef:ref, invoiced})); }catch{}
-    setXero(x=>({...x, log:[{ts:new Date().toLocaleTimeString(),
-      msg:`${ref} pushed — ${proj.name} ${$$(invoiced,true)}`,ok:true},...(x.log||[])]}));
-    pop(`${ref} pushed to Xero!`);
+  function pushXero(_proj) {
+    pop("Xero integration coming soon — we'll notify you when it's ready.", "info");
   }
 
   const curProj = projId ? projects.find(p=>p.id===projId) : null;
@@ -5331,6 +5326,18 @@ ${EXTRACT_SCHEMA}`;
 function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
   const [showAdd,  setShowAdd]  = useState(false);
   const [showRates,setShowRates]= useState(false);
+  const [cabinets, setCabinets] = useState([]);
+  const [cabsLoaded, setCabsLoaded] = useState(false);
+
+  useEffect(()=>{
+    let on=true;
+    listCabinets(proj.id).then(({data})=>{
+      if(!on) return;
+      setCabinets(data||[]);
+      setCabsLoaded(true);
+    });
+    return ()=>{on=false;};
+  },[proj.id]);
   const [showCabSetup,setShowCabSetup]=useState(false);
   const [nli, setNli] = useState({category:CATS[0],description:"",qty:1,unit:"m²",rate:0,margin:proj.margin||20});
   const [templates,setTemplates]=useLS("qf_templates",[]);
@@ -5581,6 +5588,50 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
         pop(`${add.length} takeoff items imported.`);
       }}>⬡ Import from Takeoff</Btn>}
     </Row>
+
+    {/* ── Cabinet Database summary ── */}
+    {cabsLoaded && cabinets.length > 0 && (()=>{
+      const approved = cabinets.filter(cab=>!cab.ai_draft);
+      const cabTotal = approved.reduce((s,cab)=>s+(parseFloat(cab.sell_price)||0), 0);
+      const gstRate  = (parseFloat(proj.gst)||10)/100;
+      const cabTotalIncGst = cabTotal * (1 + gstRate);
+      const byRoom = {};
+      approved.forEach(cab=>{
+        const key=cab.room||"Unassigned";
+        if(!byRoom[key]) byRoom[key]={count:0,total:0};
+        byRoom[key].count++;
+        byRoom[key].total+=(parseFloat(cab.sell_price)||0);
+      });
+      return <div style={{
+        background:`${T.accent}0d`, border:`1.5px solid ${T.accentBrd}`,
+        borderRadius:9, padding:"14px 18px", marginBottom:14,
+      }}>
+        <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",marginBottom:10}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",color:T.accent,marginBottom:2}}>
+              Cabinet Database — {approved.length} cabinet{approved.length!==1?"s":""}
+              {cabinets.length!==approved.length&&<span style={{color:T.muted,fontWeight:400}}> ({cabinets.length-approved.length} draft pending review)</span>}
+            </div>
+            <div style={{fontSize:22,fontWeight:900,fontFamily:T.mono,color:T.accent}}>{$$(cabTotal)}</div>
+            <div style={{fontSize:12,color:T.muted}}>ex. GST · {$$(cabTotalIncGst)} inc. {proj.gst||10}% GST</div>
+          </div>
+          <Btn v="pri" onClick={async()=>{
+            await dbUpdateProjectQuoteValue(proj.id, cabTotalIncGst);
+            onMutate(p=>({...p, quote_value:cabTotalIncGst}));
+            pop(`Quote value set to ${$$(cabTotalIncGst)} from Cabinet Database.`);
+          }}>→ Apply to Quote</Btn>
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {Object.entries(byRoom).map(([room,{count,total}])=>(
+            <div key={room} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:6,padding:"6px 10px",fontSize:12}}>
+              <span style={{color:T.text,fontWeight:600}}>{room}</span>
+              <span style={{color:T.muted,marginLeft:6}}>{count} cab{count!==1?"s":""}</span>
+              <span style={{color:T.accent,fontWeight:700,marginLeft:6,fontFamily:T.mono}}>{$$(total)}</span>
+            </div>
+          ))}
+        </div>
+      </div>;
+    })()}
 
     {/* ── Templates picker */}
     {showTpl&&<Card hi sx={{marginBottom:14}}>
@@ -6318,7 +6369,7 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
   const clientEmail = findClientEmail(clients, proj);
 
   useEffect(()=>{
-    try{ const s=localStorage.getItem(`qf_schemes_${proj.id}`); if(s) setSchemes(JSON.parse(s)); }catch{}
+    getSchemes(proj.id).then(({data})=>{ if(data) setSchemes(data); });
   },[proj.id]);
 
   async function reload(keepSel) {
@@ -7666,30 +7717,35 @@ function HandoverModule({proj, onMutate, pop}) {
 function nextProdStatus(key){ const i=PROD_STATUSES.findIndex(s=>s.key===key); return PROD_STATUSES[(i+1)%PROD_STATUSES.length].key; }
 
 function ProductionModule({proj, pop}) {
-  const [status, setStatus] = useState({});    // {"TypeA|Level3": "assembled"}
-  const [notes,  setNotes]  = useState({});    // {"TypeA|Level3": "note text"}
-  const [editNote, setEditNote] = useState(null); // cell key being noted
+  const [status, setStatus] = useState({});
+  const [notes,  setNotes]  = useState({});
+  const [editNote, setEditNote] = useState(null);
   const [noteVal, setNoteVal] = useState("");
-  const storeKey = `qf_prod_${proj.id}`;
-  const notesKey = `qf_prodnotes_${proj.id}`;
+  const [loading, setLoading] = useState(true);
 
   useEffect(()=>{
-    try{ const s=localStorage.getItem(storeKey); if(s) setStatus(JSON.parse(s)); }catch{}
-    try{ const n=localStorage.getItem(notesKey); if(n) setNotes(JSON.parse(n)); }catch{}
+    let on=true;
+    setLoading(true);
+    getProductionStatus(proj.id).then(({data})=>{
+      if(!on || !data) { setLoading(false); return; }
+      const s={}, n={};
+      data.forEach(row=>{ s[row.cell_key]=row.status; if(row.notes) n[row.cell_key]=row.notes; });
+      setStatus(s); setNotes(n); setLoading(false);
+    });
+    return ()=>{on=false;};
   },[proj.id]);
 
-  function cycleStatus(ut,lvl){
+  async function cycleStatus(ut,lvl){
     const k=`${ut}|${lvl}`;
     const next=nextProdStatus(status[k]||"pending");
-    const updated={...status,[k]:next};
-    setStatus(updated);
-    try{ localStorage.setItem(storeKey,JSON.stringify(updated)); }catch{}
+    setStatus(s=>({...s,[k]:next}));
+    await upsertProductionCell(proj.id, k, next, notes[k]||"");
   }
-  function saveNote(k){
-    const updated={...notes,[k]:noteVal.trim()};
-    setNotes(updated);
-    try{ localStorage.setItem(notesKey,JSON.stringify(updated)); }catch{}
+  async function saveNote(k){
+    const n=noteVal.trim();
+    setNotes(prev=>({...prev,[k]:n}));
     setEditNote(null); setNoteVal("");
+    await upsertProductionCell(proj.id, k, status[k]||"pending", n);
   }
 
   // Build matrix axes from takeoff items synced into proj
@@ -7719,6 +7775,7 @@ function ProductionModule({proj, pop}) {
   }));
   const filledCells=Object.values(statusCounts).reduce((s,n)=>s+n,0);
 
+  if(loading) return <Card sx={{textAlign:"center",padding:40,color:T.faint}}>Loading production data…</Card>;
   if(takeoffItems.length===0 || typeSorted.length===0){
     return <div>
       <Hdr sub="Track production status for each unit type across building levels.">Production Tracking</Hdr>
@@ -7817,7 +7874,11 @@ function ProductionModule({proj, pop}) {
         <Row gap={8} sx={{marginTop:10}}>
           <Btn v="pri" sm onClick={()=>saveNote(editNote)}>Save</Btn>
           <Btn sm onClick={()=>setEditNote(null)}>Cancel</Btn>
-          {notes[editNote]&&<Btn sm v="red" onClick={()=>{saveNote(editNote);setNoteVal("");const u={...notes};delete u[editNote];setNotes(u);try{localStorage.setItem(notesKey,JSON.stringify(u));}catch{}}}>Clear</Btn>}
+          {notes[editNote]&&<Btn sm v="red" onClick={async()=>{
+            const u={...notes}; delete u[editNote]; setNotes(u);
+            setEditNote(null); setNoteVal("");
+            await upsertProductionCell(proj.id, editNote, status[editNote]||"pending", "");
+          }}>Clear</Btn>}
         </Row>
       </div>
     </div>}
@@ -7842,15 +7903,27 @@ const SC_COLORS=["#f59e0b","#3b82f6","#22c55e","#a78bfa","#ec4899","#14b8a6","#f
 const schemeColor=(idx)=>SC_COLORS[idx%SC_COLORS.length];
 
 function SchemesModule({proj, pop}) {
-  const storeKey=`qf_schemes_${proj.id}`;
   const [data, setData] = useState(SCHEME_DEFAULTS);
-  const [openId, setOpenId] = useState(null); // expanded scheme id
+  const [openId, setOpenId] = useState(null);
+  const [schLoading, setSchLoading] = useState(true);
+  const _saveTimer = useRef(null);
 
   useEffect(()=>{
-    try{ const s=localStorage.getItem(storeKey); if(s) setData({...SCHEME_DEFAULTS,...JSON.parse(s)}); }catch{}
+    let on=true;
+    setSchLoading(true);
+    getSchemes(proj.id).then(({data:d})=>{
+      if(!on) return;
+      if(d) setData({...SCHEME_DEFAULTS,...d});
+      setSchLoading(false);
+    });
+    return ()=>{on=false;};
   },[proj.id]);
 
-  function save(next){ setData(next); try{ localStorage.setItem(storeKey,JSON.stringify(next)); }catch{} }
+  function save(next){
+    setData(next);
+    clearTimeout(_saveTimer.current);
+    _saveTimer.current=setTimeout(()=>saveSchemes(proj.id, next), 600);
+  }
 
   function addScheme(){
     const id=`sc${Date.now()}`;
@@ -7882,6 +7955,8 @@ function SchemesModule({proj, pop}) {
     {key:"byUnitType", label:"By unit type",        desc:"Type A gets one look, Type B another"},
     {key:"byUnit",     label:"By unit (room-level)",desc:"Each apartment assigned individually — rooms can differ"},
   ];
+
+  if(schLoading) return <Card sx={{textAlign:"center",padding:40,color:T.faint}}>Loading schemes…</Card>;
 
   return <div>
     <Hdr sub="Define colour schemes, then assign them to unit types or individual apartments room by room.">Colour Schemes</Hdr>
