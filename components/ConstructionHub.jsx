@@ -19,7 +19,8 @@ import { listPurchaseOrders as dbListPurchaseOrders, createPurchaseOrder as dbCr
 import { listDefects as dbListDefects, createDefect as dbCreateDefect, updateDefect as dbUpdateDefect, deleteDefect as dbDeleteDefect, listHandoverItems as dbListHandoverItems, seedHandoverItems as dbSeedHandoverItems, createHandoverItem as dbCreateHandoverItem, toggleHandoverItem as dbToggleHandoverItem, deleteHandoverItem as dbDeleteHandoverItem } from "../lib/db/handover";
 import { getActivityFeed as dbGetActivityFeed, getQuoteVersionStats as dbGetQuoteVersionStats } from "../lib/db/reporting";
 import { listClaims as dbListClaims, createClaim as dbCreateClaim, updateClaim as dbUpdateClaim, deleteClaim as dbDeleteClaim, addClaimItem as dbAddClaimItem, addClaimItems as dbAddClaimItems, deleteClaimItem as dbDeleteClaimItem } from "../lib/db/claims";
-import { createCompany as dbCreateCompany, submitJoinRequest as dbSubmitJoinRequest, approveJoinRequest as dbApproveJoinRequest, rejectJoinRequest as dbRejectJoinRequest, listJoinRequests as dbListJoinRequests, listTeamMembers as dbListTeamMembers, getMyPendingRequest as dbGetMyPendingRequest } from "../lib/db/team";
+import { createCompany as dbCreateCompany, submitJoinRequest as dbSubmitJoinRequest, approveJoinRequest as dbApproveJoinRequest, rejectJoinRequest as dbRejectJoinRequest, listJoinRequests as dbListJoinRequests, listTeamMembers as dbListTeamMembers, getMyPendingRequest as dbGetMyPendingRequest, updateMemberRole as dbUpdateMemberRole } from "../lib/db/team";
+import { listActualCosts as dbListActualCosts, createActualCost as dbCreateActualCost, deleteActualCost as dbDeleteActualCost } from "../lib/db/actual_costs";
 import { getEntitlement } from "../lib/db/entitlements";
 import { getProductionStatus, upsertProductionCell, getProductionSummaryForProjects } from "../lib/db/production";
 import { getSchemes, saveSchemes } from "../lib/db/schemes";
@@ -1556,7 +1557,7 @@ export default function App() {
             />
           : curProj
           ? <ProjectWorkspace
-              proj={curProj} tab={projTab} setTab={setProjTab}
+              proj={curProj} tab={projTab} setTab={setProjTab} userRole={userRole}
               clients={clients} rates={rates} cabLib={cabLib} company={company}
               entitlement={entitlement}
               onMutate={fn=>mutProj(curProj.id,fn)}
@@ -1810,8 +1811,16 @@ function TeamSection({companyId, companyAbn, companyCountry, onCountChange, pop}
     await reload();
   }
 
-  const ROLE_COLOR = {owner:T.accent, member:T.blue};
+  const ROLE_COLOR = {owner:T.accent, manager:T.purple, estimator:T.blue, production:T.green, accounts:T.teal, viewer:T.faint, member:T.blue};
+  const ROLE_OPTIONS = ["owner","manager","estimator","production","accounts","viewer","member"];
   const abnLabel = ABN_LABEL[companyCountry||"AU"] || "Business No.";
+
+  async function changeRole(memberId, role) {
+    const { error } = await dbUpdateMemberRole(memberId, role);
+    if(error) return pop(error,"error");
+    setMembers(ms=>ms.map(m=>m.id===memberId?{...m,role}:m));
+    pop("Role updated.");
+  }
 
   return <Card sx={{marginTop:14}}>
     <div style={{fontWeight:700,fontSize:13,color:T.accent,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.05em",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -1862,7 +1871,15 @@ function TeamSection({companyId, companyAbn, companyCountry, onCountChange, pop}
               <div style={{fontSize:13,color:T.text,fontWeight:600}}>{m.full_name||"Unnamed user"}</div>
               <div style={{fontSize:11,color:T.faint}}>Since {m.created_at?new Date(m.created_at).toLocaleDateString():"—"}</div>
             </div>
-            <Bdg color={ROLE_COLOR[m.role]||T.faint}>{m.role}</Bdg>
+            {m.role==="owner"
+              ? <Bdg color={ROLE_COLOR.owner}>owner</Bdg>
+              : <select value={m.role||"member"}
+                  onChange={e=>changeRole(m.id,e.target.value)}
+                  style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:5,
+                    padding:"3px 7px",color:ROLE_COLOR[m.role]||T.faint,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                  {ROLE_OPTIONS.filter(r=>r!=="owner").map(r=><option key={r} value={r}>{r}</option>)}
+                </select>
+            }
           </div>)}
         </div>
 
@@ -2737,10 +2754,21 @@ const WORKSPACE_TABS = [
   {id:"info",        label:"Project Info"},
 ];
 
+// null = unrestricted (all tabs visible)
+const ROLE_PERMISSIONS = {
+  owner:       null,
+  manager:     null,
+  estimator:   ["cabinets","boxmatrix","takeoff","schemes","preset","estimate","quote","info"],
+  production:  ["cabinets","production","procurement","orderlist","handover","info"],
+  accounts:    ["quote","jobcost","claims","info"],
+  viewer:      ["estimate","quote","info"],
+  member:      null,
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PROJECT WORKSPACE
 // ═══════════════════════════════════════════════════════════════════════════
-function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,entitlement,onMutate,onBack,onPushXero,onGotoLibrary,onOpenSetup,pop}) {
+function ProjectWorkspace({proj,tab,setTab,userRole,clients,rates,cabLib,company,entitlement,onMutate,onBack,onPushXero,onGotoLibrary,onOpenSetup,pop}) {
   const [variations,    setVariations]    = useState([]);
   const [varsLoading,   setVarsLoading]   = useState(true);
 
@@ -2751,6 +2779,17 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,entitlem
     setVarsLoading(false);
   }
   useEffect(()=>{ reloadVariations(); },[proj.id]);
+
+  const allowedIds = ROLE_PERMISSIONS[userRole] || null;
+  const visibleTabs = allowedIds ? WORKSPACE_TABS.filter(t=>allowedIds.includes(t.id)) : WORKSPACE_TABS;
+
+  // If current tab is not visible for this role, switch to first allowed tab
+  useEffect(()=>{
+    if(allowedIds && !allowedIds.includes(tab) && visibleTabs.length>0){
+      setTab(visibleTabs[0].id);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[userRole, proj.id]);
 
   const c = calc({...proj, variations});
   const sm = STATUS[proj.status]||STATUS.draft;
@@ -2773,7 +2812,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,entitlem
         <div style={{color:T.faint,fontSize:11}}>inc. GST{c.actTotal>0?` · ${$$(c.actTotal,true)} actual`:""}</div>
       </div>
     </Row>
-    <Tabs tabs={WORKSPACE_TABS} active={tab} onChange={setTab}/>
+    <Tabs tabs={visibleTabs} active={tab} onChange={setTab}/>
     {tab==="cabinets"    && <CabinetDatabase proj={proj} company={company} T={T} pop={pop}/>}
     {tab==="boxmatrix"   && <BoxMatrix proj={proj} T={T} pop={pop}/>}
     {tab==="takeoff"  && <TakeoffModule proj={proj} cabLib={cabLib} company={company} onMutate={onMutate} onGotoLibrary={onGotoLibrary} pop={pop}/>}
@@ -2786,7 +2825,7 @@ function ProjectWorkspace({proj,tab,setTab,clients,rates,cabLib,company,entitlem
     {tab==="procurement"  && <ProcurementModule proj={proj} company={company} pop={pop}/>}
     {tab==="jobcost"      && <JobCostsModule proj={proj} variations={variations} reloadVariations={reloadVariations} varsLoading={varsLoading} c={c} company={company} clients={clients} onMutate={onMutate} pop={pop}/>}
     {tab==="handover"  && <HandoverModule proj={proj} onMutate={onMutate} pop={pop}/>}
-    {tab==="claims"    && <ClaimsModule proj={proj} c={c} company={company} clients={clients} pop={pop}/>}
+    {tab==="claims"    && <ClaimsModule proj={proj} c={c} company={company} clients={clients} onMutate={onMutate} pop={pop}/>}
     {tab==="info"     && <ProjectInfo proj={proj} clients={clients} company={company} onMutate={onMutate} pop={pop}/>}
   </div>;
 }
@@ -7223,6 +7262,7 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
   const [showAct, setShowAct] = useState(false);
   const [showVar, setShowVar] = useState(false);
   const [busy,    setBusy]    = useState(false);
+  const [actBusy, setActBusy] = useState(false);
   const [viewVar, setViewVar] = useState(null);
   const [na, setNa] = useState({category:CATS[0],description:"",amount:0,date:new Date().toISOString().slice(0,10),supplier:""});
   const [nv, setNv] = useState({ref:"",description:"",amount:0,status:"pending",date:new Date().toISOString().slice(0,10),notes:""});
@@ -7230,27 +7270,37 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
   const [poCount,     setPoCount]     = useState(0);
   const clientEmail = findClientEmail(clients, proj);
 
-  // Restore actual costs from localStorage (actualCosts has no DB table yet)
+  // Load actual costs from DB
   useEffect(()=>{
-    if(!(proj.actualCosts||[]).length){
-      try{
-        const key=`qf_actcosts_${proj.id}`;
-        const saved=localStorage.getItem(key)||localStorage.getItem(`actual_costs_${proj.id}`);
-        if(saved){
-          const costs=JSON.parse(saved);
-          if(Array.isArray(costs)&&costs.length){
-            onMutate(p=>({...p,actualCosts:costs}));
-            localStorage.setItem(key,saved); // migrate old key on read
-          }
-        }
-      }catch{}
-    }
+    let on=true;
+    (async()=>{
+      const { data } = await dbListActualCosts(proj.id);
+      if(!on) return;
+      if(data) onMutate(p=>({...p,actualCosts:data}));
+    })();
+    return ()=>{on=false;};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[proj.id]);
 
-  function persistCosts(costs){
-    localStorage.setItem(`qf_actcosts_${proj.id}`,JSON.stringify(costs));
-    onMutate(p=>({...p,actualCosts:costs}));
+  async function addCost(){
+    if(!na.description.trim()) return pop("Description required.","error");
+    setActBusy(true);
+    const { data, error } = await dbCreateActualCost(proj.id, {
+      category: na.category, description: na.description,
+      amount: parseFloat(na.amount)||0, date: na.date||undefined, supplier: na.supplier||undefined,
+    });
+    setActBusy(false);
+    if(error) return pop(error,"error");
+    onMutate(p=>({...p,actualCosts:[...(p.actualCosts||[]),data]}));
+    setNa({category:CATS[0],description:"",amount:0,date:new Date().toISOString().slice(0,10),supplier:""});
+    setShowAct(false);
+    pop("Cost added.");
+  }
+
+  async function removeCost(id){
+    const { error } = await dbDeleteActualCost(id);
+    if(error) return pop(error,"error");
+    onMutate(p=>({...p,actualCosts:(p.actualCosts||[]).filter(x=>x.id!==id)}));
   }
 
   useEffect(()=>{
@@ -7361,11 +7411,8 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
             <Inp label="Amount (ex. GST)" value={na.amount} onChange={v=>setNa(x=>({...x,amount:v}))} type="number" mono/>
             <Inp label="Supplier" value={na.supplier} onChange={v=>setNa(x=>({...x,supplier:v}))} placeholder="Supplier name"/>
           </Grid2>
-          <Row gap={8}><Btn v="pri" sm onClick={()=>{
-            persistCosts([...(proj.actualCosts||[]),{...na,id:Date.now(),amount:parseFloat(na.amount)||0}]);
-            setNa({category:CATS[0],description:"",amount:0,date:new Date().toISOString().slice(0,10),supplier:""});
-            setShowAct(false); pop("Cost added.");
-          }}>Save</Btn><Btn sm onClick={()=>setShowAct(false)}>Cancel</Btn></Row>
+          <Row gap={8}><Btn v="pri" sm onClick={addCost} disabled={actBusy}>{actBusy?"Saving…":"Save"}</Btn>
+            <Btn sm onClick={()=>setShowAct(false)}>Cancel</Btn></Row>
         </Card>}
         {(proj.actualCosts||[]).map(a=><div key={a.id} style={{display:"flex",justifyContent:"space-between",
           padding:"9px 0",borderBottom:`1px solid ${T.border}`,alignItems:"flex-start"}}>
@@ -7376,7 +7423,7 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
           <Row gap={8}>
             <span style={{fontFamily:T.mono,color:T.blue,fontWeight:700}}>{$$(a.amount)}</span>
             <span style={{cursor:"pointer",color:T.red,fontSize:12}}
-              onClick={()=>persistCosts((proj.actualCosts||[]).filter(x=>x.id!==a.id))}>✕</span>
+              onClick={()=>removeCost(a.id)}>✕</span>
           </Row>
         </div>)}
         {!(proj.actualCosts||[]).length&&<div style={{color:T.faint,fontSize:12}}>No actual costs recorded.</div>}
@@ -8515,7 +8562,7 @@ function InvoiceDocument({claim, proj, company}) {
   </div></>;
 }
 
-function ClaimsModule({proj, c, pop, company, clients}) {
+function ClaimsModule({proj, c, pop, company, clients, onMutate}) {
   const [claims,      setClaims]      = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [expanded,    setExpanded]    = useState(null);
@@ -8528,21 +8575,19 @@ function ClaimsModule({proj, c, pop, company, clients}) {
   const [wiz,          setWiz]         = useState(null); // {claimNum, description, periodEnd, selections:Set}
   const [viewClaim,    setViewClaim]   = useState(null);
   const [viewInvoice,  setViewInvoice] = useState(null);
-  const [retentionPct, setRetentionPctState] = useState(()=>{
-    try{ const r=localStorage.getItem(`qf_retention_${proj.id}`); if(r) return parseFloat(r)||0; }catch{}
-    return 0;
-  });
 
+  const retentionPct = parseFloat(proj.retention_pct)||0;
+  const [retInput, setRetInput] = useState(String(retentionPct));
   const clientEmail = findClientEmail(clients, proj);
 
-  // Persist retention % per project in localStorage
-  useEffect(()=>{
-    try{ const r=localStorage.getItem(`qf_retention_${proj.id}`); if(r) setRetentionPctState(parseFloat(r)||0); }catch{}
-  },[proj.id]);
-  function setRetention(v){
+  // Sync retInput when project changes
+  useEffect(()=>{ setRetInput(String(parseFloat(proj.retention_pct)||0)); },[proj.id, proj.retention_pct]);
+
+  async function commitRetention(v){
     const pct=Math.max(0,Math.min(50,parseFloat(v)||0));
-    setRetentionPctState(pct);
-    try{ localStorage.setItem(`qf_retention_${proj.id}`,String(pct)); }catch{}
+    setRetInput(String(pct));
+    if(onMutate) onMutate(p=>({...p,retention_pct:pct}));
+    await dbUpdateProject(proj.id, {retention_pct: pct});
   }
 
   async function reload() {
@@ -8742,8 +8787,9 @@ function ClaimsModule({proj, c, pop, company, clients}) {
       <Row gap={14} sx={{alignItems:"center",flexWrap:"wrap"}}>
         <div style={{fontWeight:600,fontSize:12,color:T.text}}>Retention</div>
         <Row gap={6} sx={{alignItems:"center"}}>
-          <input type="number" min={0} max={50} step={0.5} value={retentionPct}
-            onChange={e=>setRetention(e.target.value)}
+          <input type="number" min={0} max={50} step={0.5} value={retInput}
+            onChange={e=>setRetInput(e.target.value)}
+            onBlur={e=>commitRetention(e.target.value)}
             style={{width:65,padding:"4px 8px",borderRadius:5,border:`1px solid ${T.border}`,
               background:T.bg,color:T.text,fontFamily:T.mono,fontSize:13}}/>
           <span style={{color:T.muted,fontSize:13}}>%</span>
@@ -11568,7 +11614,7 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
               // Dynamic per-project keys (actual costs, production status, schemes)
               try{for(let i=0;i<localStorage.length;i++){
                 const k=localStorage.key(i);
-                if(k&&(k.startsWith("qf_actcosts_")||k.startsWith("actual_costs_")||k.startsWith("qf_prod_")||k.startsWith("qf_prodnotes_")||k.startsWith("qf_schemes_")||k.startsWith("qf_schedule_")||k.startsWith("qf_unitreg_")||k.startsWith("qf_retention_")||k.startsWith("qf_xero_"))){
+                if(k&&(k.startsWith("qf_prod_")||k.startsWith("qf_prodnotes_")||k.startsWith("qf_schemes_")||k.startsWith("qf_schedule_")||k.startsWith("qf_unitreg_")||k.startsWith("qf_xero_"))){
                   const v=localStorage.getItem(k);if(v)try{dump.data[k]=JSON.parse(v);}catch{}
                 }
               }}catch{}

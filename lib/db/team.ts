@@ -102,6 +102,19 @@ export async function listTeamMembers(): Promise<DbResult<TeamMember[]>> {
   }
 }
 
+export async function updateMemberRole(userId: string, role: string): Promise<DbResult<true>> {
+  try {
+    const { error } = await supabase
+      .from("profiles")
+      .update({ role })
+      .eq("id", userId);
+    if (error) return { data: null, error: errMsg(error) };
+    return { data: true, error: null };
+  } catch (e) {
+    return { data: null, error: errMsg(e) };
+  }
+}
+
 export async function getMyPendingRequest(): Promise<DbResult<JoinRequest | null>> {
   try {
     const { data, error } = await supabase
