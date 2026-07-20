@@ -104,11 +104,12 @@ export async function listTeamMembers(): Promise<DbResult<TeamMember[]>> {
 
 export async function updateMemberRole(userId: string, role: string): Promise<DbResult<true>> {
   try {
-    const { error } = await supabase
-      .from("profiles")
-      .update({ role })
-      .eq("id", userId);
+    const { data, error } = await supabase.rpc("app_update_member_role", {
+      p_user_id: userId,
+      p_role: role,
+    });
     if (error) return { data: null, error: errMsg(error) };
+    if (data?.error) return { data: null, error: data.error };
     return { data: true, error: null };
   } catch (e) {
     return { data: null, error: errMsg(e) };

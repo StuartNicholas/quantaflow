@@ -21,6 +21,7 @@ import { getActivityFeed as dbGetActivityFeed, getQuoteVersionStats as dbGetQuot
 import { listClaims as dbListClaims, createClaim as dbCreateClaim, updateClaim as dbUpdateClaim, deleteClaim as dbDeleteClaim, addClaimItem as dbAddClaimItem, addClaimItems as dbAddClaimItems, deleteClaimItem as dbDeleteClaimItem } from "../lib/db/claims";
 import { createCompany as dbCreateCompany, submitJoinRequest as dbSubmitJoinRequest, approveJoinRequest as dbApproveJoinRequest, rejectJoinRequest as dbRejectJoinRequest, listJoinRequests as dbListJoinRequests, listTeamMembers as dbListTeamMembers, getMyPendingRequest as dbGetMyPendingRequest, updateMemberRole as dbUpdateMemberRole } from "../lib/db/team";
 import { listActualCosts as dbListActualCosts, createActualCost as dbCreateActualCost, deleteActualCost as dbDeleteActualCost } from "../lib/db/actual_costs";
+import { getCompanyRoles as dbGetCompanyRoles, getRoleTabPermissions as dbGetRoleTabPermissions, loadUserPermissions as dbLoadUserPermissions, createCompanyRole as dbCreateCompanyRole, updateCompanyRole as dbUpdateCompanyRole, deleteCompanyRole as dbDeleteCompanyRole, upsertTabPermission as dbUpsertTabPermission, seedCompanyRoles as dbSeedCompanyRoles } from "../lib/db/roles";
 import { getEntitlement } from "../lib/db/entitlements";
 import { getProductionStatus, upsertProductionCell, getProductionSummaryForProjects } from "../lib/db/production";
 import { getSchemes, saveSchemes } from "../lib/db/schemes";
@@ -956,6 +957,8 @@ export default function App() {
   const [needsCompany,       setNeedsCompany]       = useState(false); // true = no company_id yet
   const [pendingJoinRequest, setPendingJoinRequest] = useState(null);  // pending request row or null
   const [userRole,           setUserRole]           = useState("owner");
+  const [userTier,           setUserTier]           = useState(1);      // 1=owner,2=gm; lower = more authority
+  const [userPermissions,    setUserPermissions]    = useState(null);   // null = unrestricted; TabPermissions otherwise
   const [pendingTeamCount,   setPendingTeamCount]   = useState(0);     // pending join requests (owner only)
   const [themePrefs, setThemePrefs] = useState(()=>{ try{return JSON.parse(localStorage.getItem("qf_theme")||"{}");}catch{return{};} });
   const [showThemePanel, setShowThemePanel] = useState(false);
@@ -1092,6 +1095,12 @@ export default function App() {
           setUser(currentUser);
           setCompanyId(profile.company_id);
           setUserRole(profile.role || "owner");
+          // Load role permissions (tab visibility + edit rights per role)
+          dbLoadUserPermissions(profile.company_id, profile.role || "owner").then(({ data: rd }) => {
+            if (!mounted) return;
+            setUserTier(rd?.role?.tier ?? 1);
+            setUserPermissions(rd?.permissions ?? null);
+          });
           // Load company entitlement (AI access, plan, limits)
           getEntitlement(profile.company_id).then(({ data }) => { if (mounted) setEntitlement(data); });
           setProjects((projectData || []).map(p =>
@@ -1557,7 +1566,8 @@ export default function App() {
             />
           : curProj
           ? <ProjectWorkspace
-              proj={curProj} tab={projTab} setTab={setProjTab} userRole={userRole}
+              proj={curProj} tab={projTab} setTab={setProjTab}
+              userRole={userRole} userTier={userTier} userPermissions={userPermissions}
               clients={clients} rates={rates} cabLib={cabLib} company={company}
               entitlement={entitlement}
               onMutate={fn=>mutProj(curProj.id,fn)}
@@ -1578,7 +1588,7 @@ export default function App() {
               {nav==="rates"      && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} companyId={companyId} pop={pop}/>}
               {nav==="reporting"  && <ReportingModule projects={projects} clients={clients}/>}
               {nav==="billing"    && <BillingPage entitlement={entitlement} company={company} T={T}/>}
-              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} userRole={userRole} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} onTeamCountChange={setPendingTeamCount} pop={pop}/>}
+              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} userRole={userRole} userTier={userTier} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} onTeamCountChange={setPendingTeamCount} pop={pop}/>}
             </>
         }
         </ErrorBoundary>
@@ -1771,20 +1781,23 @@ function PendingApprovalScreen({companyName, userEmail, onRefresh}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // TEAM SECTION — embedded in SettingsModule, owner-only
 // ═══════════════════════════════════════════════════════════════════════════
-function TeamSection({companyId, companyAbn, companyCountry, onCountChange, pop}) {
+function TeamSection({companyId, companyAbn, companyCountry, userTier, onCountChange, pop}) {
   const [members,  setMembers]  = useState([]);
   const [requests, setRequests] = useState([]);
+  const [roles,    setRoles]    = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [busy,     setBusy]     = useState(null);
   const [reqErr,   setReqErr]   = useState(null);
 
   async function reload(){
-    const [{ data:m }, { data:r, error:rErr }] = await Promise.all([
+    const [{ data:m }, { data:r, error:rErr }, { data:rl }] = await Promise.all([
       dbListTeamMembers(),
       dbListJoinRequests(),
+      dbGetCompanyRoles(companyId),
     ]);
     setMembers(m||[]);
     setRequests(r||[]);
+    setRoles(rl||[]);
     setReqErr(rErr||null);
     setLoading(false);
     onCountChange?.(r?.length || 0);
@@ -1811,9 +1824,12 @@ function TeamSection({companyId, companyAbn, companyCountry, onCountChange, pop}
     await reload();
   }
 
-  const ROLE_COLOR = {owner:T.accent, manager:T.purple, estimator:T.blue, production:T.green, accounts:T.teal, viewer:T.faint, member:T.blue};
-  const ROLE_OPTIONS = ["owner","manager","estimator","production","accounts","viewer","member"];
-  const abnLabel = ABN_LABEL[companyCountry||"AU"] || "Business No.";
+  const roleBySlug = slug => roles.find(r=>r.slug===slug);
+  const roleColor  = slug => roleBySlug(slug)?.color || T.faint;
+  const abnLabel   = ABN_LABEL[companyCountry||"AU"] || "Business No.";
+
+  // Assignable roles: those with tier > current user's tier (can't elevate to own level or above)
+  const assignableRoles = roles.filter(r => r.tier > userTier);
 
   async function changeRole(memberId, role) {
     const { error } = await dbUpdateMemberRole(memberId, role);
@@ -1860,27 +1876,32 @@ function TeamSection({companyId, companyAbn, companyCountry, onCountChange, pop}
           <div style={{fontSize:12,color:T.faint,fontWeight:600,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>
             Members ({members.length})
           </div>
-          {members.map(m=><div key={m.id} style={{display:"flex",alignItems:"center",gap:10,
-            padding:"8px 0",borderBottom:`1px solid ${T.border}`}}>
-            <div style={{width:30,height:30,borderRadius:"50%",background:T.accentDim,
-              border:`1px solid ${T.accentBrd}`,color:T.accent,display:"flex",
-              alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:13,flexShrink:0}}>
-              {(m.full_name||"?").slice(0,1).toUpperCase()}
-            </div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:13,color:T.text,fontWeight:600}}>{m.full_name||"Unnamed user"}</div>
-              <div style={{fontSize:11,color:T.faint}}>Since {m.created_at?new Date(m.created_at).toLocaleDateString():"—"}</div>
-            </div>
-            {m.role==="owner"
-              ? <Bdg color={ROLE_COLOR.owner}>owner</Bdg>
-              : <select value={m.role||"member"}
-                  onChange={e=>changeRole(m.id,e.target.value)}
-                  style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:5,
-                    padding:"3px 7px",color:ROLE_COLOR[m.role]||T.faint,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-                  {ROLE_OPTIONS.filter(r=>r!=="owner").map(r=><option key={r} value={r}>{r}</option>)}
-                </select>
-            }
-          </div>)}
+          {members.map(m=>{
+            const mRoleObj=roleBySlug(m.role||"member");
+            const mTier=mRoleObj?.tier??99;
+            const canAssign=mTier>userTier && assignableRoles.length>0;
+            return <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,
+              padding:"8px 0",borderBottom:`1px solid ${T.border}`}}>
+              <div style={{width:30,height:30,borderRadius:"50%",background:T.accentDim,
+                border:`1px solid ${T.accentBrd}`,color:T.accent,display:"flex",
+                alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:13,flexShrink:0}}>
+                {(m.full_name||"?").slice(0,1).toUpperCase()}
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,color:T.text,fontWeight:600}}>{m.full_name||"Unnamed user"}</div>
+                <div style={{fontSize:11,color:T.faint}}>Since {m.created_at?new Date(m.created_at).toLocaleDateString():"—"}</div>
+              </div>
+              {canAssign
+                ? <select value={m.role||"member"}
+                    onChange={e=>changeRole(m.id,e.target.value)}
+                    style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:5,
+                      padding:"3px 7px",color:roleColor(m.role),fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                    {assignableRoles.map(r=><option key={r.slug} value={r.slug}>{r.name}</option>)}
+                  </select>
+                : <Bdg color={roleColor(m.role)}>{mRoleObj?.name||m.role||"member"}</Bdg>
+              }
+            </div>;
+          })}
         </div>
 
         {/* Pending join requests */}
@@ -2768,7 +2789,7 @@ const ROLE_PERMISSIONS = {
 // ═══════════════════════════════════════════════════════════════════════════
 // PROJECT WORKSPACE
 // ═══════════════════════════════════════════════════════════════════════════
-function ProjectWorkspace({proj,tab,setTab,userRole,clients,rates,cabLib,company,entitlement,onMutate,onBack,onPushXero,onGotoLibrary,onOpenSetup,pop}) {
+function ProjectWorkspace({proj,tab,setTab,userRole,userTier,userPermissions,clients,rates,cabLib,company,entitlement,onMutate,onBack,onPushXero,onGotoLibrary,onOpenSetup,pop}) {
   const [variations,    setVariations]    = useState([]);
   const [varsLoading,   setVarsLoading]   = useState(true);
 
@@ -2780,16 +2801,19 @@ function ProjectWorkspace({proj,tab,setTab,userRole,clients,rates,cabLib,company
   }
   useEffect(()=>{ reloadVariations(); },[proj.id]);
 
-  const allowedIds = ROLE_PERMISSIONS[userRole] || null;
-  const visibleTabs = allowedIds ? WORKSPACE_TABS.filter(t=>allowedIds.includes(t.id)) : WORKSPACE_TABS;
+  // DB permissions: null = unrestricted (owner/gm/member with no config)
+  const visibleTabs = userPermissions
+    ? WORKSPACE_TABS.filter(t => userPermissions[t.id]?.can_view !== false)
+    : WORKSPACE_TABS;
+  const canEdit = tabId => !userPermissions || userPermissions[tabId]?.can_edit !== false;
 
-  // If current tab is not visible for this role, switch to first allowed tab
+  // Auto-switch if active tab is no longer visible for this role
   useEffect(()=>{
-    if(allowedIds && !allowedIds.includes(tab) && visibleTabs.length>0){
+    if(userPermissions && !userPermissions[tab]?.can_view && visibleTabs.length>0){
       setTab(visibleTabs[0].id);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[userRole, proj.id]);
+  },[userPermissions, proj.id]);
 
   const c = calc({...proj, variations});
   const sm = STATUS[proj.status]||STATUS.draft;
@@ -11337,9 +11361,237 @@ function CancelSubscriptionModal({currentPlan, companyId, onClose, pop}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ROLES MODULE — permission matrix UI for owners/GMs/team managers
+// ═══════════════════════════════════════════════════════════════════════════
+const NR_DEFAULT = {name:"",tier:10,color:"#3b82f6",description:"",can_manage_team:false};
+const ROLE_COLORS = ["#f59e0b","#8b5cf6","#3b82f6","#10b981","#ef4444","#14b8a6","#f97316","#ec4899","#64748b","#0ea5e9"];
+
+function RolesModule({companyId, userTier, pop}) {
+  const [roles,    setRoles]   = useState([]);
+  const [loading,  setLoading] = useState(true);
+  const [editId,   setEditId]  = useState(null);   // role.id being permission-edited
+  const [editPerms,setEditPerms]= useState({});     // {tabId:{can_view,can_edit}}
+  const [editMeta, setEditMeta] = useState({});     // {name,tier,color,can_manage_team,description}
+  const [showNew,  setShowNew] = useState(false);
+  const [nr,       setNr]      = useState(NR_DEFAULT);
+  const [busy,     setBusy]    = useState(false);
+  const [seeding,  setSeeding] = useState(false);
+
+  async function reload(){
+    setLoading(true);
+    const {data}=await dbGetCompanyRoles(companyId);
+    setRoles(data||[]);
+    setLoading(false);
+  }
+  useEffect(()=>{ reload(); },[companyId]);
+
+  async function startEdit(role){
+    setEditId(role.id);
+    setEditMeta({name:role.name,tier:role.tier,color:role.color||"#64748b",
+      can_manage_team:role.can_manage_team||false,description:role.description||""});
+    const {data}=await dbGetRoleTabPermissions(role.id);
+    const perms={};
+    WORKSPACE_TABS.forEach(t=>{
+      const found=(data||[]).find(p=>p.tab_id===t.id);
+      perms[t.id]={can_view:found?.can_view??false,can_edit:found?.can_edit??false};
+    });
+    setEditPerms(perms);
+  }
+
+  async function saveRole(){
+    if(!editMeta.name.trim()) return pop("Role name required.","error");
+    setBusy(true);
+    await dbUpdateCompanyRole(editId, editMeta);
+    await Promise.all(WORKSPACE_TABS.map(t=>
+      dbUpsertTabPermission(companyId, editId, t.id, editPerms[t.id]?.can_view||false, editPerms[t.id]?.can_edit||false)
+    ));
+    setBusy(false);
+    setEditId(null);
+    await reload();
+    pop("Role saved.");
+  }
+
+  async function createRole(){
+    if(!nr.name.trim()) return pop("Role name required.","error");
+    if(nr.tier<=userTier) return pop(`Tier must be greater than your own (${userTier}).`,"error");
+    const slug=nr.name.toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,"").slice(0,30)||`role_${Date.now()}`;
+    setBusy(true);
+    const {error}=await dbCreateCompanyRole(companyId,{...nr,slug});
+    setBusy(false);
+    if(error) return pop(error,"error");
+    await reload();
+    setShowNew(false);
+    setNr(NR_DEFAULT);
+    pop("Role created.");
+  }
+
+  async function deleteRole(role){
+    if(!safeConfirm(`Delete "${role.name}"? Members with this role will keep their role slug but lose configured permissions.`)) return;
+    const {error}=await dbDeleteCompanyRole(role.id);
+    if(error) return pop(error,"error");
+    await reload();
+    pop("Role deleted.","info");
+  }
+
+  async function initDefaults(){
+    setSeeding(true);
+    const {error}=await dbSeedCompanyRoles(companyId);
+    setSeeding(false);
+    if(error) return pop(error,"error");
+    await reload();
+    pop("Default roles initialized.");
+  }
+
+  const canManage = r => r.tier > userTier;
+
+  return <Card sx={{marginTop:14}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+      <div style={{fontWeight:700,fontSize:13,color:T.accent,textTransform:"uppercase",letterSpacing:"0.05em"}}>Roles & Permissions</div>
+      <Row gap={8}>
+        {!loading&&!roles.length&&<Btn sm v="gho" onClick={initDefaults} disabled={seeding}>{seeding?"Initializing…":"Initialize Defaults"}</Btn>}
+        <Btn sm v="pri" onClick={()=>{setShowNew(true);setEditId(null);}}>+ Create Role</Btn>
+      </Row>
+    </div>
+    <div style={{fontSize:11,color:T.faint,marginBottom:12,lineHeight:1.6,padding:"8px 10px",background:T.accentDim,borderRadius:6,border:`1px solid ${T.accentBrd}`}}>
+      Roles control which project tabs each team member can view and edit. Tier 1 = highest authority.
+      Owners (tier 1) and General Managers (tier 2) always have full unrestricted access.
+      You can only manage roles with a higher tier number than your own.
+    </div>
+
+    {/* Create new role */}
+    {showNew&&<Card hi sx={{marginBottom:14}}>
+      <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:T.accent}}>New Role</div>
+      <Grid2 gap={8}>
+        <Inp label="Role Name" value={nr.name} onChange={v=>setNr(x=>({...x,name:v}))} placeholder="e.g. Site Foreman"/>
+        <Inp label={`Tier (must be > ${userTier})`} value={nr.tier} onChange={v=>setNr(x=>({...x,tier:Math.max(userTier+1,parseInt(v)||10)}))} type="number" mono/>
+        <Inp label="Description" value={nr.description} onChange={v=>setNr(x=>({...x,description:v}))}
+          sx={{gridColumn:"1/-1"}} placeholder="What this role does / which areas they manage"/>
+      </Grid2>
+      <div style={{marginBottom:10}}>
+        <div style={{fontSize:11,color:T.muted,marginBottom:6}}>Color</div>
+        <Row gap={6} wrap>
+          {ROLE_COLORS.map(c=><div key={c} onClick={()=>setNr(x=>({...x,color:c}))}
+            style={{width:22,height:22,borderRadius:"50%",background:c,cursor:"pointer",
+              boxShadow:nr.color===c?`0 0 0 2px #fff,0 0 0 4px ${c}`:""}}/>)}
+        </Row>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,cursor:"pointer"}}
+        onClick={()=>setNr(x=>({...x,can_manage_team:!x.can_manage_team}))}>
+        <div style={{width:16,height:16,borderRadius:3,border:`2px solid ${nr.can_manage_team?T.purple:T.border}`,
+          background:nr.can_manage_team?T.purple:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          {nr.can_manage_team&&<span style={{color:"#fff",fontSize:10,fontWeight:900}}>✓</span>}
+        </div>
+        <span style={{fontSize:12,color:T.text}}>Can manage team — assign roles to members (roles below their tier only)</span>
+      </div>
+      <Row gap={8}>
+        <Btn v="pri" sm onClick={createRole} disabled={busy}>{busy?"Creating…":"Create Role"}</Btn>
+        <Btn sm onClick={()=>{setShowNew(false);setNr(NR_DEFAULT);}}>Cancel</Btn>
+      </Row>
+    </Card>}
+
+    {loading&&<div style={{color:T.faint,fontSize:13}}>Loading…</div>}
+
+    {/* Role list */}
+    {!loading&&roles.map(role=><div key={role.id} style={{marginBottom:4}}>
+      {/* Role header row */}
+      <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:`1px solid ${T.border}`}}>
+        <div style={{width:10,height:10,borderRadius:"50%",background:role.color||"#64748b",flexShrink:0}}/>
+        <div style={{flex:1,minWidth:0}}>
+          <Row gap={6} sx={{alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{fontWeight:700,fontSize:13,color:T.text}}>{role.name}</span>
+            <Bdg color={T.faint} sm>Tier {role.tier}</Bdg>
+            {role.is_system&&<Bdg color={T.accent} sm>System</Bdg>}
+            {role.can_manage_team&&<Bdg color={T.purple} sm>Manages team</Bdg>}
+          </Row>
+          {role.description&&<div style={{fontSize:11,color:T.faint,marginTop:2}}>{role.description}</div>}
+        </div>
+        <Row gap={6}>
+          {canManage(role)&&<Btn sm v="gho" onClick={()=>editId===role.id?(setEditId(null)):(startEdit(role))}>
+            {editId===role.id?"▲ Close":"✏ Edit"}
+          </Btn>}
+          {canManage(role)&&!role.is_system&&<Btn sm v="red" onClick={()=>deleteRole(role)}>Delete</Btn>}
+          {!canManage(role)&&<span style={{fontSize:11,color:T.faint}}>{role.tier===userTier?"Your role":"Higher tier"}</span>}
+        </Row>
+      </div>
+
+      {/* Expanded edit panel */}
+      {editId===role.id&&<div style={{background:T.surface,border:`1px solid ${T.border}`,
+        borderRadius:7,padding:14,margin:"4px 0 10px",borderTop:"none",borderTopLeftRadius:0,borderTopRightRadius:0}}>
+
+        {/* Meta fields */}
+        <Grid2 gap={8} sx={{marginBottom:10}}>
+          <Inp label="Role Name" value={editMeta.name} onChange={v=>setEditMeta(x=>({...x,name:v}))}/>
+          <Inp label="Tier" value={editMeta.tier} onChange={v=>setEditMeta(x=>({...x,tier:Math.max(userTier+1,parseInt(v)||10)}))}
+            type="number" mono/>
+          <Inp label="Description" value={editMeta.description} onChange={v=>setEditMeta(x=>({...x,description:v}))}
+            sx={{gridColumn:"1/-1"}} placeholder="What this role does"/>
+        </Grid2>
+        <div style={{marginBottom:10}}>
+          <div style={{fontSize:11,color:T.muted,marginBottom:6}}>Color</div>
+          <Row gap={6} wrap>
+            {ROLE_COLORS.map(c=><div key={c} onClick={()=>setEditMeta(x=>({...x,color:c}))}
+              style={{width:22,height:22,borderRadius:"50%",background:c,cursor:"pointer",
+                boxShadow:editMeta.color===c?`0 0 0 2px #fff,0 0 0 4px ${c}`:""}}/>)}
+          </Row>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,cursor:"pointer"}}
+          onClick={()=>setEditMeta(x=>({...x,can_manage_team:!x.can_manage_team}))}>
+          <div style={{width:16,height:16,borderRadius:3,border:`2px solid ${editMeta.can_manage_team?T.purple:T.border}`,
+            background:editMeta.can_manage_team?T.purple:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            {editMeta.can_manage_team&&<span style={{color:"#fff",fontSize:10,fontWeight:900}}>✓</span>}
+          </div>
+          <span style={{fontSize:12,color:T.text}}>Can manage team — can assign roles (with higher tier) to members</span>
+        </div>
+
+        {/* Permission matrix */}
+        <div style={{fontSize:11,color:T.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>
+          Tab Permissions
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 64px 64px",gap:"1px 0",background:T.border,borderRadius:6,overflow:"hidden"}}>
+          <div style={{background:T.bg,padding:"6px 10px",fontSize:10,color:T.faint,fontWeight:700,textTransform:"uppercase"}}>Tab</div>
+          <div style={{background:T.bg,padding:"6px 4px",fontSize:10,color:T.faint,fontWeight:700,textTransform:"uppercase",textAlign:"center"}}>View</div>
+          <div style={{background:T.bg,padding:"6px 4px",fontSize:10,color:T.faint,fontWeight:700,textTransform:"uppercase",textAlign:"center"}}>Edit</div>
+          {WORKSPACE_TABS.map((t,i)=>{
+            const p=editPerms[t.id]||{can_view:false,can_edit:false};
+            const bg=i%2===0?T.surface:T.bg;
+            return (<Fragment key={t.id}>
+              <div style={{background:bg,padding:"7px 10px",fontSize:12,color:p.can_view?T.text:T.faint}}>{t.label}</div>
+              <div style={{background:bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <input type="checkbox" checked={!!p.can_view}
+                  onChange={e=>{const v=e.target.checked;
+                    setEditPerms(x=>({...x,[t.id]:{can_view:v,can_edit:v?x[t.id]?.can_edit:false}}));}}
+                  style={{cursor:"pointer",width:15,height:15,accentColor:T.accent}}/>
+              </div>
+              <div style={{background:bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <input type="checkbox" checked={!!p.can_edit} disabled={!p.can_view}
+                  onChange={e=>setEditPerms(x=>({...x,[t.id]:{...x[t.id],can_edit:e.target.checked}}))}
+                  style={{cursor:p.can_view?"pointer":"not-allowed",width:15,height:15,accentColor:T.accent,opacity:p.can_view?1:0.3}}/>
+              </div>
+            </Fragment>);
+          })}
+        </div>
+        <div style={{fontSize:11,color:T.faint,marginTop:8,lineHeight:1.5}}>
+          <strong>View</strong> — tab appears in the project workspace. <strong>Edit</strong> — actions and save buttons in that tab are active.
+          Team members without access won't see hidden tabs at all.
+        </div>
+        <Row gap={8} sx={{marginTop:12}}>
+          <Btn v="pri" sm onClick={saveRole} disabled={busy}>{busy?"Saving…":"Save Changes"}</Btn>
+          <Btn sm onClick={()=>setEditId(null)}>Cancel</Btn>
+        </Row>
+      </div>}
+    </div>)}
+
+    {!loading&&!roles.length&&<div style={{color:T.faint,fontSize:12,padding:"8px 0"}}>
+      No roles configured yet. Click "Initialize Defaults" to set up the standard roles,
+      or "Create Role" to build your own from scratch.
+    </div>}
+  </Card>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SETTINGS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function SettingsModule({company, setCompany, companyId, userRole, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, onTeamCountChange, pop}) {
+function SettingsModule({company, setCompany, companyId, userRole, userTier, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, onTeamCountChange, pop}) {
   const [local, setLocal] = useState(company);
   const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?"":displayName)||"");
   const [savingName, setSavingName] = useState(false);
@@ -11574,10 +11826,11 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
 
             <TeamSection companyId={companyId}
               companyAbn={local.abn||""} companyCountry={local.country||"AU"}
-              onCountChange={onTeamCountChange} pop={pop}/>
+              userTier={userTier} onCountChange={onTeamCountChange} pop={pop}/>
+            <RolesModule companyId={companyId} userTier={userTier} pop={pop}/>
           </div>
         </div>
-      : <Card sx={{marginBottom:0}}>
+      : <><Card sx={{marginBottom:0}}>
           <div style={{fontWeight:700,marginBottom:4,color:T.accent,fontSize:13}}>Your Company</div>
           <div style={{fontSize:16,fontWeight:700,color:T.text,marginBottom:4}}>{local.name||"—"}</div>
           {local.abn&&<div style={{fontSize:12,color:T.muted,fontFamily:T.mono,marginBottom:4}}>
@@ -11587,6 +11840,11 @@ function SettingsModule({company, setCompany, companyId, userRole, trash, setTra
             Company details and settings are managed by your company owner.
           </div>
         </Card>
+        {userTier<=2&&<TeamSection companyId={companyId}
+          companyAbn={local.abn||""} companyCountry={local.country||"AU"}
+          userTier={userTier} onCountChange={onTeamCountChange} pop={pop}/>}
+        {userTier<=2&&<RolesModule companyId={companyId} userTier={userTier} pop={pop}/>}
+      </>
     }
 
     <div style={{display:"flex",flexDirection:"column",gap:14,marginTop:14}}>
