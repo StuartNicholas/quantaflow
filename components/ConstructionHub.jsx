@@ -2748,7 +2748,10 @@ function Dashboard({projects, xero, onOpen, setNav}) {
             </Row>
           </div>;
         })}
-        {!projects.length&&<div style={{color:T.faint,fontSize:12}}>No projects yet.</div>}
+        {!projects.length&&<div style={{padding:"20px 0",textAlign:"center"}}>
+          <div style={{fontSize:12,color:T.faint,marginBottom:8}}>No projects yet.</div>
+          <div onClick={()=>setNav("projects")} style={{fontSize:12,color:T.accent,cursor:"pointer",textDecoration:"underline"}}>Create your first project →</div>
+        </div>}
       </Card>
 
       <Card>
@@ -2948,8 +2951,13 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
               </td>
             </tr>;
           })}
-          {!filtered.length&&<tr><td colSpan={6} style={{padding:32,textAlign:"center",color:T.faint}}>
-            No projects found.
+          {!filtered.length&&<tr><td colSpan={6} style={{padding:40,textAlign:"center",color:T.faint}}>
+            {projects.length===0
+              ? <div>
+                  <div style={{fontSize:13,fontWeight:600,marginBottom:6}}>No projects yet</div>
+                  <div style={{fontSize:12}}>Click <strong>+ New Project</strong> to create your first project.</div>
+                </div>
+              : "No projects match the current filter."}
           </td></tr>}
         </tbody>
       </table>
@@ -2966,12 +2974,12 @@ const WORKSPACE_TABS = [
   {id:"estimate",    label:"③ Estimate"},
   {id:"quote",       label:"④ Quote"},
   {id:"orderlist",   label:"🧾 Order List"},
-  {id:"production",  label:"🏗️ Production"},
-  {id:"procurement", label:"Procurement"},
-  {id:"jobcost",     label:"Job Costs"},
-  {id:"handover",    label:"Handover"},
-  {id:"claims",      label:"Claims"},
-  {id:"info",        label:"Project Info"},
+  {id:"production",  label:"🏗 Production"},
+  {id:"procurement", label:"📦 Procurement"},
+  {id:"jobcost",     label:"💰 Job Costs"},
+  {id:"handover",    label:"✅ Handover"},
+  {id:"claims",      label:"📋 Claims"},
+  {id:"info",        label:"ℹ Project Info"},
 ];
 
 // null = unrestricted (all tabs visible)
