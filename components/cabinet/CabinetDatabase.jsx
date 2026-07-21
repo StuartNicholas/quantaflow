@@ -128,7 +128,7 @@ function DraftReviewBanner({ draftCabinets, onApproveAll, onDiscardAll, onFilter
 
 // ── Cabinet Row (compact list view) ──────────────────────────────────────────
 
-function CabinetRow({ cab, onEdit, onDelete, onStatusChange, selected, onSelect, T }) {
+function CabinetRow({ cab, onEdit, onDelete, onDuplicate, onStatusChange, selected, onSelect, T }) {
   const statusDef = STATUSES.find(s => s.key === cab.status) || STATUSES[0];
   const [statusOpen, setStatusOpen] = useState(false);
 
@@ -229,10 +229,15 @@ function CabinetRow({ cab, onEdit, onDelete, onStatusChange, selected, onSelect,
       </div>
 
       {/* Actions */}
-      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
         <button onClick={() => onEdit(cab)}
-          style={{ background: T.card2, color: T.muted, border: `1px solid ${T.border}`, borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer" }}>
+          style={{ background: T.card2, color: T.muted, border: `1px solid ${T.border}`, borderRadius: 4, padding: "4px 8px", fontSize: 11, cursor: "pointer" }}>
           Edit
+        </button>
+        <button onClick={() => onDuplicate && onDuplicate(cab)}
+          title="Duplicate this cabinet"
+          style={{ background: "none", color: T.faint, border: "none", padding: "4px 6px", fontSize: 12, cursor: "pointer" }}>
+          ⧉
         </button>
         <button onClick={() => onDelete(cab.id)}
           style={{ background: "none", color: T.faint, border: "none", padding: "4px 6px", fontSize: 12, cursor: "pointer" }}>
@@ -508,6 +513,17 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
   async function handleApprove(id) {
     await approveDraftCabinet(id);
     pop?.("Cabinet approved.");
+    load();
+  }
+
+  async function handleDuplicate(cab) {
+    const { id: _id, created_at: _c, updated_at: _u, created_by: _cb, updated_by: _ub, ...copy } = cab;
+    copy.cabinet_number = "";
+    copy.ai_draft = false;
+    copy.ai_source = "manual";
+    const { error } = await createCabinet(projectId, copy);
+    if (error) { pop?.(error, "error"); return; }
+    pop?.("Cabinet duplicated — enter a new cabinet number.");
     load();
   }
 
@@ -1101,6 +1117,7 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
                       cab={cab}
                       onEdit={c => setEditingId(c.id)}
                       onDelete={handleDelete}
+                      onDuplicate={handleDuplicate}
                       onStatusChange={handleStatusChange}
                       selected={selectedIds.has(cab.id)}
                       onSelect={toggleSelect}
