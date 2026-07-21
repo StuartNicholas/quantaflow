@@ -3293,6 +3293,161 @@ function OrderListModule({proj, pop}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// AI REVIEW PANEL
+// Shown after AI extraction completes, before items are committed to the DB.
+// Users can edit labels/quantities, delete unwanted items, then accept.
+// ═══════════════════════════════════════════════════════════════════════════
+function AiReviewPanel({ result, onAccept, onDiscard, T }) {
+  const [reviewItems, setReviewItems] = React.useState(() => result.items.map(it => ({ ...it })));
+  const [editingId, setEditingId] = React.useState(null);
+  const [editDraft, setEditDraft] = React.useState({});
+  const [sel, setSel] = React.useState(new Set(result.items.map(i => i.id)));
+
+  const toggleAll = () => setSel(sel.size === reviewItems.length ? new Set() : new Set(reviewItems.map(i => i.id)));
+  const toggleItem = id => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  function startEdit(it) {
+    setEditingId(it.id);
+    setEditDraft({ label: it.label, qty: it.qty, unit: it.unit });
+  }
+  function commitEdit(id) {
+    setReviewItems(rs => rs.map(r => r.id === id ? { ...r, ...editDraft, qty: parseFloat(editDraft.qty) || 0 } : r));
+    setEditingId(null);
+  }
+  function deleteItem(id) {
+    setReviewItems(rs => rs.filter(r => r.id !== id));
+    setSel(s => { const n = new Set(s); n.delete(id); return n; });
+  }
+  function deleteSelected() {
+    const ids = sel;
+    setReviewItems(rs => rs.filter(r => !ids.has(r.id)));
+    setSel(new Set());
+  }
+
+  const selectedItems = reviewItems.filter(i => sel.has(i.id));
+
+  // Group by layer prefix for display
+  const { layers, aiSummary } = result;
+  const layerMap = Object.fromEntries((layers || []).map(l => [l.id, l]));
+
+  const byLayer = {};
+  reviewItems.forEach(it => {
+    const lid = it.layerId ?? 'misc';
+    if (!byLayer[lid]) byLayer[lid] = [];
+    byLayer[lid].push(it);
+  });
+
+  const inputStyle = {
+    background: T.bg, border: `1px solid ${T.border}`, borderRadius: 4,
+    color: T.text, fontSize: 12, padding: '3px 7px', fontFamily: T.font,
+  };
+
+  return (
+    <div style={{ border: `2px solid ${T.teal}55`, borderRadius: 12, overflow: 'hidden', marginBottom: 16 }}>
+      {/* Header */}
+      <div style={{ background: `${T.teal}18`, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 800, fontSize: 14, color: T.teal }}>
+            AI Extraction — Review Before Accepting
+          </div>
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
+            {reviewItems.length} items extracted · {sel.size} selected
+            {aiSummary?.buildingType && <span> · {aiSummary.buildingType}</span>}
+            {aiSummary?.confidence && <Bdg color={aiSummary.confidence === 'high' ? T.green : T.yellow} sm>{aiSummary.confidence} confidence</Bdg>}
+          </div>
+        </div>
+        <Row gap={8}>
+          {sel.size > 0 && sel.size < reviewItems.length && (
+            <Btn sm v="red" onClick={deleteSelected}>Delete {sel.size} selected</Btn>
+          )}
+          <Btn sm v="gho" onClick={onDiscard}>Discard</Btn>
+          <Btn sm v="tel" onClick={() => onAccept(reviewItems.filter(i => sel.has(i.id)))}>
+            Accept {sel.size === reviewItems.length ? 'All' : sel.size} Items →
+          </Btn>
+        </Row>
+      </div>
+
+      {/* Select all + count */}
+      <div style={{ padding: '8px 16px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12, color: T.muted }}>
+          <input type="checkbox" checked={sel.size === reviewItems.length && reviewItems.length > 0}
+            onChange={toggleAll} style={{ cursor: 'pointer', accentColor: T.teal }} />
+          Select all
+        </label>
+        <span style={{ fontSize: 11, color: T.faint }}>Uncheck items to exclude them, or edit/delete individual lines</span>
+      </div>
+
+      {/* Items grouped by layer */}
+      <div style={{ maxHeight: 480, overflowY: 'auto', background: T.card }}>
+        {Object.entries(byLayer).map(([lid, its]) => {
+          const layer = layerMap[lid] || layerMap[parseInt(lid)];
+          return (
+            <div key={lid}>
+              <div style={{ padding: '6px 16px', background: T.bg, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+                {layer?.color && <span style={{ width: 10, height: 10, borderRadius: 2, background: layer.color, flexShrink: 0, display: 'inline-block' }}/>}
+                <span style={{ fontWeight: 700, fontSize: 11, color: T.faint, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  {layer?.name || 'Items'}
+                </span>
+                <span style={{ fontSize: 11, color: T.faint }}>({its.length})</span>
+              </div>
+              {its.map(it => (
+                <div key={it.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '7px 16px',
+                  borderBottom: `1px solid ${T.border}22`,
+                  background: sel.has(it.id) ? 'transparent' : `${T.red}08`,
+                  opacity: sel.has(it.id) ? 1 : 0.5,
+                }}>
+                  <input type="checkbox" checked={sel.has(it.id)} onChange={() => toggleItem(it.id)}
+                    style={{ cursor: 'pointer', accentColor: T.teal, flexShrink: 0 }} />
+                  {editingId === it.id ? (
+                    <Row gap={6} sx={{ flex: 1, flexWrap: 'wrap' }}>
+                      <input value={editDraft.label} onChange={e => setEditDraft(d => ({ ...d, label: e.target.value }))}
+                        style={{ ...inputStyle, flex: 1, minWidth: 160 }} autoFocus />
+                      <input type="number" value={editDraft.qty} onChange={e => setEditDraft(d => ({ ...d, qty: e.target.value }))}
+                        style={{ ...inputStyle, width: 70 }} />
+                      <input value={editDraft.unit} onChange={e => setEditDraft(d => ({ ...d, unit: e.target.value }))}
+                        style={{ ...inputStyle, width: 55 }} />
+                      <Btn sm v="grn" onClick={() => commitEdit(it.id)}>Save</Btn>
+                      <Btn sm v="gho" onClick={() => setEditingId(null)}>Cancel</Btn>
+                    </Row>
+                  ) : (
+                    <>
+                      <span style={{ flex: 1, fontSize: 12, color: T.text }}>{it.label}</span>
+                      <span style={{ fontSize: 12, color: T.accent, fontFamily: T.mono, minWidth: 40, textAlign: 'right' }}>
+                        {parseFloat((it.qty || 0).toFixed(2))}
+                      </span>
+                      <span style={{ fontSize: 11, color: T.faint, minWidth: 28 }}>{it.unit}</span>
+                      <button onClick={() => startEdit(it)} style={{ background: 'none', border: 'none', color: T.muted, cursor: 'pointer', fontSize: 11, padding: '2px 6px', borderRadius: 4 }}>Edit</button>
+                      <button onClick={() => deleteItem(it.id)} style={{ background: 'none', border: 'none', color: T.red, cursor: 'pointer', fontSize: 11, padding: '2px 6px', borderRadius: 4 }}>✕</button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+        })}
+        {reviewItems.length === 0 && (
+          <div style={{ padding: 24, textAlign: 'center', color: T.faint, fontSize: 13 }}>
+            All items deleted. Click Discard to cancel or Accept to add nothing.
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center', background: T.bg }}>
+        <span style={{ fontSize: 12, color: T.muted, flex: 1 }}>
+          {sel.size} of {reviewItems.length} items will be added to your takeoff.
+        </span>
+        <Btn sm v="gho" onClick={onDiscard}>Discard</Btn>
+        <Btn sm v="tel" onClick={() => onAccept(reviewItems.filter(i => sel.has(i.id)))}>
+          Accept {sel.size === reviewItems.length ? 'All' : `${sel.size} Selected`} →
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // TAKEOFF MODULE
 // ═══════════════════════════════════════════════════════════════════════════
 function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
@@ -3327,6 +3482,7 @@ function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
   const [creditsExhausted, setCreditsExhausted] = useState(null); // {used,limit}
   const [aiUsage, setAiUsage] = useState(null); // {used,limit} for this month
   const [viewMode, setViewMode] = useState("list"); // "list" | "matrix" | "types" | "bom"
+  const [pendingAiResult, setPendingAiResult] = useState(null); // {layers, items, aiSummary} awaiting review
   const [pickLevel, setPickLevel] = useState("Ground Floor");
   const [pickUnitType, setPickUnitType] = useState("");
   const [showPushModal, setShowPushModal] = useState(false);
@@ -3343,6 +3499,37 @@ function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
   const log = (msg, type="info") => setALog(l=>[...l,{msg,type,ts:new Date().toLocaleTimeString()}]);
 
   useEffect(()=>{ if(logRef.current) logRef.current.scrollTop=logRef.current.scrollHeight; },[aLog]);
+
+  async function confirmAiResult(reviewedItems) {
+    if(!pendingAiResult) return;
+    const { layers:newLayers, aiSummary:newAiSummary, pdfName } = pendingAiResult;
+    const {data:savedTakeoff}=await dbSaveTakeoff(proj.id,{
+      pdfName, aiSummary:newAiSummary, layers:newLayers, items:reviewedItems,
+    });
+    let syncItems=reviewedItems;
+    if(savedTakeoff){
+      setTakeoffId(savedTakeoff.id);
+      const {data:restored}=await dbGetTakeoff(proj.id);
+      if(restored){
+        const norm=(restored.items||[]).map(r=>({
+          ...r, layerId:r.layer_id!=null?(isNaN(Number(r.layer_id))?r.layer_id:Number(r.layer_id)):null,
+        }));
+        setItems(norm); syncItems=norm;
+      } else { setItems(reviewedItems); }
+    } else { setItems(reviewedItems); }
+    setLayers(newLayers);
+    setAiSummary(newAiSummary);
+    onMutate(p=>({...p, takeoffLayers:newLayers, takeoffItems:syncItems, aiSummary:newAiSummary}));
+    setPendingAiResult(null);
+    getSchemes(proj.id).then(({data:d})=>{ if(d) setSchemeData(d); });
+    log(`✓ ${reviewedItems.length} items accepted to takeoff.`,"success");
+    pop(`${reviewedItems.length} AI items added to takeoff.`);
+  }
+
+  function discardAiResult() {
+    setPendingAiResult(null);
+    log("AI results discarded.","info");
+  }
 
   // ── Restore persisted takeoff from Supabase on mount ──────────────────────
   useEffect(()=>{
@@ -3934,36 +4121,9 @@ ${EXTRACT_SCHEMA}`;
         tradesUsed:tradeKeys,
       };
 
-      // Persist to Supabase (full replace) — sets local state from returned UUIDs
-      const {data:savedTakeoff}=await dbSaveTakeoff(proj.id,{
-        pdfName:pdfMeta?.name,
-        aiSummary:newAiSummary,
-        layers:newLayers,
-        items:newItems,
-      });
-      let syncItems=newItems;
-      if(savedTakeoff){
-        setTakeoffId(savedTakeoff.id);
-        // Re-fetch items so we have the real UUIDs from the DB
-        const {data:restored}=await dbGetTakeoff(proj.id);
-        if(restored){
-          const norm=(restored.items||[]).map(r=>({
-            ...r, layerId:r.layer_id!=null?(isNaN(Number(r.layer_id))?r.layer_id:Number(r.layer_id)):null,
-          }));
-          setItems(norm);
-          syncItems=norm;
-        } else {
-          setItems(newItems);
-        }
-      } else {
-        // DB save failed — keep in local state only (graceful fallback)
-        setItems(newItems);
-      }
-      setLayers(newLayers);
-      setAiSummary(newAiSummary);
-      // Sync into proj so OrderListModule / EstimateModule can still read these fields
-      onMutate(p=>({...p, takeoffLayers:newLayers, takeoffItems:syncItems, aiSummary:newAiSummary}));
-      log(`✓ ${newItems.length} takeoff items created (${totalCabLines} cabinetry lines). Push to Estimate when ready.`,"success");
+      // ── Hold for review before committing to DB
+      setPendingAiResult({ layers:newLayers, items:newItems, aiSummary:newAiSummary, pdfName:pdfMeta?.name });
+      log(`✓ ${newItems.length} items extracted (${totalCabLines} cabinetry lines). Review below, then accept to add to takeoff.`,"success");
 
       // Refresh scheme data in case AI auto-populated Schemes
       getSchemes(proj.id).then(({data:d})=>{ if(d) setSchemeData(d); });
@@ -4412,7 +4572,7 @@ ${EXTRACT_SCHEMA}`;
             <Btn v="pri" onClick={()=>{
               const sub=encodeURIComponent("Verixo — Purchase AI Credits");
               const body=encodeURIComponent(`Hi,\n\nWe've reached our AI credit limit (${creditsExhausted.used}/${creditsExhausted.limit} used) and would like to purchase additional credits.\n\nPlease let us know the options.\n\nThanks`);
-              window.open(`mailto:stuartdeannicholas@gmail.com?subject=${sub}&body=${body}`,"_self");
+              window.open(`mailto:hello@verixo.com.au?subject=${sub}&body=${body}`,"_self");
             }}>Purchase more credits</Btn>
             <Btn v="gho" onClick={()=>setCreditsExhausted(null)}>Dismiss</Btn>
           </Row>
@@ -4423,6 +4583,14 @@ ${EXTRACT_SCHEMA}`;
         </div>
       </Row>
     </Card>}
+
+    {/* ── AI REVIEW PANEL — edit/delete before committing to takeoff */}
+    {pendingAiResult&&<AiReviewPanel
+      result={pendingAiResult}
+      onAccept={confirmAiResult}
+      onDiscard={discardAiResult}
+      T={T}
+    />}
 
     {/* ── MEASURE PANEL — scale-calibrated on-plan measurement */}
     {measure&&<Card sx={{marginBottom:14,padding:0,overflow:"hidden"}} hi>
