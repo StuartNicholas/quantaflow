@@ -2220,6 +2220,31 @@ function ReportingModule({projects, clients}) {
     return ()=>{on=false;};
   },[]);
 
+  function exportCSV() {
+    const rows = [
+      ["Project","Client","Status","Quote Value (ex GST)","Total (inc GST)","Margin %","Created","Due Date"],
+      ...projects.map(p=>{
+        const cl = clients.find(c=>c.id===(p.clientId||p.client_id));
+        const c = calc(p);
+        return [
+          (p.name||p.projectName||"Untitled").replace(/,/g,""),
+          (cl?.name||p.client||"").replace(/,/g,""),
+          (p.status||"draft"),
+          c.exGst.toFixed(2),
+          c.total.toFixed(2),
+          (p.margin||0),
+          (p.created_at||p.createdAt||"").slice(0,10),
+          (p.due_date||p.dueDate||""),
+        ];
+      }),
+    ];
+    const csv = rows.map(r=>r.join(",")).join("\n");
+    const a = document.createElement("a");
+    a.href = "data:text/csv;charset=utf-8,"+encodeURIComponent(csv);
+    a.download = `verixo-projects-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+  }
+
   // ── Pipeline metrics from project list ──────────────────────────────────
   const byStatus = {};
   projects.forEach(p=>{
@@ -2309,8 +2334,19 @@ function ReportingModule({projects, clients}) {
     return `${Math.floor(s/86400)}d ago`;
   }
 
+  // ── Derived KPIs not yet calculated above ──────────────────────────────
+  const activeProjects = projects.filter(p=>!["archived","lost"].includes(p.status));
+  const avgProjectVal  = activeProjects.length>0
+    ? activeProjects.reduce((s,p)=>s+(p.quote_value||calc(p).total),0)/activeProjects.length : 0;
+  const margined = projects.filter(p=>p.margin>0);
+  const avgMargin = margined.length>0
+    ? margined.reduce((s,p)=>s+(p.margin||0),0)/margined.length : 0;
+
   return <div>
-    <Hdr>Reporting</Hdr>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:18}}>
+      <Hdr sx={{marginBottom:0}}>Reporting</Hdr>
+      {projects.length>0&&<Btn v="gho" sm onClick={exportCSV}>↓ Export CSV</Btn>}
+    </div>
 
     {/* ── Top KPIs ── */}
     <Row gap={12} wrap sx={{marginBottom:20}}>
@@ -2319,6 +2355,8 @@ function ReportingModule({projects, clients}) {
       <KPI label="Completed"        value={$$(completedVal,true)}  sub={`${byStatus.complete?.count||0} projects`} color={T.green}/>
       <KPI label="Quote Win Rate"   value={`${winRate}%`}          sub={`${accepted} accepted of ${latest.length} issued`} color={T.yellow}/>
       <KPI label="Accepted Value"   value={$$(acceptedValue,true)} sub={`${sent} still open`} color={T.teal}/>
+      {avgProjectVal>0&&<KPI label="Avg Project Value" value={$$(avgProjectVal,true)} sub="active projects" color={T.purple}/>}
+      {avgMargin>0&&<KPI label="Avg Margin" value={`${avgMargin.toFixed(1)}%`} sub="projects with margin" color={T.muted}/>}
     </Row>
 
     <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:16,alignItems:"start"}}>
