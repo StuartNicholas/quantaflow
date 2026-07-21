@@ -661,8 +661,10 @@ function Card({children, sx={}, hi}) {
     borderRadius:9,padding:18,...sx}}>{children}</div>;
 }
 
-function Row({children,gap=10,wrap,sx={}}) {
-  return <div style={{display:"flex",gap,flexWrap:wrap?"wrap":undefined,alignItems:"center",...sx}}>{children}</div>;
+function Row({children,gap=10,wrap,nowrap,sx={}}) {
+  // Always wrap on mobile unless caller opts out with nowrap
+  const doWrap = nowrap ? false : (wrap || mobile);
+  return <div style={{display:"flex",gap,flexWrap:doWrap?"wrap":undefined,alignItems:"center",...sx}}>{children}</div>;
 }
 
 function Grid2({children,gap=12,sx={}}) {
@@ -2766,11 +2768,11 @@ function ProjectsModule({projects,loading,error,company,builders,clients,onOpen,
       <Row gap={8}><Btn v="pri" onClick={create}>Create Project</Btn><Btn onClick={()=>setShowNew(false)}>Cancel</Btn></Row>
     </Card>}
 
-    <Row gap={10} sx={{marginBottom:14}}>
+    <Row gap={10} wrap sx={{marginBottom:14}}>
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search projects…"
-        style={{flex:1,background:T.card,border:`1px solid ${T.border}`,borderRadius:5,
+        style={{flex:1,minWidth:140,background:T.card,border:`1px solid ${T.border}`,borderRadius:5,
           padding:"7px 11px",color:T.text,fontSize:13,outline:"none",fontFamily:T.font}}/>
-      <Row gap={4}>
+      <Row gap={4} wrap>
         {["all",...Object.keys(STATUS)].map(k=>{
           const base = k==="all"?"All":(STATUS[k]?.label||k);
           const cnt  = k==="all" ? projects.length : (statusCounts[k]||0);
