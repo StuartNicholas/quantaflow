@@ -106,6 +106,110 @@ export default function BoxMatrix({ proj, T, pop }) {
     setCabinets(prev => prev.map(c => c.id === id ? { ...c, status: newStatus } : c));
   }
 
+  function printBoxMatrix() {
+    const e = v => String(v ?? "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const fmtAud = v => `$${Number(v).toLocaleString("en-AU", { minimumFractionDigits: 0 })}`;
+    const printed = new Date().toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
+
+    const groupByFn = c => {
+      if (groupBy === "unit_type")    return c.unit_type    || "Unassigned";
+      if (groupBy === "joinery_type") return c.joinery_type || "Unassigned";
+      if (groupBy === "building")     return c.building     || "Site";
+      if (groupBy === "level")        return c.level        || "Level —";
+      if (groupBy === "room")         return c.room         || "Unassigned";
+      return "All";
+    };
+    const grouped = {};
+    liveCabinets.forEach(c => {
+      const g = groupByFn(c);
+      if (!grouped[g]) grouped[g] = [];
+      grouped[g].push(c);
+    });
+
+    const totalSellPrint = liveCabinets.reduce((s, c) => s + Number(c.sell_price || 0), 0);
+
+    const statusCols = [
+      { key: "cutting",    label: "CUT" },
+      { key: "assembled",  label: "ASM" },
+      { key: "qc",         label: "QC"  },
+      { key: "dispatched", label: "DSP" },
+      { key: "installed",  label: "INS" },
+    ];
+    const statusColors = { cutting:"#d97706", assembled:"#7c3aed", qc:"#2563eb", dispatched:"#0891b2", installed:"#16a34a" };
+    const statusOrder  = ["pending","cutting","assembled","qc","dispatched","installed"];
+    const reached = (cur, chk) => statusOrder.indexOf(cur) >= statusOrder.indexOf(chk);
+
+    const headerCols = ["#","Cab #","Description","W","H","D","Matl","Door Style","Drs","Dwr","Sell","CUT","ASM","QC","DSP","INS"];
+    const rows = Object.entries(grouped).map(([group, cabs]) => {
+      const groupSell = cabs.reduce((s, c) => s + Number(c.sell_price || 0), 0);
+      const cabRows = cabs.map((cab, idx) => {
+        const statusCells = statusCols.map(s => {
+          const ok = reached(cab.status, s.key);
+          return `<td style="text-align:center;padding:5px 4px;border-bottom:1px solid #ddd;border-right:1px solid #ddd;background:${ok?`${statusColors[s.key]}22`:"transparent"}">
+            <span style="display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:2px;background:${ok?statusColors[s.key]:"transparent"};border:1.5px solid ${ok?statusColors[s.key]:"#ccc"};color:#fff;font-size:8px;font-weight:700">${ok?"✓":""}</span>
+          </td>`;
+        }).join("");
+        return `<tr>
+          <td style="text-align:center;color:#888;font-size:10px;padding:5px 4px;border-bottom:1px solid #ddd;border-right:1px solid #ddd">${idx+1}</td>
+          <td style="font-family:monospace;font-weight:700;color:#1d4ed8;padding:5px 6px;border-bottom:1px solid #ddd;border-right:1px solid #ddd">${e(cab.cabinet_number||"—")}</td>
+          <td style="padding:5px 6px;border-bottom:1px solid #ddd;border-right:1px solid #ddd">${e(cab.description||cab.cabinet_type||"—")}</td>
+          <td style="font-family:monospace;text-align:right;padding:5px 4px;border-bottom:1px solid #ddd;border-right:1px solid #ddd">${cab.width||"—"}</td>
+          <td style="font-family:monospace;text-align:right;padding:5px 4px;border-bottom:1px solid #ddd;border-right:1px solid #ddd">${cab.height||"—"}</td>
+          <td style="font-family:monospace;text-align:right;padding:5px 4px;border-bottom:1px solid #ddd;border-right:1px solid #ddd">${cab.depth||"—"}</td>
+          <td style="padding:5px 6px;border-bottom:1px solid #ddd;border-right:1px solid #ddd;font-size:10px">${e(cab.material||"—")}</td>
+          <td style="padding:5px 6px;border-bottom:1px solid #ddd;border-right:1px solid #ddd;font-size:10px">${e(cab.door_style||"—")}</td>
+          <td style="text-align:center;font-family:monospace;padding:5px 4px;border-bottom:1px solid #ddd;border-right:1px solid #ddd">${cab.door_qty||0}</td>
+          <td style="text-align:center;font-family:monospace;padding:5px 4px;border-bottom:1px solid #ddd;border-right:1px solid #ddd">${cab.drawer_qty||0}</td>
+          <td style="text-align:right;font-family:monospace;font-weight:700;padding:5px 6px;border-bottom:1px solid #ddd;border-right:1px solid #ddd">${cab.sell_price?fmtAud(cab.sell_price):"—"}</td>
+          ${statusCells}
+        </tr>`;
+      }).join("");
+      return `
+        <tr style="background:#1e293b;color:#fff">
+          <td colspan="5" style="padding:6px 10px;font-weight:700;font-size:11px">
+            ${e(group)} — ${cabs.length} cabinet${cabs.length!==1?"s":""} · ${fmtAud(groupSell)}
+          </td>
+          <td colspan="11" style="padding:6px 10px;font-size:10px;color:#94a3b8">
+            ${statusCols.map(s=>`${s.label}: ${cabs.filter(c=>reached(c.status,s.key)).length}/${cabs.length}`).join(" · ")}
+          </td>
+        </tr>
+        ${cabRows}`;
+    }).join("");
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Box Matrix — ${e(proj?.name||"Project")}</title>
+    <style>
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:11px;color:#0f172a;padding:20px}
+      h1{font-size:16px;font-weight:800;margin-bottom:2px}
+      .meta{font-size:10px;color:#64748b;margin-bottom:16px}
+      table{width:100%;border-collapse:collapse}
+      th{background:#1e293b;color:#fff;padding:6px 8px;text-align:left;font-size:9px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;border-right:1px solid #334155;white-space:nowrap}
+      .footer{margin-top:16px;padding-top:10px;border-top:2px solid #1e293b;display:flex;justify-content:space-between;font-size:10px}
+      .footer strong{font-size:13px}
+      @media print{body{padding:8px}@page{size:A3 landscape;margin:10mm}}
+    </style>
+    </head><body>
+    <h1>Box Matrix — ${e(proj?.name||"Project")}</h1>
+    <div class="meta">Printed ${printed} · ${liveCabinets.length} cabinet${liveCabinets.length!==1?"s":""} · Grouped by ${groupBy.replace("_"," ")} · ${fmtAud(totalSellPrint)} total sell</div>
+    <table>
+      <thead><tr>
+        ${headerCols.map(h=>`<th>${h}</th>`).join("")}
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="footer">
+      <span>Total: <strong>${fmtAud(totalSellPrint)}</strong></span>
+      <span>Installed: <strong>${liveCabinets.filter(c=>c.status==="installed").length} / ${liveCabinets.length}</strong></span>
+      <span>${liveCabinets.length} cabinet${liveCabinets.length!==1?"s":""}</span>
+    </div>
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+
+    const w = window.open("", "_blank");
+    if (w) { w.document.write(html); w.document.close(); }
+  }
+
   // ── Filtered cabinets ────────────────────────────────────────────────────────
 
   const liveCabinets = cabinets.filter(c => !c.ai_draft);
@@ -229,6 +333,13 @@ export default function BoxMatrix({ proj, T, pop }) {
           <option value="all">All Statuses</option>
           {STATUS_ORDER.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
         </select>
+
+        {liveCabinets.length > 0 && (
+          <button onClick={printBoxMatrix}
+            style={{ background: "transparent", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 5, padding: "6px 12px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
+            ⎙ Print
+          </button>
+        )}
       </div>
 
       {/* ── Matrix table ── */}
