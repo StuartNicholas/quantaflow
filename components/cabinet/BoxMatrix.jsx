@@ -86,7 +86,7 @@ export default function BoxMatrix({ proj, T, pop }) {
   const projectId = proj?.id;
   const [cabinets,  setCabinets]  = useState([]);
   const [loading,   setLoading]   = useState(true);
-  const [groupBy,   setGroupBy]   = useState("unit_type");
+  const [groupBy,   setGroupBy]   = useState(proj?.breakdown_preference || "unit_type");
   const [filterStatus, setFilterStatus] = useState("all");
   const [search, setSearch] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState({});
