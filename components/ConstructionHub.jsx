@@ -25,7 +25,7 @@ import { getCompanyRoles as dbGetCompanyRoles, getRoleTabPermissions as dbGetRol
 import { getEntitlement } from "../lib/db/entitlements";
 import { getProductionStatus, upsertProductionCell, getProductionSummaryForProjects } from "../lib/db/production";
 import { getSchemes, saveSchemes } from "../lib/db/schemes";
-import { listCabinets } from "../lib/db/cabinets";
+import { listCabinets, createCabinets } from "../lib/db/cabinets";
 import CabinetDatabase from "./cabinet/CabinetDatabase";
 import BoxMatrix from "./cabinet/BoxMatrix";
 import ProjectSetup from "./project/ProjectSetup";
@@ -3522,6 +3522,30 @@ function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
     onMutate(p=>({...p, takeoffLayers:newLayers, takeoffItems:syncItems, aiSummary:newAiSummary}));
     setPendingAiResult(null);
     getSchemes(proj.id).then(({data:d})=>{ if(d) setSchemeData(d); });
+
+    // Auto-generate draft cabinet DB entries from accepted takeoff items with cab metadata
+    const cabItems = reviewedItems.filter(it => it.cab?.type && it.type === "count");
+    if(cabItems.length > 0) {
+      const rows = cabItems.map((it, i) => ({
+        unit_type:    it.cab.unit    || "",
+        room:         it.cab.room    || "",
+        cabinet_type: it.cab.type    || "Custom",
+        description:  [it.cab.type, it.cab.config, it.cab.width ? `${it.cab.width}mm` : ""].filter(Boolean).join(" "),
+        width:        it.cab.width   || 600,
+        height:       720,
+        depth:        560,
+        qty:          Math.max(1, Math.round(it.qty || 1)),
+        status:       "pending",
+        ai_draft:     true,
+        ai_source:    "ai_takeoff",
+        ai_confidence:70,
+        sort_order:   i,
+      }));
+      createCabinets(proj.id, rows).then(({error}) => {
+        if(!error) log(`✓ ${rows.length} draft cabinet entries created in Cabinet Database.`, "success");
+      });
+    }
+
     log(`✓ ${reviewedItems.length} items accepted to takeoff.`,"success");
     pop(`${reviewedItems.length} AI items added to takeoff.`);
   }
