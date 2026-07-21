@@ -74,10 +74,6 @@ function joineryCategory(li) {
   return "Other";
 }
 
-function $$(n) {
-  return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 }).format(n || 0);
-}
-
 function lineAmt(li, marginPct) {
   return (li.qty || 0) * (li.rate || 0) * (1 + ((li.margin_pct ?? marginPct ?? 0) / 100));
 }
@@ -85,6 +81,7 @@ function lineAmt(li, marginPct) {
 // ── The actual PDF document ──────────────────────────────────────────────────
 
 function QuotePDFDoc({ items, proj, company, marginPct, overheadPct, gstPct, depositPct, versionNum, issuedAt, variations }) {
+  const $$ = n => new Intl.NumberFormat("en-AU", { style: "currency", currency: proj?.currency || "AUD", maximumFractionDigits: 0 }).format(n || 0);
   const approvedVars = (variations || []).filter(v => v.status === "approved");
   const varTotal     = approvedVars.reduce((s, v) => s + (v.amount || 0), 0);
   const sub          = (items || []).reduce((s, li) => s + lineAmt(li, marginPct), 0);
