@@ -691,6 +691,96 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
 
   const fmt = v => `$${Number(v).toLocaleString("en-AU", { minimumFractionDigits: 0 })}`;
 
+  function printView() {
+    const e = v => String(v ?? "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const statusColors = { pending:"#6b7280", cutting:"#d97706", assembled:"#7c3aed",
+      qc:"#2563eb", dispatched:"#0891b2", installed:"#16a34a" };
+    const statusLabels = { pending:"Pending", cutting:"Cutting", assembled:"Assembled",
+      qc:"QC Check", dispatched:"Dispatched", installed:"Installed" };
+
+    const groupByFn = c => {
+      if (groupBy === "room")         return c.room         || "Unassigned";
+      if (groupBy === "unit_type")    return c.unit_type    || "Unassigned";
+      if (groupBy === "joinery_type") return c.joinery_type || "Unassigned";
+      return "All";
+    };
+    const grouped = {};
+    cabinets.forEach(c => {
+      const g = groupByFn(c);
+      if (!grouped[g]) grouped[g] = [];
+      grouped[g].push(c);
+    });
+
+    const totalSell = cabinets.reduce((s,c) => s + Number(c.sell_price||0), 0);
+    const totalLabour = cabinets.reduce((s,c) => s + Number(c.labour_hours||0), 0);
+    const fmtAud = v => `$${Number(v).toLocaleString("en-AU",{minimumFractionDigits:0})}`;
+    const printed = new Date().toLocaleDateString("en-AU",{day:"2-digit",month:"short",year:"numeric"});
+
+    const rows = Object.entries(grouped).map(([group, cabs]) => {
+      const groupSell = cabs.reduce((s,c) => s + Number(c.sell_price||0), 0);
+      const cabRows = cabs.map(c => {
+        const sc = statusColors[c.status] || "#6b7280";
+        const sl = statusLabels[c.status] || c.status || "Pending";
+        return `<tr>
+          <td style="font-family:monospace;font-weight:700;color:#1d4ed8">${e(c.cabinet_number||"—")}</td>
+          <td>${e(c.description||c.cabinet_type||"—")}</td>
+          <td>${e([c.room,c.level,c.building].filter(Boolean).join(" · ")||"—")}</td>
+          <td style="font-family:monospace;font-size:11px">${c.width}×${c.height}×${c.depth}</td>
+          <td style="text-align:center">${c.door_qty||0}D ${c.drawer_qty>0?c.drawer_qty+"Dr":""}</td>
+          <td>${e(c.material||"—")}</td>
+          <td style="text-align:right;font-family:monospace">${c.sell_price?fmtAud(c.sell_price):"—"}</td>
+          <td style="text-align:right;font-family:monospace">${c.labour_hours||0}h</td>
+          <td><span style="background:${sc}22;color:${sc};border:1px solid ${sc}55;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap">${e(sl)}</span></td>
+        </tr>`;
+      }).join("");
+      return `
+        <tr style="background:#f1f5f9">
+          <td colspan="9" style="padding:8px 10px;font-weight:700;font-size:12px;border-top:2px solid #334155">
+            ${e(group)} <span style="font-weight:400;color:#64748b;margin-left:8px">${cabs.length} cabinet${cabs.length!==1?"s":""} · ${fmtAud(groupSell)}</span>
+          </td>
+        </tr>
+        ${cabRows}`;
+    }).join("");
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Cabinet Schedule — ${e(proj?.name||"Project")}</title>
+    <style>
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;color:#0f172a;padding:24px}
+      h1{font-size:18px;font-weight:800;margin-bottom:2px}
+      .meta{font-size:11px;color:#64748b;margin-bottom:20px}
+      table{width:100%;border-collapse:collapse;font-size:11px}
+      th{background:#1e293b;color:#fff;padding:7px 10px;text-align:left;font-size:10px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase}
+      th:last-child{text-align:left}
+      td{padding:7px 10px;border-bottom:1px solid #e2e8f0;vertical-align:middle}
+      tr:hover td{background:#f8fafc}
+      .footer{margin-top:20px;padding-top:12px;border-top:2px solid #1e293b;display:flex;justify-content:space-between;font-size:11px}
+      .footer strong{font-size:14px}
+      @media print{body{padding:10px}@page{size:A3 landscape;margin:12mm}}
+    </style>
+    </head><body>
+    <h1>Cabinet Schedule — ${e(proj?.name||"Project")}</h1>
+    <div class="meta">Printed ${printed} · ${cabinets.length} cabinet${cabinets.length!==1?"s":""} · Grouped by ${groupBy.replace("_"," ")}</div>
+    <table>
+      <thead><tr>
+        <th>Cab #</th><th>Description</th><th>Location</th><th>W×H×D</th>
+        <th>Doors</th><th>Material</th><th style="text-align:right">Sell</th>
+        <th style="text-align:right">Labour</th><th>Status</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="footer">
+      <span>Total: <strong>${fmtAud(totalSell)}</strong></span>
+      <span>Total labour: <strong>${totalLabour.toFixed(1)}h</strong></span>
+      <span>${cabinets.length} cabinet${cabinets.length!==1?"s":""}</span>
+    </div>
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+
+    const w = window.open("", "_blank");
+    if (w) { w.document.write(html); w.document.close(); }
+  }
+
   function exportCSV() {
     const esc = v => String(v ?? "").replace(/,/g, " ").replace(/\n/g, " ");
     const rows = [
@@ -890,13 +980,18 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
           + Add Cabinet
         </button>
 
-        {cabinets.length > 0 && (
+        {cabinets.length > 0 && <>
           <button
             onClick={exportCSV}
             style={{ background: "transparent", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 5, padding: "7px 12px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
             ↓ CSV
           </button>
-        )}
+          <button
+            onClick={printView}
+            style={{ background: "transparent", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 5, padding: "7px 12px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
+            ⎙ Print
+          </button>
+        </>}
       </div>
 
       {/* ── New cabinet editor (full width, outside scroll area) ── */}
