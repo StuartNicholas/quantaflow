@@ -963,6 +963,17 @@ export default function App() {
   const [themePrefs, setThemePrefs] = useState(()=>{ try{return JSON.parse(localStorage.getItem("qf_theme")||"{}");}catch{return{};} });
   const [showThemePanel, setShowThemePanel] = useState(false);
   function saveTheme(p){ setThemePrefs(p); try{ localStorage.setItem("qf_theme",JSON.stringify(p)); }catch{} }
+  // Responsive sidebar
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [windowW, setWindowW] = useState(typeof window!=="undefined"?window.innerWidth:1200);
+  useEffect(()=>{
+    function onResize(){ setWindowW(window.innerWidth); }
+    window.addEventListener("resize",onResize);
+    return ()=>window.removeEventListener("resize",onResize);
+  },[]);
+  const isMobile = windowW < 768;
+  // Auto-collapse when switching to mobile; auto-open when switching back to desktop
+  useEffect(()=>{ setSidebarOpen(!isMobile); },[isMobile]);
   // Plan modals — hoisted so BillingPage and Settings can both trigger them
   const [currentPlan,    setCurrentPlan]    = useState("beta");
   const [showPlanModal,  setShowPlanModal]  = useState(false);
@@ -1432,27 +1443,45 @@ export default function App() {
       </SetupErrorBoundary>
 
       {/* ── SIDEBAR ─────────────────────────────────────────────────── */}
-      <aside style={{width:196,background:T.panel,borderRight:`1px solid ${T.border}`,
-        display:"flex",flexDirection:"column",flexShrink:0,position:"sticky",top:0,height:"100vh"}}>
+      {/* Mobile backdrop — closes sidebar when tapping outside */}
+      {isMobile&&sidebarOpen&&<div onClick={()=>setSidebarOpen(false)} style={{
+        position:"fixed",inset:0,zIndex:199,background:"rgba(0,0,0,0.45)"}}/>}
+
+      <aside style={{
+        width:196,background:T.panel,borderRight:`1px solid ${T.border}`,
+        display:"flex",flexDirection:"column",flexShrink:0,
+        ...(isMobile ? {
+          position:"fixed",top:0,left:0,height:"100vh",zIndex:200,
+          transform:sidebarOpen?"translateX(0)":"translateX(-100%)",
+          transition:"transform 0.22s cubic-bezier(0.4,0,0.2,1)",
+          boxShadow:sidebarOpen?"4px 0 24px rgba(0,0,0,0.5)":"none",
+        } : {
+          position:"sticky",top:0,height:"100vh",
+        }),
+      }}>
         <div style={{padding:"18px 15px 14px",borderBottom:`1px solid ${T.border}`}}>
           <div style={{display:"flex",alignItems:"center",gap:9}}>
             <div style={{width:32,height:32,borderRadius:7,background:T.accent,color:"#000",
               display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:13}}>
               {company.logoText}
             </div>
-            <div>
-              <div style={{fontWeight:800,fontSize:12,lineHeight:1.2,color:T.text}}>{company.name}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:800,fontSize:12,lineHeight:1.2,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{company.name}</div>
               <div style={{color:T.muted,fontSize:10}}>Verixo <span style={{color:T.faint}}>by Shilacon</span></div>
             </div>
+            {/* Close button (mobile only) */}
+            {isMobile&&<div onClick={()=>setSidebarOpen(false)} style={{
+              width:26,height:26,display:"flex",alignItems:"center",justifyContent:"center",
+              borderRadius:5,cursor:"pointer",color:T.muted,fontSize:16,flexShrink:0}}>✕</div>}
           </div>
         </div>
 
-        <nav style={{padding:"10px 7px",flex:1}}>
+        <nav style={{padding:"10px 7px",flex:1,overflowY:"auto"}}>
           {NAV.map(n=>{
             const active = nav===n.id && !curProj;
             const badge = n.id==="settings" && userRole==="owner" && pendingTeamCount > 0
               ? pendingTeamCount : 0;
-            return <div key={n.id} onClick={()=>{setNav(n.id);closeProj();}} style={{
+            return <div key={n.id} onClick={()=>{setNav(n.id);closeProj();if(isMobile)setSidebarOpen(false);}} style={{
               display:"flex",alignItems:"center",gap:9,padding:"8px 11px",borderRadius:6,
               cursor:"pointer",marginBottom:2,
               background:active?T.accentDim:"transparent",
@@ -1477,13 +1506,22 @@ export default function App() {
       </aside>
 
       {/* ── MAIN ────────────────────────────────────────────────────── */}
-      <main style={{flex:1,overflowY:"auto",padding:26,minWidth:0}}>
+      <main style={{flex:1,overflowY:"auto",padding:isMobile?14:26,minWidth:0}}>
         {toast && <Toast msg={toast.msg} type={toast.type} onDone={()=>setToast(null)}/>}
 
-        {/* Top account bar — user name, always visible, right-aligned so it
-            never clashes with the project total shown below it. */}
+        {/* Top account bar */}
         <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",
           gap:10,marginBottom:18,paddingBottom:14,borderBottom:`1px solid ${T.border}`}}>
+          {/* Hamburger — mobile only */}
+          {isMobile&&<div onClick={()=>setSidebarOpen(v=>!v)} title="Menu"
+            style={{width:34,height:34,borderRadius:7,background:T.bg,
+              border:`1px solid ${T.border}`,color:T.muted,display:"flex",flexDirection:"column",
+              alignItems:"center",justifyContent:"center",gap:4,cursor:"pointer",
+              marginRight:"auto",flexShrink:0}}>
+            <div style={{width:16,height:2,background:T.muted,borderRadius:1}}/>
+            <div style={{width:16,height:2,background:T.muted,borderRadius:1}}/>
+            <div style={{width:16,height:2,background:T.muted,borderRadius:1}}/>
+          </div>}
           <div style={{textAlign:"right",lineHeight:1.2}}>
             <div style={{fontSize:13,fontWeight:700,color:T.text}}>{displayName}</div>
             <div style={{fontSize:11,color:T.faint}}>{company?.name||"Your company"}</div>
