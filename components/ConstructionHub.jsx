@@ -963,6 +963,11 @@ export default function App() {
   const [themePrefs, setThemePrefs] = useState(()=>{ try{return JSON.parse(localStorage.getItem("qf_theme")||"{}");}catch{return{};} });
   const [showThemePanel, setShowThemePanel] = useState(false);
   function saveTheme(p){ setThemePrefs(p); try{ localStorage.setItem("qf_theme",JSON.stringify(p)); }catch{} }
+  // Plan modals — hoisted so BillingPage and Settings can both trigger them
+  const [currentPlan,    setCurrentPlan]    = useState("beta");
+  const [showPlanModal,  setShowPlanModal]  = useState(false);
+  const [showCreditModal,setShowCreditModal]= useState(false);
+  const [showCancelModal,setShowCancelModal]= useState(false);
 
   // Friendly display name: saved profile name → auth metadata → email prefix.
   const displayName = profileName
@@ -1103,6 +1108,9 @@ export default function App() {
           });
           // Load company entitlement (AI access, plan, limits)
           getEntitlement(profile.company_id).then(({ data }) => { if (mounted) setEntitlement(data); });
+          // Load current plan for top-level plan change modals
+          supabase.from("companies").select("plan").eq("id", profile.company_id).maybeSingle()
+            .then(({ data: pd }) => { if (mounted && pd?.plan) setCurrentPlan(pd.plan); });
           setProjects((projectData || []).map(p =>
             normalizeProject({...p, gst: p.gst ?? (companyRow?.default_gst ?? 10)})
           ));
@@ -1587,12 +1595,19 @@ export default function App() {
               {nav==="suppliers" && <SuppliersModule pop={pop}/>}
               {nav==="rates"      && <RateLibrary rates={rates} setRates={setRates} cabLib={cabLib} setCabLib={setCabLib} companyId={companyId} pop={pop}/>}
               {nav==="reporting"  && <ReportingModule projects={projects} clients={clients}/>}
-              {nav==="billing"    && <BillingPage entitlement={entitlement} company={company} T={T}/>}
-              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} userRole={userRole} userTier={userTier} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} onTeamCountChange={setPendingTeamCount} pop={pop}/>}
+              {nav==="billing"    && <BillingPage entitlement={entitlement} company={company} companyId={companyId} T={T} pop={pop} userRole={userRole}
+                onChangePlan={()=>setShowPlanModal(true)}
+                onBuyCredits={()=>setShowCreditModal(true)}
+                onCancelPlan={()=>setShowCancelModal(true)}
+              />}
+              {nav==="settings"  && <SettingsModule company={company} setCompany={setCompany} companyId={companyId} userRole={userRole} userTier={userTier} trash={trash} setTrash={setTrash} onRestore={restoreProject} user={user} displayName={displayName} profileName={profileName} onSaveName={saveProfileName} onSignOut={signOut} onTeamCountChange={setPendingTeamCount} onNavigate={setNav} pop={pop}/>}
             </>
         }
         </ErrorBoundary>
       </main>
+      {showPlanModal&&<PlanChangeModal currentPlan={currentPlan} companyId={companyId} onClose={()=>setShowPlanModal(false)} pop={pop}/>}
+      {showCreditModal&&<CreditTopupModal companyId={companyId} onClose={()=>setShowCreditModal(false)} pop={pop}/>}
+      {showCancelModal&&<CancelSubscriptionModal currentPlan={currentPlan} companyId={companyId} onClose={()=>setShowCancelModal(false)} pop={pop}/>}
     </div>
   );
 }
@@ -11591,40 +11606,12 @@ function RolesModule({companyId, userTier, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // SETTINGS MODULE
 // ═══════════════════════════════════════════════════════════════════════════
-function SettingsModule({company, setCompany, companyId, userRole, userTier, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, onTeamCountChange, pop}) {
+function SettingsModule({company, setCompany, companyId, userRole, userTier, trash, setTrash, onRestore, user, displayName, profileName, onSaveName, onSignOut, onTeamCountChange, onNavigate, pop}) {
   const [local, setLocal] = useState(company);
   const [nameDraft, setNameDraft] = useState(profileName||(displayName==="User"?"":displayName)||"");
   const [savingName, setSavingName] = useState(false);
   const set = (k,v) => setLocal(x=>({...x,[k]:v}));
 
-  // Subscription & credits state
-  const [planInfo, setPlanInfo] = useState(null);
-  const [pendingPlanReq, setPendingPlanReq] = useState(null);
-  const [showPlanModal, setShowPlanModal] = useState(false);
-  const [showCreditModal, setShowCreditModal] = useState(false);
-  const [showCancelModal, setShowCancelModal] = useState(false);
-
-  useEffect(()=>{
-    if(!companyId) return;
-    (async()=>{
-      const now=new Date();
-      const monthStart=`${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,"0")}-01T00:00:00Z`;
-      const [compRes, usageRes, reqRes] = await Promise.all([
-        supabase.from("companies").select("plan,ai_monthly_limit,ai_credits_extra").eq("id",companyId).maybeSingle(),
-        supabase.from("ai_usage").select("credits").gte("created_at",monthStart),
-        supabase.from("plan_change_requests").select("*").eq("company_id",companyId).eq("status","pending")
-          .order("requested_at",{ascending:false}).limit(1).maybeSingle(),
-      ]);
-      const creditsUsed=(usageRes.data||[]).reduce((s,r)=>s+(r.credits||0),0);
-      const rawLimit=compRes.data?.ai_monthly_limit??100;
-      setPlanInfo({
-        plan: compRes.data?.plan||"beta",
-        limit: rawLimit<0?-1:rawLimit+(compRes.data?.ai_credits_extra||0),
-        creditsUsed,
-      });
-      setPendingPlanReq(reqRes.data||null);
-    })();
-  },[companyId]);
 
   // storage usage meter (localStorage ~5MB budget in most browsers)
   const usageKB=(()=>{try{let n=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);n+=(k.length+(localStorage.getItem(k)||"").length)*2;}return Math.round(n/1024);}catch{return 0;}})();
@@ -11672,59 +11659,16 @@ function SettingsModule({company, setCompany, companyId, userRole, userTier, tra
       </Row>
     </Card>
 
-    {/* ── Subscription & Credits ── */}
-    {planInfo&&<Card sx={{marginBottom:16}}>
-      <div style={{fontWeight:700,fontSize:13,color:T.teal,marginBottom:14,textTransform:"uppercase",letterSpacing:"0.05em"}}>Subscription & Credits</div>
-      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
-        <span style={{background:`${PLAN_CLR(planInfo.plan)}22`,color:PLAN_CLR(planInfo.plan),
-          borderRadius:8,padding:"4px 14px",fontWeight:800,fontSize:14}}>
-          {planInfo.plan.charAt(0).toUpperCase()+planInfo.plan.slice(1)} Plan
-        </span>
-        <span style={{color:T.muted,fontSize:13}}>
-          {PLAN_PRICE_AUD[planInfo.plan]>0?`$${PLAN_PRICE_AUD[planInfo.plan]} AUD/month`:"Free during beta"}
-        </span>
-      </div>
-      {planInfo.limit===-1
-        ? <div style={{color:T.green,fontSize:13,marginBottom:14}}>∞ Unlimited AI credits</div>
-        : <div style={{marginBottom:14}}>
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:T.muted,marginBottom:4}}>
-              <span>AI Credits this month</span>
-              <span style={{fontFamily:T.mono,color:planInfo.creditsUsed>=planInfo.limit?T.red:T.text}}>
-                {planInfo.creditsUsed} / {planInfo.limit}
-              </span>
-            </div>
-            <div style={{background:T.bg,borderRadius:4,height:8,overflow:"hidden"}}>
-              <div style={{height:"100%",borderRadius:4,transition:"width 0.3s",
-                width:`${Math.min(100,planInfo.creditsUsed/planInfo.limit*100)}%`,
-                background:planInfo.creditsUsed/planInfo.limit>=1?T.red:planInfo.creditsUsed/planInfo.limit>0.8?T.yellow:T.green}}/>
-            </div>
-            <div style={{fontSize:11,color:T.faint,marginTop:4}}>Resets on the 1st of each month</div>
-          </div>
-      }
-      {pendingPlanReq&&<div style={{background:T.yellowDim,border:`1px solid ${T.yellow}44`,borderRadius:8,
-        padding:"8px 12px",fontSize:12,color:T.yellow,marginBottom:12}}>
-        ⏳ Plan change to <strong>{pendingPlanReq.requested_plan}</strong> pending — submitted {new Date(pendingPlanReq.requested_at).toLocaleDateString("en-AU")}.
-      </div>}
-      {userRole==="owner"&&<>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-          <Btn sm v="pri" onClick={()=>setShowPlanModal(true)}>Change Plan</Btn>
-          <Btn sm v="tel" onClick={()=>setShowCreditModal(true)}>⚡ Buy Extra Credits</Btn>
+    {/* ── Billing ── */}
+    <Card sx={{marginBottom:16}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+        <div>
+          <div style={{fontWeight:700,fontSize:13,color:T.teal,marginBottom:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>Billing & Subscription</div>
+          <div style={{fontSize:13,color:T.muted}}>View your plan, AI usage, invoices and manage your subscription.</div>
         </div>
-        {planInfo.plan!=="beta"&&<div style={{marginTop:20,paddingTop:16,borderTop:`1px solid ${T.border}`}}>
-          <button onClick={()=>setShowCancelModal(true)}
-            style={{background:"none",border:"none",color:T.muted,fontSize:12,cursor:"pointer",padding:0,textDecoration:"underline"}}>
-            Cancel subscription
-          </button>
-        </div>}
-      </>}
-    </Card>}
-
-    {showPlanModal&&<PlanChangeModal currentPlan={planInfo?.plan||"beta"} companyId={companyId}
-      onClose={()=>setShowPlanModal(false)} pop={pop}/>}
-    {showCreditModal&&<CreditTopupModal companyId={companyId}
-      onClose={()=>setShowCreditModal(false)} pop={pop}/>}
-    {showCancelModal&&<CancelSubscriptionModal currentPlan={planInfo?.plan||"beta"} companyId={companyId}
-      onClose={()=>setShowCancelModal(false)} pop={pop}/>}
+        <Btn v="pri" onClick={()=>onNavigate?.("billing")}>Manage Billing →</Btn>
+      </div>
+    </Card>
 
     {userRole==="owner"
       ? <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
