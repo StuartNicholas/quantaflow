@@ -88,6 +88,7 @@ const BASE_T = {
 };
 // T is mutable so App can apply company theme prefs on every render
 let T = {...BASE_T};
+let mobile = false; // updated each render in ConstructionHub before any child renders
 
 function hexRgba(hex,a){
   try{const h=(hex||"").replace("#","");const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);return `rgba(${r},${g},${b},${a})`;}
@@ -665,11 +666,11 @@ function Row({children,gap=10,wrap,sx={}}) {
 }
 
 function Grid2({children,gap=12,sx={}}) {
-  return <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap,...sx}}>{children}</div>;
+  return <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap,...sx}}>{children}</div>;
 }
 
 function Grid3({children,gap=12,sx={}}) {
-  return <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap,...sx}}>{children}</div>;
+  return <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr 1fr",gap,...sx}}>{children}</div>;
 }
 
 function Hdr({children,sub,action,sx={}}) {
@@ -863,7 +864,7 @@ function ThemePanel({prefs, onChange, onClose}){
         {/* ── Brand presets */}
         <div style={S.section}>
           <div style={S.label}>Quick Presets</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+          <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"repeat(3,1fr)",gap:8}}>
             {brandPresets.map(p=>{
               const active=activeId===p.id;
               return <div key={p.id} onClick={()=>onChange({...prefs,accent:p.accent,overrides:{}})}
@@ -1394,8 +1395,9 @@ export default function App() {
   const curProj = projId ? projects.find(p=>p.id===projId) : null;
   const pipeline = projects.reduce((s,p)=>s+(p.quote_value||calc(p).total), 0);
 
-  // Apply company theme on every render so all child components see current T
+  // Apply company theme + viewport flag on every render so all child components see current values
   T = buildT(themePrefs);
+  mobile = isMobile;
 
   if(!mounted) return null;
 
@@ -1723,7 +1725,7 @@ function CompanySetupWizard({onCreated, onJoinRequested}) {
             Are you setting up a new company, or joining an existing one?
           </div>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:12}}>
           <OptionCard icon="🏢" title="New Company"
             desc="Register your business and become the account owner"
             onClick={()=>{setMode("create");setErr(null);}}/>
@@ -2113,7 +2115,7 @@ function SetupWizard({companyId, companyName, displayName, onComplete, onCreateP
         {formulaLoading
           ? <div style={{color:T.faint,fontSize:13,textAlign:"center",padding:24}}>Loading…</div>
           : <>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16}}>
+            <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr 1fr",gap:10,marginBottom:16}}>
               {[
                 {k:"default_base_h",  label:"Base Height (mm)"},
                 {k:"default_base_d",  label:"Base Depth (mm)"},
@@ -2129,7 +2131,7 @@ function SetupWizard({companyId, companyName, displayName, onComplete, onCreateP
                     outline:"none",boxSizing:"border-box"}}/>
               </div>)}
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
+            <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:10,marginBottom:20}}>
               <div>
                 <div style={{fontSize:11,color:T.faint,marginBottom:4,fontWeight:600}}>Assembly Rate ($/cabinet)</div>
                 <input type="number" value={formula.assembly_per_cab} onChange={e=>setF("assembly_per_cab",e.target.value)}
@@ -2177,7 +2179,7 @@ function SetupWizard({companyId, companyName, displayName, onComplete, onCreateP
           <div>✓ &nbsp;Assembly rate: ${formula.assembly_per_cab}/cabinet</div>
         </div>
 
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:10}}>
           <Btn v="pri" full onClick={()=>finish(true)} disabled={busy}>
             {busy?"Saving…":"Create First Project"}
           </Btn>
@@ -2319,7 +2321,7 @@ function ReportingModule({projects, clients}) {
       <KPI label="Accepted Value"   value={$$(acceptedValue,true)} sub={`${sent} still open`} color={T.teal}/>
     </Row>
 
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,alignItems:"start"}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:16,alignItems:"start"}}>
 
       {/* ── LEFT column ── */}
       <div style={{display:"flex",flexDirection:"column",gap:16}}>
@@ -2583,7 +2585,7 @@ function Dashboard({projects, xero, onOpen, setNav}) {
     </Card>}
 
     {/* ── Recent projects + Activity feed side by side */}
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14,marginBottom:14}}>
       <Card>
         <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Recent Projects</div>
         {projects.slice(0,8).map(p=>{
@@ -3056,7 +3058,7 @@ function CabinetPreset({proj, pop}) {
 
     {noItems
       ? <Card><div style={{color:T.muted,fontSize:13}}>Your catalogue is empty. Add board and hardware items in <b>Rate Library → Catalogue</b> first, then choose them here.</div></Card>
-      : <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+      : <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14}}>
         <Card>
           <div style={{fontWeight:700,fontSize:12,color:T.accent,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.05em"}}>Materials & hardware for this project</div>
           {SLOTS.map(slot=>{
@@ -3308,7 +3310,7 @@ function OrderListModule({proj, pop}) {
             This will create a draft PO in the Procurement tab pre-filled with the board and hardware quantities above.
             Unit costs are left blank — fill them in once you have supplier quotes.
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+          <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:10,marginBottom:10}}>
             <div>
               <div style={{fontSize:11,color:T.faint,marginBottom:4}}>Supplier (optional)</div>
               <select value={poSup} onChange={e=>setPoSup(e.target.value)}
@@ -5969,7 +5971,7 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
         <div style={{color:T.muted,fontSize:11}}>Initialised from Cabinet Library. Changes here apply to this project only.</div>
       </Row>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
+      <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr 1fr",gap:14}}>
         {/* Board & hardware */}
         <div>
           <div style={{fontWeight:600,fontSize:11,color:T.muted,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Board & Hardware (supplier rates)</div>
@@ -6492,7 +6494,7 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
         By signing below I/we accept this quote and authorise {company.name||"the contractor"} to proceed
         with the works as described above, subject to the terms and conditions stated herein.
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"24px 40px"}}>
+      <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:"24px 40px"}}>
         {[
           {label:"Client Name",value:proj.client||""},
           {label:"Date","value":""},
@@ -6981,7 +6983,7 @@ function PODocument({po, proj, company}) {
       <hr style={{border:"none",borderTop:`2px solid ${teal}`,marginBottom:24}}/>
 
       {/* To / Deliver To */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24,marginBottom:22}}>
+      <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:24,marginBottom:22}}>
         <div>
           <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
             color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>To (Supplier)</div>
@@ -7061,7 +7063,7 @@ function PODocument({po, proj, company}) {
           textTransform:"uppercase",letterSpacing:"0.08em",color:"#374151",marginBottom:14}}>
           Authorised By
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"20px 40px"}}>
+        <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:"20px 40px"}}>
           {[{label:"Name"},{label:"Signature"},{label:"Date"},{label:"Contact / Phone"}].map(f=><div key={f.label}>
             <div style={{fontSize:11,color:"#9ca3af",fontFamily:"system-ui,sans-serif",
               fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4}}>{f.label}</div>
@@ -7202,7 +7204,7 @@ function ProcurementModule({proj, company, pop}) {
     {/* ── New PO form ── */}
     {showNew&&<Card hi sx={{marginBottom:14}}>
       <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>New Purchase Order</div>
-      <div style={{display:"grid",gridTemplateColumns:"120px 1fr 1fr",gap:8,marginBottom:10}}>
+      <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"120px 1fr 1fr",gap:8,marginBottom:10}}>
         <Inp label="PO Ref" value={newPO.ref} onChange={v=>setNewPO(x=>({...x,ref:v}))}/>
         <div>
           <div style={{fontSize:11,color:T.faint,marginBottom:4}}>Supplier</div>
@@ -7334,7 +7336,7 @@ function ProcurementModule({proj, company, pop}) {
           {po.status!=="cancelled"&&<>
             {showAddItem===po.id
               ? <Card hi sx={{marginTop:8}}>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 72px 72px 120px",gap:8,marginBottom:8}}>
+                  <div style={{display:"grid",gridTemplateColumns:mobile?"1fr 1fr":"1fr 72px 72px 120px",gap:8,marginBottom:8}}>
                     <Inp label="Description" value={newItem.description}
                       onChange={v=>setNewItem(x=>({...x,description:v}))}
                       placeholder="e.g. Polytec White 3600×1800mm"/>
@@ -7501,7 +7503,7 @@ function VariationDocument({variation, proj, company, variations, c}) {
           By signing below I/we authorise {company.name||"the contractor"} to proceed with the variation works described above
           at the price stated. This variation will be added to the contract and invoiced in the next progress claim or upon completion.
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"24px 40px"}}>
+        <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:"24px 40px"}}>
           {[
             {label:"Client Name",value:proj.client||""},
             {label:"Date","value":""},
@@ -7664,7 +7666,7 @@ function JobCostsModule({proj, variations, reloadVariations, varsLoading, c, com
       </div>
     </Card>}
 
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14}}>
       {/* ── Actual costs ── */}
       <div>
         <Row gap={8} sx={{marginBottom:10}}>
@@ -7937,7 +7939,7 @@ function HandoverModule({proj, onMutate, pop}) {
       </div>}
     </Card>
 
-    <div style={{display:"grid",gridTemplateColumns:"1fr 340px",gap:14,alignItems:"start"}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 340px",gap:14,alignItems:"start"}}>
 
       {/* ── Defects / Punch List ── */}
       <div>
@@ -8756,7 +8758,7 @@ function InvoiceDocument({claim, proj, company}) {
     <hr style={{border:"none",borderTop:`2px solid ${green}`,marginBottom:24}}/>
 
     {/* Bill To / Project */}
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24,marginBottom:24}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:24,marginBottom:24}}>
       <div>
         <div style={{fontWeight:700,fontSize:11,textTransform:"uppercase",letterSpacing:"0.08em",
           color:"#9ca3af",marginBottom:5,fontFamily:"system-ui,sans-serif"}}>Bill To</div>
@@ -9096,7 +9098,7 @@ function ClaimsModule({proj, c, pop, company, clients, onMutate}) {
     {/* ── Simple claim form (fallback when no matrix) */}
     {showNew&&<Card hi sx={{marginBottom:14}}>
       <div style={{fontWeight:700,marginBottom:10,fontSize:13}}>New Progress Claim</div>
-      <div style={{display:"grid",gridTemplateColumns:"100px 1fr 160px",gap:10,marginBottom:10}}>
+      <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"100px 1fr 160px",gap:10,marginBottom:10}}>
         <Inp label="Claim #" value={nc.claim_number} type="number"
           onChange={v=>setNc(x=>({...x,claim_number:parseInt(v)||1}))}/>
         <Inp label="Description" value={nc.description}
@@ -9125,7 +9127,7 @@ function ClaimsModule({proj, c, pop, company, clients, onMutate}) {
 
         {/* Claim metadata */}
         <div style={{padding:"14px 22px",borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
-          <div style={{display:"grid",gridTemplateColumns:"90px 1fr 170px",gap:10}}>
+          <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"90px 1fr 170px",gap:10}}>
             <Inp label="Claim #" value={wiz.claimNum} type="number" mono
               onChange={v=>setWiz(x=>({...x,claimNum:parseInt(v)||1}))} sx={{marginBottom:0}}/>
             <Inp label="Description" value={wiz.description}
@@ -9373,7 +9375,7 @@ function ClaimsModule({proj, c, pop, company, clients, onMutate}) {
           </div>}
 
           {showAddItem===cl.id&&<Card hi sx={{marginBottom:10,padding:"10px 12px"}}>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 65px 65px 100px",gap:8,marginBottom:8}}>
+            <div style={{display:"grid",gridTemplateColumns:mobile?"1fr 1fr":"1fr 65px 65px 100px",gap:8,marginBottom:8}}>
               <Inp label="Description" value={newItem.description}
                 onChange={v=>setNewItem(x=>({...x,description:v}))} placeholder="Item description"/>
               <Inp label="Qty" value={newItem.qty} type="number"
@@ -9452,7 +9454,7 @@ function ProjectInfo({proj, clients, company, onMutate, pop}) {
   }
 
   return <div>
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14}}>
       <Card>
         <div style={{fontWeight:700,fontSize:13,marginBottom:12,color:T.accent}}>Project Details</div>
         <Inp label="Project Name" value={proj.name} onChange={v=>onMutate(p=>({...p,name:v}))}/>
@@ -9583,7 +9585,7 @@ function ClientsModule({clients, reloadClients, clientsLoading, projects, pop}) 
           padding:"7px 11px",color:T.text,fontSize:13,outline:"none",fontFamily:T.font}}/>
     </Row>
 
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14}}>
       {/* Client list */}
       <div>
         {filtered.map(c=>{
@@ -9721,7 +9723,7 @@ function BuildersModule({builders, reloadBuilders, buildersLoading, projects, po
       <Row gap={8}><Btn v="pri" onClick={saveNew} disabled={busy}>{busy?"Saving…":"Add Builder"}</Btn><Btn onClick={()=>setShowNew(false)}>Cancel</Btn></Row>
     </Card>}
 
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1.6fr",gap:14}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1.6fr",gap:14}}>
       <div>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search builders…"
           style={{width:"100%",background:T.card,border:`1px solid ${T.border}`,borderRadius:5,
@@ -9862,7 +9864,7 @@ function SuppliersModule({pop}) {
       <Row gap={8}><Btn v="pri" onClick={saveNew} disabled={busy}>{busy?"Saving…":"Add Supplier"}</Btn><Btn onClick={()=>setShowNew(false)}>Cancel</Btn></Row>
     </Card>}
 
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1.6fr",gap:14}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1.6fr",gap:14}}>
       <div>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search suppliers…"
           style={{width:"100%",background:T.card,border:`1px solid ${T.border}`,borderRadius:5,
@@ -10638,7 +10640,7 @@ function CatalogueLibrary({pop}) {
 
               {canEdit&&<div style={{borderTop:`1px solid ${T.border}`,padding:14,background:T.bg}}>
                 <div style={{fontWeight:600,fontSize:12,color:T.muted,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>Add item</div>
-                <div style={{display:"grid",gridTemplateColumns:"2fr 70px 90px 1.5fr",gap:8,marginBottom:8}}>
+                <div style={{display:"grid",gridTemplateColumns:mobile?"1fr 1fr":"2fr 70px 90px 1.5fr",gap:8,marginBottom:8}}>
                   <Inp label="Name" value={newItem.name} onChange={v=>setNewItem(x=>({...x,name:v}))} placeholder="e.g. 18mm White Melamine" sx={{marginBottom:0}}/>
                   <Inp label="Unit" value={newItem.unit} onChange={v=>setNewItem(x=>({...x,unit:v}))} placeholder="m2" sx={{marginBottom:0}}/>
                   <Inp label="Rate $" value={newItem.rate} onChange={v=>setNewItem(x=>({...x,rate:v}))} type="number" mono sx={{marginBottom:0}}/>
@@ -10649,7 +10651,7 @@ function CatalogueLibrary({pop}) {
                   <Inp label="Notes" value={newItem.notes} onChange={v=>setNewItem(x=>({...x,notes:v}))} sx={{marginBottom:0}}/>
                   <Btn v="pri" onClick={addItem}>+ Add</Btn>
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8}}>
+                <div style={{display:"grid",gridTemplateColumns:mobile?"1fr 1fr":"1fr 1fr 1fr 1fr",gap:8}}>
                   <Inp label="Sheet length (mm)" value={newItem.sheet_length_mm} onChange={v=>setNewItem(x=>({...x,sheet_length_mm:v}))} type="number" mono placeholder="3600" sx={{marginBottom:0}}/>
                   <Inp label="Sheet width (mm)" value={newItem.sheet_width_mm} onChange={v=>setNewItem(x=>({...x,sheet_width_mm:v}))} type="number" mono placeholder="1800" sx={{marginBottom:0}}/>
                   <Inp label="Kerf (mm)" value={newItem.kerf_mm} onChange={v=>setNewItem(x=>({...x,kerf_mm:v}))} type="number" mono placeholder="4" sx={{marginBottom:0}}/>
@@ -10710,7 +10712,7 @@ function CabinetFormula({pop}) {
   const r=rules||{};
   const calc=priceCabinet(ex, r, exRates);
 
-  return <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+  return <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14}}>
     {/* RULES */}
     <Card>
       <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>How a cabinet's cost is built</div>
@@ -10755,7 +10757,7 @@ function CabinetFormula({pop}) {
         Enter a cabinet and sample rates to see exactly how the formula prices it. In a real project these rates come from the catalogue items you choose in the project's Cabinet Preset.
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+      <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr 1fr",gap:8}}>
         <Sel label="Type" value={ex.type} onChange={v=>setEx(x=>({...x,type:v}))} options={["Base","Overhead","Tall"]}/>
         <Inp label="Width mm" value={ex.width} onChange={v=>setEx(x=>({...x,width:+v||0}))} type="number" mono/>
         <Inp label="Height mm" value={ex.height} onChange={v=>setEx(x=>({...x,height:+v||0}))} type="number" mono/>
@@ -10770,7 +10772,7 @@ function CabinetFormula({pop}) {
             <Inp label="Carc board $/m²" value={exRates.carcass} onChange={v=>setExRates(x=>({...x,carcass:+v||0}))} type="number" mono sx={{flex:1}}/>
             <Inp label="Fronts (finish) $/m²" value={exRates.front} onChange={v=>setExRates(x=>({...x,front:+v||0}))} type="number" mono sx={{flex:1}}/>
           </Row>
-        : <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:6}}>
+        : <div style={{display:"grid",gridTemplateColumns:mobile?"1fr 1fr":"1fr 1fr 1fr 1fr 1fr",gap:6}}>
             <Inp label="Carc/m²" value={exRates.carcass} onChange={v=>setExRates(x=>({...x,carcass:+v||0}))} type="number" mono/>
             <Inp label="Front/m²" value={exRates.front} onChange={v=>setExRates(x=>({...x,front:+v||0}))} type="number" mono/>
             <Inp label="Hinge" value={exRates.hinge} onChange={v=>setExRates(x=>({...x,hinge:+v||0}))} type="number" mono/>
@@ -10931,7 +10933,7 @@ function CabinetLibrary({cabLib,setCabLib,pop}) {
   for(let w=300;w<=1200;w+=50) widths.push(w);
 
   return <div>
-    <div style={{display:"grid",gridTemplateColumns:"310px 1fr",gap:14}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"310px 1fr",gap:14}}>
       <div>
         <Card sx={{marginBottom:14}}>
           <div style={{fontWeight:700,fontSize:13,marginBottom:12,color:"#ec4899"}}>Carcass & Hardware (defaults)</div>
@@ -11064,7 +11066,7 @@ function InstallLibrary({cabLib,setCabLib,pop}) {
   const set=(k,v)=>setCabLib(x=>({...x,[k]:v}));
   function updIR(key,k,v){ setCabLib(x=>({...x,installRates:x.installRates.map(r=>r.key===key?{...r,[k]:k==="hours"?parseFloat(v)||0:v}:r)})); }
   return <div>
-    <div style={{display:"grid",gridTemplateColumns:"300px 1fr",gap:14}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"300px 1fr",gap:14}}>
       <div>
         <Card sx={{marginBottom:14}}>
           <div style={{fontWeight:700,fontSize:13,marginBottom:12,color:T.teal}}>Install Rates</div>
@@ -11195,7 +11197,7 @@ function TradeRates({rates, setRates, companyId, pop}) {
 
     {showAdd&&<Card hi sx={{marginBottom:14}}>
       <div style={{fontWeight:700,marginBottom:10,color:T.accent}}>New Rate</div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 2fr 80px 90px",gap:10}}>
+      <div style={{display:"grid",gridTemplateColumns:mobile?"1fr 1fr":"1fr 2fr 80px 90px",gap:10}}>
         <Sel label="Category" value={nr.category} onChange={v=>setNr(x=>({...x,category:v}))} options={CATS}/>
         <Inp label="Description" value={nr.description} onChange={v=>setNr(x=>({...x,description:v}))} placeholder="e.g. Timber wall framing"/>
         <Sel label="Unit" value={nr.unit} onChange={v=>setNr(x=>({...x,unit:v}))} options={UNITS}/>
@@ -11291,7 +11293,7 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
       <KPI label="Awaiting Push" value={ready.length} sub="approved jobs not yet invoiced" color={T.yellow}/>
     </Row>
 
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:18}}>
+    <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14,marginBottom:18}}>
       {/* Connection */}
       <Card>
         <Row gap={10} sx={{marginBottom:12}}>
@@ -11901,7 +11903,7 @@ function SettingsModule({company, setCompany, companyId, userRole, userTier, tra
     </Card>
 
     {userRole==="owner"
-      ? <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+      ? <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14}}>
           {/* Company details — owner only */}
           <Card>
             <div style={{fontWeight:700,marginBottom:14,color:T.accent,fontSize:13}}>Company Details</div>
