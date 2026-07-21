@@ -9621,6 +9621,7 @@ function ProjectInfo({proj, clients, company, onMutate, pop}) {
       description: proj.description||null,
       notes: proj.notes||null,
       due_date: proj.dueDate||null,
+      breakdown_preference: proj.breakdown_preference||"unit_type",
     });
     if(error){ setSaving(false); return pop(error,"error"); }
     // Feed updated_at back into state so dashboard heuristics see fresh timestamps
@@ -9661,6 +9662,9 @@ function ProjectInfo({proj, clients, company, onMutate, pop}) {
           <Inp label="Created" value={proj.created} onChange={()=>{}} type="date" sx={{opacity:0.7}}/>
           <Inp label="Due Date" value={proj.dueDate||""} onChange={v=>onMutate(p=>({...p,dueDate:v}))} type="date"/>
         </Grid2>
+        <Sel label="Default Cabinet Grouping" value={proj.breakdown_preference||"unit_type"} onChange={v=>onMutate(p=>({...p,breakdown_preference:v}))}
+          options={[{value:"unit_type",label:"Unit Type (e.g. Kitchen, Bathroom)"},{value:"room",label:"Room"},{value:"joinery_type",label:"Joinery Type"}]}/>
+        <div style={{fontSize:11,color:T.faint,marginTop:-6,marginBottom:8}}>Controls the default grouping in Cabinet Database and Box Matrix.</div>
         <Inp label="Description" value={proj.description||""} onChange={v=>onMutate(p=>({...p,description:v}))} rows={2}/>
         <Inp label="Notes" value={proj.notes||""} onChange={v=>onMutate(p=>({...p,notes:v}))} rows={3}/>
         <Btn v="pri" onClick={saveProject} disabled={saving}>{saving?"Saving…":"Save Project Info"}</Btn>
