@@ -3397,6 +3397,18 @@ function AiReviewPanel({ result, onAccept, onDiscard, T }) {
   const [sel, setSel] = React.useState(new Set(result.items.map(i => i.id)));
   const [history, setHistory] = React.useState([]); // undo stack [{items, sel}]
 
+  React.useEffect(() => {
+    function onKey(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history]);
+
   function snapshot() { setHistory(h => [...h.slice(-9), { items: reviewItems.map(x=>({...x})), sel: new Set(sel) }]); }
   function undo() {
     if (!history.length) return;
