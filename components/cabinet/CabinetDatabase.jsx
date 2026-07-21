@@ -128,20 +128,32 @@ function DraftReviewBanner({ draftCabinets, onApproveAll, onDiscardAll, onFilter
 
 // ── Cabinet Row (compact list view) ──────────────────────────────────────────
 
-function CabinetRow({ cab, onEdit, onDelete, onStatusChange, T }) {
+function CabinetRow({ cab, onEdit, onDelete, onStatusChange, selected, onSelect, T }) {
   const statusDef = STATUSES.find(s => s.key === cab.status) || STATUSES[0];
   const [statusOpen, setStatusOpen] = useState(false);
 
   return (
     <div style={{
-      background: cab.ai_draft ? "rgba(59,130,246,0.05)" : T.card,
-      border: `1px solid ${cab.ai_draft ? "rgba(59,130,246,0.25)" : T.border}`,
+      background: selected ? `${T.accent}10` : cab.ai_draft ? "rgba(59,130,246,0.05)" : T.card,
+      border: `1px solid ${selected ? T.accent : cab.ai_draft ? "rgba(59,130,246,0.25)" : T.border}`,
       borderRadius: 7, padding: "10px 14px", marginBottom: 6,
       display: "grid", minWidth: 680,
-      gridTemplateColumns: "80px 1fr 80px 80px 80px 100px 130px 80px",
+      gridTemplateColumns: "28px 80px 1fr 80px 80px 80px 100px 130px 80px",
       gap: "0 10px", alignItems: "center",
       fontSize: 12,
     }}>
+      {/* Checkbox */}
+      <div onClick={e => { e.stopPropagation(); onSelect && onSelect(cab.id); }}
+        style={{ display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer" }}>
+        <div style={{
+          width: 15, height: 15, borderRadius: 3, border: `1.5px solid ${selected ? T.accent : T.border}`,
+          background: selected ? T.accent : "transparent", display:"flex", alignItems:"center",
+          justifyContent:"center", flexShrink: 0,
+        }}>
+          {selected && <span style={{ color:"#fff", fontSize:9, fontWeight:700, lineHeight:1 }}>✓</span>}
+        </div>
+      </div>
+
       {/* Cabinet number */}
       <div style={{ fontFamily: "monospace", fontWeight: 700, color: T.accent, fontSize: 12 }}>
         {cab.cabinet_number || "—"}
@@ -391,6 +403,8 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [sortDir, setSortDir] = useState("asc");
   const [statusFilter, setStatusFilter] = useState(""); // "" = all
+  const [selectedIds,  setSelectedIds]  = useState(new Set());
+  const [bulkStatus,   setBulkStatus]   = useState("");
   const [aiOpen,    setAiOpen]    = useState(false);
   const [aiFiles,   setAiFiles]   = useState([]);
   const [aiLog,     setAiLog]     = useState([]);
@@ -410,6 +424,7 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
   }, [projectId]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { setSelectedIds(new Set()); }, [statusFilter, search, filteringDraft]);
 
   // ── Filter / group ──────────────────────────────────────────────────────────
 
@@ -420,6 +435,26 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
         .toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
+
+  // ── Bulk selection helpers ──────────────────────────────────────────────────
+  const allSelected = filtered.length > 0 && filtered.every(c => selectedIds.has(c.id));
+
+  function toggleSelect(id) {
+    setSelectedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+  function toggleSelectAll() {
+    setSelectedIds(allSelected ? new Set() : new Set(filtered.map(c => c.id)));
+  }
+  function clearSelection() { setSelectedIds(new Set()); }
+
+  async function handleBulkStatus(newStatus) {
+    if (!newStatus || selectedIds.size === 0) return;
+    const ids = [...selectedIds];
+    await Promise.all(ids.map(id => updateCabinet(id, { status: newStatus })));
+    setCabinets(cs => cs.map(c => selectedIds.has(c.id) ? { ...c, status: newStatus } : c));
+    setSelectedIds(new Set());
+    setBulkStatus("");
+  }
 
   function groupKey(c) {
     if (groupBy === "room")         return c.room        || "Unassigned";
@@ -875,6 +910,36 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
         />
       )}
 
+      {/* ── Bulk action bar ── */}
+      {selectedIds.size > 0 && (
+        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 14px",
+          background:`${T.accent}12`, border:`1px solid ${T.accent}35`, borderRadius:7,
+          marginBottom:8, flexWrap:"wrap" }}>
+          <span style={{ fontSize:12, color:T.accent, fontWeight:700 }}>
+            {selectedIds.size} selected
+          </span>
+          <select value={bulkStatus} onChange={e => setBulkStatus(e.target.value)}
+            style={{ background:T.card, color:bulkStatus ? T.text : T.muted,
+              border:`1px solid ${T.border}`, borderRadius:5, padding:"5px 8px",
+              fontSize:12, cursor:"pointer", outline:"none" }}>
+            <option value="">Change status to…</option>
+            {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+          {bulkStatus && (
+            <button onClick={() => handleBulkStatus(bulkStatus)}
+              style={{ background:T.accent, color:"#fff", border:"none", borderRadius:5,
+                padding:"5px 16px", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+              Apply
+            </button>
+          )}
+          <button onClick={clearSelection}
+            style={{ background:"none", color:T.faint, border:"none", padding:"5px 8px",
+              fontSize:12, cursor:"pointer", marginLeft:"auto" }}>
+            ✕ Clear
+          </button>
+        </div>
+      )}
+
       {/* ── Cabinet groups — horizontal scroll on mobile ── */}
       {filtered.length === 0 && editingId !== "new" && (
         <div style={{ textAlign: "center", padding: "40px 0", color: T.faint, fontSize: 13 }}>
@@ -887,11 +952,21 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
       <div style={{ overflowX: "auto" }}>
         {/* Column headers */}
         {filtered.length > 0 && <div style={{
-          display: "grid", gridTemplateColumns: "80px 1fr 80px 80px 80px 100px 130px 80px",
+          display: "grid", gridTemplateColumns: "28px 80px 1fr 80px 80px 80px 100px 130px 80px",
           gap: "0 10px", padding: "5px 14px", marginBottom: 4, minWidth: 680,
           fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
-          color: T.faint,
+          color: T.faint, alignItems: "center",
         }}>
+          <div onClick={toggleSelectAll} style={{ cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <div style={{
+              width: 14, height: 14, borderRadius: 3, border: `1.5px solid ${allSelected ? T.accent : T.border}`,
+              background: allSelected ? T.accent : "transparent", display:"flex", alignItems:"center",
+              justifyContent:"center", flexShrink: 0,
+            }}>
+              {allSelected && <span style={{ color:"#fff", fontSize:8, fontWeight:700, lineHeight:1 }}>✓</span>}
+              {!allSelected && selectedIds.size > 0 && <span style={{ color: T.accent, fontSize:8, fontWeight:700, lineHeight:1 }}>—</span>}
+            </div>
+          </div>
           <div>Cab #</div>
           <div>Description / Location</div>
           <div>W×H×D</div>
@@ -932,6 +1007,8 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
                       onEdit={c => setEditingId(c.id)}
                       onDelete={handleDelete}
                       onStatusChange={handleStatusChange}
+                      selected={selectedIds.has(cab.id)}
+                      onSelect={toggleSelect}
                       T={T}
                     />
               ))}

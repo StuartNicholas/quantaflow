@@ -2205,6 +2205,8 @@ function ReportingModule({projects, clients}) {
   const [quoteStats, setQuoteStats] = useState([]);
   const [activity,   setActivity]   = useState([]);
   const [loading,    setLoading]    = useState(true);
+  const [projFilter, setProjFilter] = useState("");
+  const [projSort,   setProjSort]   = useState({col:"value",dir:"desc"});
 
   useEffect(()=>{
     let on=true;
@@ -2343,6 +2345,31 @@ function ReportingModule({projects, clients}) {
   const margined = projects.filter(p=>p.margin>0);
   const avgMargin = margined.length>0
     ? margined.reduce((s,p)=>s+(p.margin||0),0)/margined.length : 0;
+
+  // ── Project table (sorted + filtered) ────────────────────────────────────
+  const projTableData = projects
+    .filter(p => !projFilter || (p.status||"draft") === projFilter)
+    .map(p => ({
+      ...p,
+      _client: (clients.find(c=>c.id===(p.clientId||p.client_id))?.name || p.client || "—"),
+      _value:  p.quote_value || calc(p).total,
+      _name:   p.name||p.projectName||"Untitled",
+      _status: p.status||"draft",
+      _due:    p.due_date||p.dueDate||"",
+      _margin: p.margin||0,
+    }))
+    .sort((a,b)=>{
+      const dir = projSort.dir==="asc" ? 1 : -1;
+      if(projSort.col==="name")   return dir * a._name.localeCompare(b._name);
+      if(projSort.col==="client") return dir * a._client.localeCompare(b._client);
+      if(projSort.col==="status") return dir * a._status.localeCompare(b._status);
+      if(projSort.col==="due")    return dir * (a._due||"9").localeCompare(b._due||"9");
+      if(projSort.col==="margin") return dir * (a._margin - b._margin);
+      return dir * (a._value - b._value);
+    });
+  function toggleSort(col) {
+    setProjSort(s => s.col===col ? {col,dir:s.dir==="asc"?"desc":"asc"} : {col,dir:"desc"});
+  }
 
   return <div>
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:18}}>
@@ -2519,6 +2546,83 @@ function ReportingModule({projects, clients}) {
         </Card>
       </div>
     </div>
+
+    {/* ── All projects table ── */}
+    {projects.length>0&&<Card sx={{marginTop:16}}>
+      <Row gap={10} sx={{marginBottom:14}}>
+        <div style={{fontWeight:700,fontSize:13,flex:1}}>All Projects</div>
+        <select value={projFilter} onChange={e=>setProjFilter(e.target.value)}
+          style={{background:T.card,color:projFilter?T.accent:T.muted,
+            border:`1px solid ${projFilter?T.accent:T.border}`,borderRadius:5,
+            padding:"5px 8px",fontSize:11,cursor:"pointer",outline:"none"}}>
+          <option value="">All statuses ({projects.length})</option>
+          {Object.entries(STATUS_CFG).map(([k,c])=>{
+            const cnt=byStatus[k]?.count||0;
+            return cnt>0?<option key={k} value={k}>{c.label} ({cnt})</option>:null;
+          })}
+        </select>
+      </Row>
+      <div style={{overflowX:"auto"}}>
+        <div style={{minWidth:560}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 140px 90px 110px 70px 90px",
+            gap:"0 8px",padding:"0 8px 8px",borderBottom:`1px solid ${T.border}`,
+            fontSize:10,color:T.faint,fontWeight:600,letterSpacing:"0.05em",textTransform:"uppercase"}}>
+            {[["name","Project"],["client","Client"],["status","Status"],
+              ["value","Value"],["margin","Margin"],["due","Due"]].map(([col,lbl])=>
+              <div key={col} onClick={()=>toggleSort(col)}
+                style={{cursor:"pointer",display:"flex",alignItems:"center",gap:3,
+                  color:projSort.col===col?T.accent:T.faint,userSelect:"none"}}>
+                {lbl}
+                {projSort.col===col&&<span style={{fontSize:9}}>{projSort.dir==="asc"?"▲":"▼"}</span>}
+              </div>
+            )}
+          </div>
+          {projTableData.map((p,i)=>{
+            const cfg=STATUS_CFG[p._status]||{color:T.faint,label:p._status};
+            const overdue=p._due&&new Date(p._due)<new Date()&&!["complete","lost","archived"].includes(p._status);
+            return <div key={p.id} style={{display:"grid",
+              gridTemplateColumns:"1fr 140px 90px 110px 70px 90px",
+              gap:"0 8px",padding:"9px 8px",alignItems:"center",
+              borderBottom:i<projTableData.length-1?`1px solid ${T.border}`:"none",
+              background:i%2===0?"transparent":T.bg}}>
+              <div style={{fontSize:12,color:T.text,overflow:"hidden",
+                textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={p._name}>{p._name}</div>
+              <div style={{fontSize:11,color:T.muted,overflow:"hidden",
+                textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={p._client}>{p._client}</div>
+              <div>
+                <span style={{display:"inline-block",padding:"2px 7px",borderRadius:10,
+                  fontSize:10,fontWeight:600,background:`${cfg.color}20`,color:cfg.color,
+                  border:`1px solid ${cfg.color}40`,whiteSpace:"nowrap"}}>{cfg.label}</span>
+              </div>
+              <div style={{fontFamily:T.mono,fontSize:12,color:T.text,fontWeight:600}}>
+                {$$(p._value,true)}
+              </div>
+              <div style={{fontFamily:T.mono,fontSize:12,color:p._margin>0?T.green:T.faint}}>
+                {p._margin>0?`${p._margin}%`:"—"}
+              </div>
+              <div style={{fontSize:11,color:overdue?"#ef4444":T.muted,whiteSpace:"nowrap"}}>
+                {p._due?fmtDate(p._due,true):"—"}
+              </div>
+            </div>;
+          })}
+          {projTableData.length===0&&<div style={{padding:"24px 8px",fontSize:12,color:T.faint}}>
+            No projects match this filter.
+          </div>}
+        </div>
+      </div>
+      {projTableData.length>0&&<div style={{marginTop:10,padding:"8px 0 0",
+        borderTop:`1px solid ${T.border}`,display:"flex",gap:16,flexWrap:"wrap",
+        fontSize:11,color:T.faint,fontFamily:T.mono}}>
+        <span>{projTableData.length} project{projTableData.length!==1?"s":""}</span>
+        <span>Total: <strong style={{color:T.text}}>{$$(projTableData.reduce((s,p)=>s+p._value,0),true)}</strong></span>
+        {projTableData.some(p=>p._margin>0)&&<span>
+          Avg margin: <strong style={{color:T.green}}>
+            {(projTableData.filter(p=>p._margin>0).reduce((s,p)=>s+p._margin,0)/
+              projTableData.filter(p=>p._margin>0).length).toFixed(1)}%
+          </strong>
+        </span>}
+      </div>}
+    </Card>}
   </div>;
 }
 
