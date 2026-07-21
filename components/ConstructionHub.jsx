@@ -3382,6 +3382,17 @@ function AiReviewPanel({ result, onAccept, onDiscard, T }) {
   const [editingId, setEditingId] = React.useState(null);
   const [editDraft, setEditDraft] = React.useState({});
   const [sel, setSel] = React.useState(new Set(result.items.map(i => i.id)));
+  const [history, setHistory] = React.useState([]); // undo stack [{items, sel}]
+
+  function snapshot() { setHistory(h => [...h.slice(-9), { items: reviewItems.map(x=>({...x})), sel: new Set(sel) }]); }
+  function undo() {
+    if (!history.length) return;
+    const prev = history[history.length - 1];
+    setHistory(h => h.slice(0, -1));
+    setReviewItems(prev.items);
+    setSel(prev.sel);
+    setEditingId(null);
+  }
 
   const toggleAll = () => setSel(sel.size === reviewItems.length ? new Set() : new Set(reviewItems.map(i => i.id)));
   const toggleItem = id => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -3391,17 +3402,31 @@ function AiReviewPanel({ result, onAccept, onDiscard, T }) {
     setEditDraft({ label: it.label, qty: it.qty, unit: it.unit });
   }
   function commitEdit(id) {
+    snapshot();
     setReviewItems(rs => rs.map(r => r.id === id ? { ...r, ...editDraft, qty: parseFloat(editDraft.qty) || 0 } : r));
     setEditingId(null);
   }
   function deleteItem(id) {
+    snapshot();
     setReviewItems(rs => rs.filter(r => r.id !== id));
     setSel(s => { const n = new Set(s); n.delete(id); return n; });
   }
   function deleteSelected() {
+    snapshot();
     const ids = sel;
     setReviewItems(rs => rs.filter(r => !ids.has(r.id)));
     setSel(new Set());
+  }
+  function mergeSelected() {
+    const ids = [...sel];
+    if (ids.length < 2) return;
+    snapshot();
+    const toMerge = reviewItems.filter(i => ids.includes(i.id));
+    const firstItem = toMerge[0];
+    const totalQty = toMerge.reduce((s, i) => s + (parseFloat(i.qty) || 0), 0);
+    const merged = { ...firstItem, qty: Math.round(totalQty * 100) / 100 };
+    setReviewItems(rs => [merged, ...rs.filter(r => !ids.includes(r.id))]);
+    setSel(new Set([firstItem.id]));
   }
 
   const selectedItems = reviewItems.filter(i => sel.has(i.id));
@@ -3437,8 +3462,14 @@ function AiReviewPanel({ result, onAccept, onDiscard, T }) {
           </div>
         </div>
         <Row gap={8}>
+          {history.length > 0 && (
+            <Btn sm v="gho" onClick={undo} title="Undo last change (Ctrl+Z)">↩ Undo</Btn>
+          )}
+          {sel.size >= 2 && (
+            <Btn sm v="gho" onClick={mergeSelected} title="Merge selected items into one, summing quantities">⊕ Merge {sel.size}</Btn>
+          )}
           {sel.size > 0 && sel.size < reviewItems.length && (
-            <Btn sm v="red" onClick={deleteSelected}>Delete {sel.size} selected</Btn>
+            <Btn sm v="red" onClick={deleteSelected}>✕ Delete {sel.size}</Btn>
           )}
           <Btn sm v="gho" onClick={onDiscard}>Discard</Btn>
           <Btn sm v="tel" onClick={() => onAccept(reviewItems.filter(i => sel.has(i.id)))}>
