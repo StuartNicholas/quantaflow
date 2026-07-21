@@ -137,7 +137,7 @@ function CabinetRow({ cab, onEdit, onDelete, onStatusChange, T }) {
       background: cab.ai_draft ? "rgba(59,130,246,0.05)" : T.card,
       border: `1px solid ${cab.ai_draft ? "rgba(59,130,246,0.25)" : T.border}`,
       borderRadius: 7, padding: "10px 14px", marginBottom: 6,
-      display: "grid",
+      display: "grid", minWidth: 680,
       gridTemplateColumns: "80px 1fr 80px 80px 80px 100px 130px 80px",
       gap: "0 10px", alignItems: "center",
       fontSize: 12,
@@ -233,7 +233,7 @@ function CabinetRow({ cab, onEdit, onDelete, onStatusChange, T }) {
 
 // ── Cabinet Editor (inline full form) ────────────────────────────────────────
 
-function CabinetEditor({ cab, onSave, onCancel, onApprove, T }) {
+function CabinetEditor({ cab, onSave, onCancel, onApprove, T, isMobile }) {
   const [form, setForm] = useState({ ...BLANK_CABINET, ...cab });
   const [busy, setBusy] = useState(false);
 
@@ -273,7 +273,7 @@ function CabinetEditor({ cab, onSave, onCancel, onApprove, T }) {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0 14px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: "0 14px" }}>
         {/* Section: Identity */}
         <div style={{ gridColumn: "1/-1", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.accent, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${T.border}` }}>Identity</div>
         <F label="Cabinet Number"><Inp k="cabinet_number" /></F>
@@ -373,6 +373,13 @@ function GroupHeader({ label, count, totalSell, expanded, onToggle, T }) {
 
 export default function CabinetDatabase({ proj, company, T, pop }) {
   const projectId = proj?.id;
+  const [windowW, setWindowW] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
+  useEffect(() => {
+    function onResize() { setWindowW(window.innerWidth); }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const isMobile = windowW < 768;
 
   const [cabinets,      setCabinets]      = useState([]);
   const [draftCabinets, setDraftCabinets] = useState([]);
@@ -857,34 +864,18 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
         )}
       </div>
 
-      {/* ── Column headers ── */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "80px 1fr 80px 80px 80px 100px 130px 80px",
-        gap: "0 10px", padding: "5px 14px", marginBottom: 4,
-        fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
-        color: T.faint,
-      }}>
-        <div>Cab #</div>
-        <div>Description / Location</div>
-        <div>W×H×D</div>
-        <div>Doors</div>
-        <div>Sell</div>
-        <div>AI</div>
-        <div>Status</div>
-        <div />
-      </div>
-
-      {/* ── New cabinet editor ── */}
+      {/* ── New cabinet editor (full width, outside scroll area) ── */}
       {editingId === "new" && (
         <CabinetEditor
           cab={BLANK_CABINET}
           onSave={handleSaveNew}
           onCancel={() => setEditingId(null)}
           T={T}
+          isMobile={isMobile}
         />
       )}
 
-      {/* ── Cabinet groups ── */}
+      {/* ── Cabinet groups — horizontal scroll on mobile ── */}
       {filtered.length === 0 && editingId !== "new" && (
         <div style={{ textAlign: "center", padding: "40px 0", color: T.faint, fontSize: 13 }}>
           {cabinets.length === 0
@@ -893,41 +884,61 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
         </div>
       )}
 
-      {Object.entries(groups).map(([groupLabel, cabs]) => {
-        const groupSell = cabs.reduce((s, c) => s + Number(c.sell_price || 0), 0);
-        const collapsed = collapsedGroups[groupLabel];
-        return (
-          <div key={groupLabel} style={{ marginBottom: 8 }}>
-            <GroupHeader
-              label={groupLabel}
-              count={cabs.length}
-              totalSell={groupSell}
-              expanded={!collapsed}
-              onToggle={() => toggleGroup(groupLabel)}
-              T={T}
-            />
-            {!collapsed && cabs.map(cab => (
-              editingId === cab.id
-                ? <CabinetEditor
-                    key={cab.id}
-                    cab={cab}
-                    onSave={handleSaveExisting}
-                    onCancel={() => setEditingId(null)}
-                    onApprove={handleApprove}
-                    T={T}
-                  />
-                : <CabinetRow
-                    key={cab.id}
-                    cab={cab}
-                    onEdit={c => setEditingId(c.id)}
-                    onDelete={handleDelete}
-                    onStatusChange={handleStatusChange}
-                    T={T}
-                  />
-            ))}
-          </div>
-        );
-      })}
+      <div style={{ overflowX: "auto" }}>
+        {/* Column headers */}
+        {filtered.length > 0 && <div style={{
+          display: "grid", gridTemplateColumns: "80px 1fr 80px 80px 80px 100px 130px 80px",
+          gap: "0 10px", padding: "5px 14px", marginBottom: 4, minWidth: 680,
+          fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+          color: T.faint,
+        }}>
+          <div>Cab #</div>
+          <div>Description / Location</div>
+          <div>W×H×D</div>
+          <div>Doors</div>
+          <div>Sell</div>
+          <div>AI</div>
+          <div>Status</div>
+          <div />
+        </div>}
+
+        {Object.entries(groups).map(([groupLabel, cabs]) => {
+          const groupSell = cabs.reduce((s, c) => s + Number(c.sell_price || 0), 0);
+          const collapsed = collapsedGroups[groupLabel];
+          return (
+            <div key={groupLabel} style={{ marginBottom: 8, minWidth: 680 }}>
+              <GroupHeader
+                label={groupLabel}
+                count={cabs.length}
+                totalSell={groupSell}
+                expanded={!collapsed}
+                onToggle={() => toggleGroup(groupLabel)}
+                T={T}
+              />
+              {!collapsed && cabs.map(cab => (
+                editingId === cab.id
+                  ? <CabinetEditor
+                      key={cab.id}
+                      cab={cab}
+                      onSave={handleSaveExisting}
+                      onCancel={() => setEditingId(null)}
+                      onApprove={handleApprove}
+                      T={T}
+                      isMobile={isMobile}
+                    />
+                  : <CabinetRow
+                      key={cab.id}
+                      cab={cab}
+                      onEdit={c => setEditingId(c.id)}
+                      onDelete={handleDelete}
+                      onStatusChange={handleStatusChange}
+                      T={T}
+                    />
+              ))}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
