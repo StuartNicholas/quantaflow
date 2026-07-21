@@ -9400,6 +9400,10 @@ function ClaimsModule({proj, c, pop, company, clients, onMutate}) {
       </div>
     </div>}
 
+    {!claims.length&&!showNew&&!wiz&&<Card><div style={{color:T.faint,fontSize:13,padding:"8px 0"}}>
+      No progress claims yet. Click <strong>+ New Claim</strong> to raise your first claim for this project.
+    </div></Card>}
+
     {claims.map(cl=>{
       const st     = STATUS[cl.status]||STATUS.draft;
       const total  = claimTotal(cl);
@@ -9707,7 +9711,9 @@ function ClientsModule({clients, reloadClients, clientsLoading, projects, pop}) 
             </div>
           </div>;
         })}
-        {!filtered.length&&!clientsLoading&&<div style={{color:T.faint,fontSize:13}}>No clients found.</div>}
+        {!filtered.length&&!clientsLoading&&<Card><div style={{color:T.faint,fontSize:13,textAlign:"center",padding:20}}>
+          {clients.length===0?"No clients yet. Add one above.":"No clients match your search."}
+        </div></Card>}
       </div>
 
       {/* Client detail */}
@@ -11350,7 +11356,9 @@ function TradeRates({rates, setRates, companyId, pop}) {
               </Row>
             </td>
           </tr>)}
-          {!filtered.length&&<tr><td colSpan={6} style={{padding:28,textAlign:"center",color:T.faint}}>No rates found.</td></tr>}
+          {!filtered.length&&<tr><td colSpan={6} style={{padding:28,textAlign:"center",color:T.faint}}>
+            {rates.length===0?"No rates yet — add one above or import a CSV.":"No rates match the current filter."}
+          </td></tr>}
         </tbody>
       </table>
     </Card>
