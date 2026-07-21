@@ -11160,9 +11160,9 @@ function XeroModule({projects, xero, setXero, mutProj, pop}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // SUBSCRIPTION HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
-const PLAN_PRICE_AUD = {beta:0,starter:89,team:149,pro:229,enterprise:999};
-const PLAN_LIMITS    = {beta:100,starter:200,team:500,pro:1500,enterprise:-1};
-const PLAN_CLR = p => p==="starter"?T.blue:p==="team"?T.green:p==="pro"?T.accent:p==="enterprise"?T.purple:T.muted;
+const PLAN_PRICE_AUD = {beta:0,starter:89,pro:149,studio:229,enterprise:0};
+const PLAN_LIMITS    = {beta:100,starter:300,pro:1000,studio:3000,enterprise:-1};
+const PLAN_CLR = p => p==="starter"?T.blue:p==="pro"?T.green:p==="studio"?T.accent:p==="enterprise"?T.purple:T.muted;
 const CREDIT_PACKS = [
   {credits:100, aud:35,  label:"Starter Pack",  note:"35¢ / credit"},
   {credits:300, aud:89,  label:"Value Pack",     note:"30¢ / credit"},
@@ -11171,12 +11171,12 @@ const CREDIT_PACKS = [
 
 function PlanChangeModal({currentPlan, companyId, onClose, pop}) {
   const ALL_PLANS = [
-    {id:"starter", label:"Starter",    price:89,  credits:200,  features:["200 AI credits/mo","All modules","1 user"]},
-    {id:"team",    label:"Team",       price:149, credits:500,  features:["500 AI credits/mo","All modules","Up to 5 users"]},
-    {id:"pro",     label:"Pro",        price:229, credits:1500, features:["1,500 AI credits/mo","All modules","Unlimited users","Priority support"]},
-    {id:"enterprise",label:"Enterprise",price:999,credits:-1,  features:["Unlimited AI credits","All modules","Unlimited users","Dedicated support"]},
+    {id:"starter",    label:"Starter",    price:89,  credits:300,   features:["300 AI credits/mo","Unlimited users","All modules"]},
+    {id:"pro",        label:"Pro",        price:149, credits:1000,  features:["1,000 AI credits/mo","Unlimited users","Priority AI processing","Advanced reporting"]},
+    {id:"studio",     label:"Studio",     price:229, credits:3000,  features:["3,000 AI credits/mo","Unlimited users","Highest priority AI","Dedicated support"]},
+    {id:"enterprise", label:"Enterprise", price:null,credits:-1,    features:["Custom AI credits","Unlimited users","Custom integrations","SLA agreement"]},
   ].filter(p=>p.id!==currentPlan);
-  const order={beta:0,starter:1,team:2,pro:3,enterprise:4};
+  const order={beta:0,starter:1,pro:2,studio:3,enterprise:4};
   const isUpgrade = id => (order[id]||0)>(order[currentPlan]||0);
 
   const [selected,setSelected]=useState(null);
@@ -11224,8 +11224,8 @@ function PlanChangeModal({currentPlan, companyId, onClose, pop}) {
                   <div style={{color:T.muted,fontSize:12}}>{p.features.join(" · ")}</div>
                 </div>
                 <div style={{textAlign:"right",flexShrink:0}}>
-                  <div style={{fontWeight:800,fontSize:18}}>${p.price}</div>
-                  <div style={{color:T.muted,fontSize:11}}>AUD/mo</div>
+                  <div style={{fontWeight:800,fontSize:18}}>{p.price===null?"Custom":`$${p.price}`}</div>
+                  <div style={{color:T.muted,fontSize:11}}>{p.price===null?"pricing":"AUD/mo"}</div>
                 </div>
               </div>
               {selected===p.id&&(
@@ -11266,7 +11266,7 @@ function CreditTopupModal({companyId, onClose, pop}) {
     if(error){pop(error.message,"error");return;}
     const sub=encodeURIComponent("Verixo — Credit Top-Up Request");
     const body=encodeURIComponent(`Hi,\n\nI'd like to purchase the ${pack.label} (${pack.credits} AI credits for $${pack.aud} AUD).\n\nPlease send me a payment link.\n\nThanks`);
-    window.open(`mailto:stuart.dean.nicholas@gmail.com?subject=${sub}&body=${body}`,"_self");
+    window.open(`mailto:hello@verixo.com.au?subject=${sub}&body=${body}`,"_self");
     pop(`Credit request sent — we'll email you a payment link. Your ${pack.credits} credits will be added on payment.`,"success");
     onClose();
   }
@@ -11623,7 +11623,7 @@ function SettingsModule({company, setCompany, companyId, userRole, userTier, tra
   const previewIncGst  = previewExGst * (1 + local.defaultGst/100);         // + GST
 
   return <div>
-    <Hdr sub="Company profile, branding, quote defaults and financial settings.">Settings</Hdr>
+    <Hdr sub="Account, company profile, team, permissions, project defaults and branding.">Settings</Hdr>
 
     {/* ── Account ── */}
     <Card sx={{marginBottom:16}}>
