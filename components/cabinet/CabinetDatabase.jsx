@@ -383,6 +383,7 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
   const [search,        setSearch]        = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [sortDir, setSortDir] = useState("asc");
+  const [statusFilter, setStatusFilter] = useState(""); // "" = all
   const [aiOpen,    setAiOpen]    = useState(false);
   const [aiFiles,   setAiFiles]   = useState([]);
   const [aiLog,     setAiLog]     = useState([]);
@@ -406,11 +407,12 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
   // ── Filter / group ──────────────────────────────────────────────────────────
 
   const displayCabinets = filteringDraft ? draftCabinets : cabinets;
-  const filtered = search
-    ? displayCabinets.filter(c =>
-        `${c.cabinet_number} ${c.description} ${c.cabinet_type} ${c.room} ${c.unit_type} ${c.joinery_type}`
-          .toLowerCase().includes(search.toLowerCase()))
-    : displayCabinets;
+  const filtered = displayCabinets.filter(c => {
+    if (statusFilter && c.status !== statusFilter) return false;
+    if (search && !`${c.cabinet_number} ${c.description} ${c.cabinet_type} ${c.room} ${c.unit_type} ${c.joinery_type}`
+        .toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
 
   function groupKey(c) {
     if (groupBy === "room")         return c.room        || "Unassigned";
@@ -647,6 +649,32 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
 
   const fmt = v => `$${Number(v).toLocaleString("en-AU", { minimumFractionDigits: 0 })}`;
 
+  function exportCSV() {
+    const esc = v => String(v ?? "").replace(/,/g, " ").replace(/\n/g, " ");
+    const rows = [
+      ["Cab #","Type","Description","Room","Unit Type","Joinery","Level","Building",
+       "Width","Height","Depth","Doors","Drawers","Material","Door Style",
+       "Sell Price","Unit Cost","Labour Hrs","Status","AI Source"],
+      ...cabinets.map(c=>[
+        esc(c.cabinet_number), esc(c.cabinet_type), esc(c.description||c.cabinet_type),
+        esc(c.room), esc(c.unit_type), esc(c.joinery_type), esc(c.level), esc(c.building),
+        c.width||"", c.height||"", c.depth||"",
+        c.door_qty||0, c.drawer_qty||0,
+        esc(c.material), esc(c.door_style),
+        Number(c.sell_price||0).toFixed(2),
+        Number(c.unit_cost||0).toFixed(2),
+        Number(c.labour_hours||0).toFixed(1),
+        c.status||"pending",
+        c.ai_source||"manual",
+      ]),
+    ];
+    const csv = rows.map(r=>r.join(",")).join("\n");
+    const a = document.createElement("a");
+    a.href = "data:text/csv;charset=utf-8,"+encodeURIComponent(csv);
+    a.download = `cabinets-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+  }
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -782,6 +810,18 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
           onBlur={e => e.target.style.borderColor = T.border}
         />
 
+        <select
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value)}
+          style={{
+            background: T.card, color: statusFilter ? T.accent : T.muted,
+            border: `1px solid ${statusFilter ? T.accent : T.border}`, borderRadius: 5,
+            padding: "7px 10px", fontSize: 12, cursor: "pointer", outline: "none",
+          }}>
+          <option value="">All statuses</option>
+          {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+        </select>
+
         <div style={{ display: "flex", gap: 2, background: T.card2, border: `1px solid ${T.border}`, borderRadius: 5, overflow: "hidden" }}>
           {[
             { k: "room",         label: "Room" },
@@ -807,6 +847,14 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
           style={{ background: T.accent, color: "#000", border: "none", borderRadius: 5, padding: "7px 16px", fontWeight: 800, fontSize: 13, cursor: "pointer" }}>
           + Add Cabinet
         </button>
+
+        {cabinets.length > 0 && (
+          <button
+            onClick={exportCSV}
+            style={{ background: "transparent", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 5, padding: "7px 12px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
+            ↓ CSV
+          </button>
+        )}
       </div>
 
       {/* ── Column headers ── */}
