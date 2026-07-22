@@ -76,11 +76,12 @@ export async function GET(req: Request) {
     authUsers,
     planRequests:   planRequestsRes.data   || [],
     creditRequests: creditRequestsRes.data || [],
-    debug: (companiesRes.error || profilesRes.error) ? {
+    debug: {
       companiesError:    companiesRes.error?.message    || null,
       profilesError:     profilesRes.error?.message     || null,
       entitlementsError: entitlementsRes.error?.message || null,
-    } : null,
+      usageLogsError:    usageLogsRes.error?.message    || null,
+    },
   });
 }
 

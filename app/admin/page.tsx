@@ -51,7 +51,7 @@ function Badge({ label, color }: { label: string; color: string }) {
 
 // ── Entitlement editor panel ──────────────────────────────────────────────────
 
-function EntitlementEditor({ company, ent, onSave, onClose }: { company: any; ent: any; onSave: (patch: any) => Promise<void>; onClose: () => void }) {
+function EntitlementEditor({ company, ent, onSave, onClose, saveErr }: { company: any; ent: any; onSave: (patch: any) => Promise<void>; onClose: () => void; saveErr?: string | null }) {
   const [form, setForm] = React.useState({
     licenceType:        ent?.licence_type        || "beta",
     billingExempt:      ent?.billing_exempt      ?? false,
@@ -114,6 +114,12 @@ function EntitlementEditor({ company, ent, onSave, onClose }: { company: any; en
           <div><span style={{ color: C.muted }}>Billing Exempt: </span><span style={{ color: form.billingExempt ? C.yellow : C.muted }}>{form.billingExempt ? "Yes" : "No"}</span></div>
         </div>
 
+        {saveErr && (
+          <div style={{ background: `${C.red}18`, border: `1px solid ${C.red}55`, borderRadius: 7, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: C.red }}>
+            <strong>Save failed:</strong> {saveErr}
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={async () => { setSaving(true); await onSave(form); setSaving(false); }}
             disabled={saving}
@@ -139,6 +145,7 @@ export default function ShilaconAdmin() {
   const [data,     setData]     = useState<any>(null);
   const [token,    setToken]    = useState("");
   const [editing,  setEditing]  = useState<{ company: any; ent: any } | null>(null);
+  const [saveErr,  setSaveErr]  = useState<string | null>(null);
   const [tab,      setTab]      = useState<"companies" | "ai_usage" | "requests">("companies");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -171,7 +178,12 @@ export default function ShilaconAdmin() {
   }
 
   async function saveEntitlement(companyId: string, patch: any) {
-    await apiPost({ action: "setEntitlement", companyId, ...patch });
+    setSaveErr(null);
+    const result = await apiPost({ action: "setEntitlement", companyId, ...patch });
+    if (result?.error) {
+      setSaveErr(result.error);
+      return; // keep modal open so user can see the error
+    }
     setEditing(null);
     await load(token);
   }
@@ -237,6 +249,14 @@ export default function ShilaconAdmin() {
           </button>
         </div>
       </div>
+
+      {/* DB errors — always visible if any table fails */}
+      {data?.debug && Object.entries(data.debug).some(([, v]) => v) && (
+        <div style={{ background: `${C.red}18`, border: `1px solid ${C.red}44`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, fontSize: 12, color: C.red }}>
+          <strong>Database errors:</strong>{" "}
+          {Object.entries(data.debug).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(" · ")}
+        </div>
+      )}
 
       {/* KPIs */}
       <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
@@ -431,7 +451,8 @@ export default function ShilaconAdmin() {
           company={editing.company}
           ent={editing.ent}
           onSave={patch => saveEntitlement(editing.company.id, patch)}
-          onClose={() => setEditing(null)}
+          onClose={() => { setEditing(null); setSaveErr(null); }}
+          saveErr={saveErr}
         />
       )}
     </main>
