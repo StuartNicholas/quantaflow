@@ -53,7 +53,7 @@ export async function GET(req: Request) {
     await Promise.all([
       userClient.from("companies").select("*").order("created_at", { ascending: false }),
       userClient.from("profiles").select("id, company_id, full_name, role, created_at"),
-      db.from("company_entitlements").select("*"),
+      userClient.from("company_entitlements").select("*"),
       db.from("ai_usage_logs").select("company_id, user_id, feature, model, input_tokens, output_tokens, estimated_cost, credits_used, created_at").order("created_at", { ascending: false }).limit(500),
       // Legacy table — keep reading for backwards compat during transition
       userClient.from("ai_usage").select("company_id, credits, kind, pages, created_at").order("created_at", { ascending: false }).limit(200),
@@ -101,59 +101,48 @@ export async function POST(req: Request) {
   // ── Entitlement management ─────────────────────────────────────────────────
 
   if (action === "setEntitlement") {
-    const {
-      licenceType, billingExempt, subscriptionStatus,
-      aiEnabled, aiMonthlyLimit,
-    } = body;
-
-    const patch: Record<string, unknown> = {};
-    if (licenceType        !== undefined) patch.licence_type        = licenceType;
-    if (billingExempt      !== undefined) patch.billing_exempt      = billingExempt;
-    if (subscriptionStatus !== undefined) patch.subscription_status = subscriptionStatus;
-    if (aiEnabled          !== undefined) patch.ai_enabled          = aiEnabled;
-    if (aiMonthlyLimit     !== undefined) patch.ai_monthly_limit    = Number(aiMonthlyLimit);
-
-    // Upsert — handles companies that don't have an entitlement row yet
-    const { error } = await db
-      .from("company_entitlements")
-      .upsert({ company_id: companyId, ...patch }, { onConflict: "company_id" });
+    const { licenceType, billingExempt, subscriptionStatus, aiEnabled, aiMonthlyLimit } = body;
+    const args: Record<string, unknown> = { p_company_id: companyId };
+    if (licenceType        !== undefined) args.p_licence_type        = licenceType;
+    if (billingExempt      !== undefined) args.p_billing_exempt      = billingExempt;
+    if (subscriptionStatus !== undefined) args.p_subscription_status = subscriptionStatus;
+    if (aiEnabled          !== undefined) args.p_ai_enabled          = aiEnabled;
+    if (aiMonthlyLimit     !== undefined) args.p_ai_monthly_limit    = Number(aiMonthlyLimit);
+    const { error } = await userClient.rpc("admin_upsert_entitlement", args);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
   }
 
   if (action === "enableAi") {
-    const { error } = await db
-      .from("company_entitlements")
-      .upsert({ company_id: companyId, ai_enabled: true }, { onConflict: "company_id" });
+    const { error } = await userClient.rpc("admin_upsert_entitlement", {
+      p_company_id: companyId, p_ai_enabled: true,
+    });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
   }
 
   if (action === "disableAi") {
-    const { error } = await db
-      .from("company_entitlements")
-      .upsert({ company_id: companyId, ai_enabled: false }, { onConflict: "company_id" });
+    const { error } = await userClient.rpc("admin_upsert_entitlement", {
+      p_company_id: companyId, p_ai_enabled: false,
+    });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
   }
 
   if (action === "resetAiUsage") {
-    const { error } = await db
-      .from("company_entitlements")
-      .update({ ai_usage_this_month: 0 })
-      .eq("company_id", companyId);
+    const { error } = await userClient.rpc("admin_upsert_entitlement", {
+      p_company_id: companyId, p_ai_usage_this_month: 0,
+    });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
   }
 
   if (action === "setLicence") {
     const { licenceType, billingExempt } = body;
-    const patch: Record<string, unknown> = {};
-    if (licenceType   !== undefined) patch.licence_type   = licenceType;
-    if (billingExempt !== undefined) patch.billing_exempt = billingExempt;
-    const { error } = await db
-      .from("company_entitlements")
-      .upsert({ company_id: companyId, ...patch }, { onConflict: "company_id" });
+    const args: Record<string, unknown> = { p_company_id: companyId };
+    if (licenceType   !== undefined) args.p_licence_type   = licenceType;
+    if (billingExempt !== undefined) args.p_billing_exempt = billingExempt;
+    const { error } = await userClient.rpc("admin_upsert_entitlement", args);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
   }
