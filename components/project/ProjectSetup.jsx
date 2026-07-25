@@ -29,34 +29,25 @@ const GST_RATES = [
   { value: "custom", label: "Custom…" },
 ];
 
-function Field({ label, T, children }) {
+function Field({ label, ls, children }) {
   return (
     <div style={{ marginBottom: 16 }}>
-      <label style={{ fontSize: 11, color: T.muted, marginBottom: 5, display: "block", fontWeight: 600, letterSpacing: "0.04em" }}>
-        {label}
-      </label>
+      <label style={ls}>{label}</label>
       {children}
     </div>
   );
 }
 
-function Input({ k, form, set, T, placeholder, type = "text" }) {
-  const inputStyle = {
-    width: "100%", boxSizing: "border-box",
-    background: T.card2, color: T.text,
-    border: `1px solid ${T.border}`, borderRadius: 6,
-    padding: "9px 11px", fontSize: 13, outline: "none",
-    fontFamily: T.font,
-  };
+function Input({ k, form, set, is, accent, border, placeholder, type = "text" }) {
   return (
     <input
       type={type}
       value={form[k]}
       onChange={e => set(k, e.target.value)}
       placeholder={placeholder || ""}
-      style={inputStyle}
-      onFocus={e => e.target.style.borderColor = T.accent}
-      onBlur={e => e.target.style.borderColor = T.border}
+      style={is}
+      onFocus={e => e.target.style.borderColor = accent}
+      onBlur={e => e.target.style.borderColor = border}
     />
   );
 }
@@ -104,6 +95,7 @@ export default function ProjectSetup({ proj, clients, builders, company, onSave,
     setBusy(false);
   }
 
+  // Pre-compute style objects here where T is always defined as a prop
   const inputStyle = {
     width: "100%", boxSizing: "border-box",
     background: T.card2, color: T.text,
@@ -111,6 +103,10 @@ export default function ProjectSetup({ proj, clients, builders, company, onSave,
     padding: "9px 11px", fontSize: 13, outline: "none",
     fontFamily: T.font,
   };
+  const labelStyle = { fontSize: 11, color: T.muted, marginBottom: 5, display: "block", fontWeight: 600, letterSpacing: "0.04em" };
+  // Shorthand spreads so Field/Input calls stay concise
+  const f = { ls: labelStyle };
+  const i = { form, set, is: inputStyle, accent: T.accent, border: T.border };
   const sectionStyle = { marginBottom: 24, paddingBottom: 24, borderBottom: `1px solid ${T.border}` };
   const sectionTitleStyle = { fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.accent, marginBottom: 16 };
   const gridStyle = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" };
@@ -161,24 +157,24 @@ export default function ProjectSetup({ proj, clients, builders, company, onSave,
         {/* ── Section 1: Identity ── */}
         <div style={sectionStyle}>
           <div style={sectionTitleStyle}>Project Identity</div>
-          <Field label="Project Name *" T={T}>
-            <Input k="name" form={form} set={set} T={T} placeholder="e.g. 42 Maple Street Kitchen" />
+          <Field label="Project Name *" {...f}>
+            <Input k="name" {...i} placeholder="e.g. 42 Maple Street Kitchen" />
           </Field>
-          <Field label="Project Address" T={T}>
-            <Input k="address" form={form} set={set} T={T} placeholder="Full project address" />
+          <Field label="Project Address" {...f}>
+            <Input k="address" {...i} placeholder="Full project address" />
           </Field>
           <div style={gridStyle}>
-            <Field label="Project Number" T={T}>
-              <Input k="project_number" form={form} set={set} T={T} placeholder="e.g. PRJ-2026-041" />
+            <Field label="Project Number" {...f}>
+              <Input k="project_number" {...i} placeholder="e.g. PRJ-2026-041" />
             </Field>
-            <Field label="Tender Number" T={T}>
-              <Input k="tender_number" form={form} set={set} T={T} placeholder="e.g. TND-1045" />
+            <Field label="Tender Number" {...f}>
+              <Input k="tender_number" {...i} placeholder="e.g. TND-1045" />
             </Field>
-            <Field label="Revision" T={T}>
-              <Input k="revision" form={form} set={set} T={T} placeholder="1" />
+            <Field label="Revision" {...f}>
+              <Input k="revision" {...i} placeholder="1" />
             </Field>
-            <Field label="Estimator" T={T}>
-              <Input k="estimator" form={form} set={set} T={T} placeholder="Name of the estimator" />
+            <Field label="Estimator" {...f}>
+              <Input k="estimator" {...i} placeholder="Name of the estimator" />
             </Field>
           </div>
         </div>
@@ -247,17 +243,17 @@ export default function ProjectSetup({ proj, clients, builders, company, onSave,
             These link the project to specific pricing, material, and hardware libraries. Leave blank to use company defaults.
           </div>
           <div style={gridStyle}>
-            <Field label="Default Trade Scope" T={T}>
-              <Input k="default_trade_scope" form={form} set={set} T={T} placeholder="e.g. Supply & Install" />
+            <Field label="Default Trade Scope" {...f}>
+              <Input k="default_trade_scope" {...i} placeholder="e.g. Supply & Install" />
             </Field>
-            <Field label="Default Pricing Library" T={T}>
-              <Input k="default_pricing_library" form={form} set={set} T={T} placeholder="e.g. Standard 2026" />
+            <Field label="Default Pricing Library" {...f}>
+              <Input k="default_pricing_library" {...i} placeholder="e.g. Standard 2026" />
             </Field>
-            <Field label="Default Material Library" T={T}>
-              <Input k="default_material_library" form={form} set={set} T={T} placeholder="e.g. Polytec Colour Range" />
+            <Field label="Default Material Library" {...f}>
+              <Input k="default_material_library" {...i} placeholder="e.g. Polytec Colour Range" />
             </Field>
-            <Field label="Default Hardware Library" T={T}>
-              <Input k="default_hardware_library" form={form} set={set} T={T} placeholder="e.g. Blum Standard" />
+            <Field label="Default Hardware Library" {...f}>
+              <Input k="default_hardware_library" {...i} placeholder="e.g. Blum Standard" />
             </Field>
           </div>
         </div>
