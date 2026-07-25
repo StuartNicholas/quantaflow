@@ -29,6 +29,38 @@ const GST_RATES = [
   { value: "custom", label: "Custom…" },
 ];
 
+function Field({ label, T, children }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <label style={{ fontSize: 11, color: T.muted, marginBottom: 5, display: "block", fontWeight: 600, letterSpacing: "0.04em" }}>
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+function Input({ k, form, set, T, placeholder, type = "text" }) {
+  const inputStyle = {
+    width: "100%", boxSizing: "border-box",
+    background: T.card2, color: T.text,
+    border: `1px solid ${T.border}`, borderRadius: 6,
+    padding: "9px 11px", fontSize: 13, outline: "none",
+    fontFamily: T.font,
+  };
+  return (
+    <input
+      type={type}
+      value={form[k]}
+      onChange={e => set(k, e.target.value)}
+      placeholder={placeholder || ""}
+      style={inputStyle}
+      onFocus={e => e.target.style.borderColor = T.accent}
+      onBlur={e => e.target.style.borderColor = T.border}
+    />
+  );
+}
+
 export default function ProjectSetup({ proj, clients, builders, company, onSave, onCancel, T, isModal = false }) {
   const [form, setForm] = useState({
     name:                      proj?.name                      || "",
@@ -79,30 +111,9 @@ export default function ProjectSetup({ proj, clients, builders, company, onSave,
     padding: "9px 11px", fontSize: 13, outline: "none",
     fontFamily: T.font,
   };
-  const labelStyle = { fontSize: 11, color: T.muted, marginBottom: 5, display: "block", fontWeight: 600, letterSpacing: "0.04em" };
-  const fieldStyle = { marginBottom: 16 };
   const sectionStyle = { marginBottom: 24, paddingBottom: 24, borderBottom: `1px solid ${T.border}` };
   const sectionTitleStyle = { fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.accent, marginBottom: 16 };
   const gridStyle = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" };
-
-  const Field = ({ label, children }) => (
-    <div style={fieldStyle}>
-      <label style={labelStyle}>{label}</label>
-      {children}
-    </div>
-  );
-
-  const Input = ({ k, placeholder, type = "text" }) => (
-    <input
-      type={type}
-      value={form[k]}
-      onChange={e => set(k, e.target.value)}
-      placeholder={placeholder || ""}
-      style={inputStyle}
-      onFocus={e => e.target.style.borderColor = T.accent}
-      onBlur={e => e.target.style.borderColor = T.border}
-    />
-  );
 
   const Select = ({ k, options }) => (
     <select
@@ -150,24 +161,24 @@ export default function ProjectSetup({ proj, clients, builders, company, onSave,
         {/* ── Section 1: Identity ── */}
         <div style={sectionStyle}>
           <div style={sectionTitleStyle}>Project Identity</div>
-          <Field label="Project Name *">
-            <Input k="name" placeholder="e.g. 42 Maple Street Kitchen" />
+          <Field label="Project Name *" T={T}>
+            <Input k="name" form={form} set={set} T={T} placeholder="e.g. 42 Maple Street Kitchen" />
           </Field>
-          <Field label="Project Address">
-            <Input k="address" placeholder="Full project address" />
+          <Field label="Project Address" T={T}>
+            <Input k="address" form={form} set={set} T={T} placeholder="Full project address" />
           </Field>
           <div style={gridStyle}>
-            <Field label="Project Number">
-              <Input k="project_number" placeholder="e.g. PRJ-2026-041" />
+            <Field label="Project Number" T={T}>
+              <Input k="project_number" form={form} set={set} T={T} placeholder="e.g. PRJ-2026-041" />
             </Field>
-            <Field label="Tender Number">
-              <Input k="tender_number" placeholder="e.g. TND-1045" />
+            <Field label="Tender Number" T={T}>
+              <Input k="tender_number" form={form} set={set} T={T} placeholder="e.g. TND-1045" />
             </Field>
-            <Field label="Revision">
-              <Input k="revision" placeholder="1" />
+            <Field label="Revision" T={T}>
+              <Input k="revision" form={form} set={set} T={T} placeholder="1" />
             </Field>
-            <Field label="Estimator">
-              <Input k="estimator" placeholder="Name of the estimator" />
+            <Field label="Estimator" T={T}>
+              <Input k="estimator" form={form} set={set} T={T} placeholder="Name of the estimator" />
             </Field>
           </div>
         </div>
@@ -236,17 +247,17 @@ export default function ProjectSetup({ proj, clients, builders, company, onSave,
             These link the project to specific pricing, material, and hardware libraries. Leave blank to use company defaults.
           </div>
           <div style={gridStyle}>
-            <Field label="Default Trade Scope">
-              <Input k="default_trade_scope" placeholder="e.g. Supply & Install" />
+            <Field label="Default Trade Scope" T={T}>
+              <Input k="default_trade_scope" form={form} set={set} T={T} placeholder="e.g. Supply & Install" />
             </Field>
-            <Field label="Default Pricing Library">
-              <Input k="default_pricing_library" placeholder="e.g. Standard 2026" />
+            <Field label="Default Pricing Library" T={T}>
+              <Input k="default_pricing_library" form={form} set={set} T={T} placeholder="e.g. Standard 2026" />
             </Field>
-            <Field label="Default Material Library">
-              <Input k="default_material_library" placeholder="e.g. Polytec Colour Range" />
+            <Field label="Default Material Library" T={T}>
+              <Input k="default_material_library" form={form} set={set} T={T} placeholder="e.g. Polytec Colour Range" />
             </Field>
-            <Field label="Default Hardware Library">
-              <Input k="default_hardware_library" placeholder="e.g. Blum Standard" />
+            <Field label="Default Hardware Library" T={T}>
+              <Input k="default_hardware_library" form={form} set={set} T={T} placeholder="e.g. Blum Standard" />
             </Field>
           </div>
         </div>
