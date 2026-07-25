@@ -28,9 +28,21 @@ function adminClient() {
   );
 }
 
+function userClient(token: string) {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false },
+    }
+  );
+}
+
 type Identity = {
   userId: string;
   companyId: string;
+  token: string;
 };
 
 async function resolveIdentity(req: Request): Promise<Identity | null> {
@@ -39,8 +51,9 @@ async function resolveIdentity(req: Request): Promise<Identity | null> {
   if (!token) return null;
 
   try {
-    const db = adminClient();
-    const { data: userData, error: authErr } = await db.auth.getUser(token);
+    // Use the user's own JWT — no service role needed for identity resolution
+    const db = userClient(token);
+    const { data: userData, error: authErr } = await db.auth.getUser();
     if (authErr || !userData?.user?.id) return null;
 
     const userId = userData.user.id;
@@ -51,7 +64,7 @@ async function resolveIdentity(req: Request): Promise<Identity | null> {
       .single();
     if (profErr || !profile?.company_id) return null;
 
-    return { userId, companyId: profile.company_id };
+    return { userId, companyId: profile.company_id, token };
   } catch {
     return null;
   }
@@ -65,9 +78,10 @@ type EntitlementCheck = {
   limit?: number;
 };
 
-async function checkEntitlement(companyId: string): Promise<EntitlementCheck> {
+async function checkEntitlement(companyId: string, token: string): Promise<EntitlementCheck> {
   try {
-    const db = adminClient();
+    // Use the user's own JWT — covered by the members_read_own_entitlement SELECT policy
+    const db = userClient(token);
     const { data: ent, error } = await db
       .from("company_entitlements")
       .select("ai_enabled, licence_type, subscription_status, ai_monthly_limit, ai_usage_this_month")
@@ -165,7 +179,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { userId, companyId } = identity;
+  const { userId, companyId, token } = identity;
   const projectId = meta?.projectId || null;
   const feature   = String(meta?.kind || meta?.feature || "ai_takeoff");
 
@@ -173,7 +187,7 @@ export async function POST(req: Request) {
   // ai_scan is a cheap pre-flight classification — don't count it against limits
   const isScan = feature === "ai_scan";
   if (!isScan) {
-    const check = await checkEntitlement(companyId);
+    const check = await checkEntitlement(companyId, token);
     if (!check.allowed) {
       return NextResponse.json(
         { error: { message: check.reason, code: check.code, used: check.used, limit: check.limit } },
