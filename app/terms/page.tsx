@@ -1,3 +1,5 @@
+import { PRODUCT_NAME, PRODUCT_EMAIL } from "../../lib/constants";
+
 export default function TermsPage() {
   const lastUpdated = "21 July 2026";
   const effectiveDate = "21 July 2026";
@@ -128,12 +130,12 @@ export default function TermsPage() {
           <p>If you have any questions about these Terms, please contact Shilacon at:</p>
           <p style={{ color: "#94a3b8", lineHeight: 2 }}>
             Shilacon<br />
-            Email: <a href="mailto:hello@verixo.com" style={{ color: "#f59e0b" }}>hello@verixo.com</a>
+            Email: <a href={`mailto:${PRODUCT_EMAIL}`} style={{ color: "#f59e0b" }}>{PRODUCT_EMAIL}</a>
           </p>
         </Section>
 
         <div style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid #1e293b", textAlign: "center" }}>
-          <a href="/" style={{ color: "#f59e0b", textDecoration: "none", fontSize: 13, marginRight: 24 }}>← Back to Verixo</a>
+          <a href="/" style={{ color: "#f59e0b", textDecoration: "none", fontSize: 13, marginRight: 24 }}>← Back to {PRODUCT_NAME}</a>
           <a href="/privacy" style={{ color: "#94a3b8", textDecoration: "none", fontSize: 13 }}>Privacy Policy →</a>
         </div>
       </div>

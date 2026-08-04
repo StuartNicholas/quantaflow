@@ -1,3 +1,5 @@
+import { PRODUCT_NAME, PRODUCT_EMAIL } from "../../lib/constants";
+
 export default function PrivacyPage() {
   const lastUpdated = "21 July 2026";
 
@@ -116,7 +118,7 @@ export default function PrivacyPage() {
             <li><strong style={{ color: "#e2e8f0" }}>Export</strong> your Customer Data in a machine-readable format;</li>
             <li><strong style={{ color: "#e2e8f0" }}>Object</strong> to processing of your personal information in certain circumstances.</li>
           </ul>
-          <p>To exercise any of these rights, contact us at <a href="mailto:hello@verixo.com" style={{ color: "#f59e0b" }}>hello@verixo.com</a>. We will respond within 30 days.</p>
+          <p>To exercise any of these rights, contact us at <a href={`mailto:${PRODUCT_EMAIL}`} style={{ color: "#f59e0b" }}>{PRODUCT_EMAIL}</a>. We will respond within 30 days.</p>
         </Section>
 
         <Section title="10. Cookies and Tracking">
@@ -132,7 +134,7 @@ export default function PrivacyPage() {
         </Section>
 
         <Section title="13. Complaints">
-          <p>If you have a complaint about how we handle your personal information, please contact us first at <a href="mailto:hello@verixo.com" style={{ color: "#f59e0b" }}>hello@verixo.com</a>. We will attempt to resolve your complaint within 30 days.</p>
+          <p>If you have a complaint about how we handle your personal information, please contact us first at <a href={`mailto:${PRODUCT_EMAIL}`} style={{ color: "#f59e0b" }}>{PRODUCT_EMAIL}</a>. We will attempt to resolve your complaint within 30 days.</p>
           <p>If you are not satisfied with our response, you may lodge a complaint with the <strong style={{ color: "#e2e8f0" }}>Office of the Australian Information Commissioner (OAIC)</strong> at <a href="https://www.oaic.gov.au" target="_blank" rel="noopener noreferrer" style={{ color: "#f59e0b" }}>oaic.gov.au</a>.</p>
         </Section>
 
@@ -140,12 +142,12 @@ export default function PrivacyPage() {
           <p>For privacy-related questions, requests, or complaints:</p>
           <p style={{ color: "#94a3b8", lineHeight: 2 }}>
             Shilacon<br />
-            Email: <a href="mailto:hello@verixo.com" style={{ color: "#f59e0b" }}>hello@verixo.com</a>
+            Email: <a href={`mailto:${PRODUCT_EMAIL}`} style={{ color: "#f59e0b" }}>{PRODUCT_EMAIL}</a>
           </p>
         </Section>
 
         <div style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid #1e293b", textAlign: "center" }}>
-          <a href="/" style={{ color: "#f59e0b", textDecoration: "none", fontSize: 13, marginRight: 24 }}>← Back to Verixo</a>
+          <a href="/" style={{ color: "#f59e0b", textDecoration: "none", fontSize: 13, marginRight: 24 }}>← Back to {PRODUCT_NAME}</a>
           <a href="/terms" style={{ color: "#94a3b8", textDecoration: "none", fontSize: 13 }}>Terms of Service →</a>
         </div>
       </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { PRODUCT_NAME } from "../lib/constants";
 
 type AuthGateProps = { children: React.ReactNode };
 
@@ -81,7 +82,7 @@ export default function AuthGate({ children }: AuthGateProps) {
   if (loading) {
     return (
       <main style={styles.page}>
-        <p style={styles.muted}>Loading Verixo…</p>
+        <p style={styles.muted}>Loading {PRODUCT_NAME}…</p>
       </main>
     );
   }

@@ -18,6 +18,7 @@ export type EstimateItem = {
   margin_pct?: number | null;
   source?: string;
   cab?: any | null;
+  finish_id?: number | null;
   sort_order: number;
 };
 
@@ -156,6 +157,10 @@ export async function updateItem(
     delete clean.estimate_id;
     const { data, error } = await supabase.from("estimate_items").update(clean).eq("id", id).select().single();
     if (error) return { data: null, error: errMsg(error) };
+    const changedFields = Object.keys(patch).filter(k => !["id","company_id","estimate_id"].includes(k));
+    await logActivity("estimate_item", id, "update",
+      `Updated estimate line: ${data?.description || id}`,
+      { fields: changedFields }, data?.description ?? undefined);
     return { data, error: null };
   } catch (e) {
     return { data: null, error: errMsg(e) };
@@ -166,6 +171,7 @@ export async function deleteItem(id: string): Promise<DbResult<true>> {
   try {
     const { error } = await supabase.from("estimate_items").delete().eq("id", id);
     if (error) return { data: null, error: errMsg(error) };
+    await logActivity("estimate_item", id, "delete", "Deleted estimate line");
     return { data: true, error: null };
   } catch (e) {
     return { data: null, error: errMsg(e) };

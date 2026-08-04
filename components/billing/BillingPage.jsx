@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { supabase } from "../../lib/supabase";
+import { PRODUCT_NAME, PRODUCT_EMAIL, COMPANY_NAME } from "../../lib/constants";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AI Credit → Business Language Conversion
@@ -421,7 +422,7 @@ export default function BillingPage({ entitlement, company, companyId, T, pop, u
       <div style={{ fontSize: 12, color: T.faint, textAlign: "center", lineHeight: 1.8 }}>
         Questions about billing? Email{" "}
         <a href="mailto:support@verixo.com.au" style={{ color: T.accent }}>support@verixo.com.au</a>
-        {" · "}Verixo is a product by Shilacon Pty Ltd · ABN to be added
+        {" · "}{PRODUCT_NAME} is a product by {COMPANY_NAME} Pty Ltd · ABN to be added
       </div>
     </div>
   );

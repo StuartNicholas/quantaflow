@@ -1,5 +1,5 @@
 import { supabase } from "../supabase";
-import { getIdentity, errMsg, DbResult } from "./_base";
+import { getIdentity, errMsg, logActivity, DbResult } from "./_base";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Takeoff persistence. One takeoff record per project (replace-on-rerun).
@@ -29,6 +29,8 @@ export type Takeoff = {
   pdf_name?: string | null;
   ai_summary?: any | null;
   layers?: any | null;
+  version_number?: number;
+  superseded_at?: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -41,6 +43,7 @@ export async function getTakeoff(
       .from("takeoffs")
       .select("*")
       .eq("project_id", projectId)
+      .is("superseded_at", null)
       .maybeSingle();
     if (error) return { data: null, error: errMsg(error) };
     if (!takeoff) return { data: null, error: null };
@@ -58,7 +61,7 @@ export async function getTakeoff(
   }
 }
 
-/** Replace the entire takeoff for a project (delete + reinsert). */
+/** Archive the current takeoff (sets superseded_at) and insert a new version. */
 export async function saveTakeoff(
   projectId: string,
   data: { pdfName?: string; aiSummary?: any; layers?: any[]; items: any[] }
@@ -67,13 +70,28 @@ export async function saveTakeoff(
     const { userId, companyId } = await getIdentity();
     if (!companyId) return { data: null, error: "No company for current user." };
 
-    await supabase.from("takeoffs").delete().eq("project_id", projectId);
+    // Determine next version number before archiving
+    const { data: latest } = await supabase
+      .from("takeoffs")
+      .select("version_number")
+      .eq("project_id", projectId)
+      .is("superseded_at", null)
+      .maybeSingle();
+    const nextVersion = latest ? (latest.version_number || 1) + 1 : 1;
+
+    // Archive the current active record instead of deleting it
+    await supabase
+      .from("takeoffs")
+      .update({ superseded_at: new Date().toISOString(), updated_by: userId })
+      .eq("project_id", projectId)
+      .is("superseded_at", null);
 
     const { data: takeoff, error: tErr } = await supabase
       .from("takeoffs")
       .insert({
         company_id: companyId,
         project_id: projectId,
+        version_number: nextVersion,
         pdf_name: data.pdfName ?? null,
         ai_summary: data.aiSummary ?? null,
         layers: data.layers ?? null,
@@ -102,6 +120,10 @@ export async function saveTakeoff(
       if (iErr) return { data: null, error: errMsg(iErr) };
     }
 
+    await logActivity("takeoff", takeoff.id, "create",
+      `Takeoff v${nextVersion} saved — ${data.items.length} item${data.items.length !== 1 ? "s" : ""}`,
+      { pdf_name: data.pdfName, version: nextVersion, item_count: data.items.length },
+      data.pdfName ?? undefined, projectId);
     return { data: takeoff, error: null };
   } catch (e) {
     return { data: null, error: errMsg(e) };
@@ -118,6 +140,7 @@ export async function ensureTakeoff(projectId: string): Promise<DbResult<Takeoff
       .from("takeoffs")
       .select("*")
       .eq("project_id", projectId)
+      .is("superseded_at", null)
       .maybeSingle();
     if (existing) return { data: existing, error: null };
 

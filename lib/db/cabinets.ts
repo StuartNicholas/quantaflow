@@ -1,5 +1,5 @@
 import { supabase } from "../supabase";
-import { getIdentity, errMsg, DbResult } from "./_base";
+import { getIdentity, errMsg, logActivity, DbResult } from "./_base";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cabinets — core data model for Verixo.
@@ -79,6 +79,10 @@ export async function createCabinets(projectId: string, inputs: any[]): Promise<
     });
     const { data, error } = await supabase.from("cabinets").insert(rows).select();
     if (error) return { data: null, error: errMsg(error) };
+    const isDraft = inputs[0]?.ai_draft;
+    await logActivity("cabinet", projectId, "create",
+      `Added ${rows.length} cabinet${rows.length !== 1 ? "s" : ""}${isDraft ? " (AI draft)" : ""}`,
+      { count: rows.length, ai_draft: !!isDraft }, undefined, projectId);
     return { data: data || [], error: null };
   } catch (e) {
     return { data: null, error: errMsg(e) };
@@ -96,6 +100,9 @@ export async function updateCabinet(id: string, patch: any): Promise<DbResult<an
     delete clean.created_by;
     const { data, error } = await supabase.from("cabinets").update(clean).eq("id", id).select().single();
     if (error) return { data: null, error: errMsg(error) };
+    const actionLabel = patch.ai_draft === false ? "approved AI draft cabinet" : "updated cabinet";
+    await logActivity("cabinet", id, "update", actionLabel,
+      {}, data?.description ?? undefined, data?.project_id ?? undefined);
     return { data, error: null };
   } catch (e) {
     return { data: null, error: errMsg(e) };
@@ -106,6 +113,7 @@ export async function deleteCabinet(id: string): Promise<DbResult<true>> {
   try {
     const { error } = await supabase.from("cabinets").delete().eq("id", id);
     if (error) return { data: null, error: errMsg(error) };
+    await logActivity("cabinet", id, "delete", "Deleted cabinet");
     return { data: true, error: null };
   } catch (e) {
     return { data: null, error: errMsg(e) };

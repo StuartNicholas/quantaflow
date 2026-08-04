@@ -605,30 +605,51 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
         const imgs = await fileToBase64Images(f);
         imageBlocks.push(...imgs);
       }
-      if (imageBlocks.length > 6) {
-        addLog(`Warning: only using first 6 pages (${imageBlocks.length} provided)`, "warn");
-        imageBlocks.splice(6);
-      }
-      addLog(`Sending ${imageBlocks.length} image(s) to AI for cabinet extraction…`);
+      addLog(`→ ${imageBlocks.length} page(s) ready. Sending to AI…`);
 
       const { data: { session } } = await supabase.auth.getSession();
       const headers = { "Content-Type": "application/json" };
       if (session?.access_token) headers["Authorization"] = `Bearer ${session.access_token}`;
 
       const promptText = [
-        `You are a cabinet joinery expert analyzing architectural drawings and joinery schedules for project: "${proj.name}".`,
-        `Identify ALL cabinet, joinery, and millwork items visible in the drawings.`,
-        `For each item return a JSON object with these exact keys:`,
-        `description (string), room (string), cabinet_type (one of: "Base Cabinet","Overhead Cabinet","Pantry Cabinet","Tall Cabinet","Island / Peninsula","Vanity","Linen Tower","Wardrobe","Laundry Cabinet","TV Unit","Custom"),`,
-        `width (mm, number), height (mm, number), depth (mm, number), qty (number),`,
-        `material (string or ""), door_style (string or ""), door_qty (number), drawer_qty (number),`,
-        `has_benchtop (boolean), has_kickboard (boolean),`,
-        `unit_type (string, apartment unit type if applicable or ""), level (string, floor level if applicable or ""),`,
-        `labour_hours (estimated fabrication hours, number), sell_price (estimated AUD sell price, number),`,
-        `ai_confidence (0-100, your confidence this is correct), ai_explanation (brief string).`,
-        `Default dimensions: Base 600×720×580mm, Overhead 600×720×350mm, Pantry 600×2100×580mm, Vanity 750×850×450mm.`,
-        `Return ONLY a valid JSON array starting with [ and ending with ]. No markdown, no code fences, no explanation outside the array.`,
-      ].join(" ");
+        `You are a senior cabinet joinery estimator reading architectural drawings for project: "${proj.name}".`,
+        ``,
+        `RELEVANT DRAWINGS: Elevation drawings and joinery detail drawings showing built-in cabinetry`,
+        `in rooms such as Kitchen, Bathroom, Ensuite, Laundry, WC, Robe, Pantry, or similar.`,
+        ``,
+        `IGNORE: Site plans, floor plans, demolition plans, roof plans, drainage/hydraulic plans,`,
+        `structural plans, tile schedules, plumbing fixture schedules, electrical plans.`,
+        `If a room says "SCOPE TO BE CONFIRMED" or "N.I.C." (not in contract), skip it.`,
+        ``,
+        `OUTPUT: For each individual cabinet carcass unit, return one JSON object:`,
+        `- cabinet_type: "Base Cabinet" | "Overhead Cabinet" | "Tall Cabinet" | "Linen Tower" | "Wardrobe" | "Custom"`,
+        `- door_qty: integer count of hinged/handle doors (0 if none)`,
+        `- drawer_qty: integer count of drawers (0 if none)`,
+        `- width: width in mm from drawing annotation (number, must come from drawing — not guessed)`,
+        `- height: height in mm (Base Cabinet=900, Overhead Cabinet=720, Tall Cabinet=2100, Linen Tower=2100 — override if drawing annotates differently)`,
+        `- depth: depth in mm (Base Cabinet=580, Overhead Cabinet=350, Tall Cabinet=580 — override if annotated)`,
+        `- qty: count of identical units at that width (integer, 1 unless drawing shows e.g. "2 No." or repeated unit)`,
+        `- room: room name exactly as on the drawing (e.g. "Ensuite", "Bathroom", "Laundry", "WC", "Kitchen")`,
+        `- description: SHORT functional label — DO NOT include dimensions (those are in separate fields).`,
+        `  Format: "[function] [door/drawer summary if useful]"`,
+        `  Good examples: "Vanity 1 door" | "Vanity 2 door 4 drawer" | "Tall storage 1 door adj shelves" | "Overhead cupboard 2 door" | "Sink base" | "Appliance tower" | "Linen cupboard 2 door"`,
+        `  Bad examples (do NOT do this): "Base vanity unit 550mm" | "Tall storage cabinet 320mm" — no mm in description`,
+        `- ai_confidence: integer 0–100`,
+        `  85–100 = width dimension explicitly annotated on drawing`,
+        `  65–84 = cabinet clearly visible but width inferred from scale or adjacent annotation`,
+        `  40–64 = genuinely uncertain — cabinet type or size unclear from drawing`,
+        `- ai_explanation: one brief sentence on what drawing element you read`,
+        ``,
+        `RULES:`,
+        `- EXCLUDE: panels, kickboards, fillers, scribe strips, pelmets — estimator adds these manually`,
+        `- EXCLUDE: mirrors, shower screens, shower niches, baths, toilets, basins, tapware`,
+        `- EXCLUDE: sell prices — do not add any price fields`,
+        `- Each distinct width = separate line item with its own qty`,
+        `- Read widths from dimension annotations; use scale as last resort only`,
+        `- Group output by room (all Ensuite items together, all Laundry items together, etc.)`,
+        ``,
+        `Return ONLY a valid JSON array [ ... ]. No markdown, no code fences, no explanation text.`,
+      ].join("\n");
 
       const content = [
         { type: "text", text: promptText },
@@ -639,7 +660,7 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
         method: "POST",
         headers,
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
+          model: "claude-opus-4-8",
           max_tokens: 8000,
           messages: [{ role: "user", content }],
           meta: { feature: "ai_cabinet_extract", projectId: projectId },
@@ -666,28 +687,22 @@ export default function CabinetDatabase({ proj, company, T, pop }) {
 
       addLog(`AI identified ${cabinets_parsed.length} cabinet(s). Saving as drafts…`);
       const rows = cabinets_parsed.map((c, i) => ({
-        description:     String(c.description || "Cabinet"),
-        room:            String(c.room || ""),
-        cabinet_type:    String(c.cabinet_type || "Custom"),
-        width:           Number(c.width)  || 600,
-        height:          Number(c.height) || 720,
-        depth:           Number(c.depth)  || 580,
-        qty:             Number(c.qty)    || 1,
-        material:        String(c.material    || ""),
-        door_style:      String(c.door_style  || ""),
-        door_qty:        Number(c.door_qty)   || 0,
-        drawer_qty:      Number(c.drawer_qty) || 0,
-        has_benchtop:    Boolean(c.has_benchtop),
-        has_kickboard:   c.has_kickboard !== false,
-        unit_type:       String(c.unit_type || ""),
-        level:           String(c.level    || ""),
-        labour_hours:    Number(c.labour_hours) || 0,
-        sell_price:      Number(c.sell_price)   || 0,
-        ai_draft:        true,
-        ai_source:       "ai_takeoff",
-        ai_confidence:   Math.min(100, Math.max(0, Number(c.ai_confidence) || 70)),
-        ai_explanation:  String(c.ai_explanation || ""),
-        sort_order:      i,
+        description:    String(c.description || "Cabinet"),
+        room:           String(c.room || ""),
+        cabinet_type:   String(c.cabinet_type || "Custom"),
+        width:          Number(c.width)      || 600,
+        height:         Number(c.height)     || 720,
+        depth:          Number(c.depth)      || 580,
+        qty:            Math.max(1, Math.round(Number(c.qty) || 1)),
+        door_qty:       Math.round(Number(c.door_qty)   || 0),
+        drawer_qty:     Math.round(Number(c.drawer_qty) || 0),
+        unit_type:      String(c.unit_type || ""),
+        level:          String(c.level     || ""),
+        ai_draft:       true,
+        ai_source:      "ai_takeoff",
+        ai_confidence:  Math.min(100, Math.max(0, Math.round(Number(c.ai_confidence) || 70))),
+        ai_explanation: String(c.ai_explanation || ""),
+        sort_order:     i,
       }));
 
       const { error } = await createCabinets(projectId, rows);

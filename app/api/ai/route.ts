@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -15,10 +14,10 @@ import { createClient } from "@supabase/supabase-js";
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 300; // Vercel Pro max — required for large drawing sets
 
-const COST_PER_1K_INPUT  = 0.003;  // USD — Claude Sonnet approx
-const COST_PER_1K_OUTPUT = 0.015;
+const COST_PER_1K_INPUT  = 0.005;  // USD — Claude Opus 4.8 ($5/1M input)
+const COST_PER_1K_OUTPUT = 0.025;  // USD — Claude Opus 4.8 ($25/1M output)
 
 function adminClient() {
   return createClient(
@@ -135,23 +134,23 @@ async function logUsage(
   model: string,
   inputTokens: number,
   outputTokens: number,
-  estimatedCost: number
+  estimatedCost: number,
+  token: string
 ): Promise<void> {
   try {
-    const db = adminClient();
-    await db.from("ai_usage_logs").insert({
-      company_id:     companyId,
-      user_id:        userId,
-      project_id:     projectId || null,
-      feature,
-      model,
-      input_tokens:   inputTokens,
-      output_tokens:  outputTokens,
-      estimated_cost: estimatedCost,
-      credits_used:   1,
+    // log_ai_usage is SECURITY DEFINER — inserts the row and bumps ai_usage_this_month
+    const db = userClient(token);
+    await db.rpc("log_ai_usage", {
+      p_company_id:     companyId,
+      p_user_id:        userId,
+      p_project_id:     projectId || null,
+      p_feature:        feature,
+      p_model:          model,
+      p_input_tokens:   inputTokens,
+      p_output_tokens:  outputTokens,
+      p_estimated_cost: estimatedCost,
+      p_credits_used:   1,
     });
-    // Increment the monthly usage counter on entitlements
-    await db.rpc("increment_ai_usage", { p_company: companyId }).maybeSingle();
   } catch {
     // Usage logging is best-effort — never block the user over it
   }
@@ -212,69 +211,36 @@ export async function POST(req: Request) {
     }
   }
 
-  // ── AI call ─────────────────────────────────────────────────────────────────
+  // ── AI call (Claude / Anthropic only) ───────────────────────────────────────
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  const openaiKey    = process.env.OPENAI_API_KEY;
-
-  try {
-    if (anthropicKey) {
-      const modelId = process.env.ANTHROPIC_MODEL || body.model || "claude-sonnet-4-20250514";
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": anthropicKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({ model: modelId, max_tokens, messages }),
-      });
-      const data = await r.json();
-
-      // Log usage from response
-      if (!isScan && r.ok) {
-        const inTok  = data?.usage?.input_tokens  || 0;
-        const outTok = data?.usage?.output_tokens || 0;
-        const cost   = (inTok / 1000) * COST_PER_1K_INPUT + (outTok / 1000) * COST_PER_1K_OUTPUT;
-        await logUsage(companyId, userId, projectId, feature, modelId, inTok, outTok, cost);
-      }
-
-      return NextResponse.json(data, { status: r.status });
-    }
-
-    if (openaiKey) {
-      const modelId = process.env.OPENAI_MODEL || "gpt-4o";
-      const client  = new OpenAI({ apiKey: openaiKey });
-      const oaMessages = messages.map((m: any) => ({
-        role: m.role,
-        content: Array.isArray(m.content)
-          ? m.content.map((b: any) =>
-              b.type === "image"
-                ? { type: "image_url", image_url: { url: `data:${b.source?.media_type || "image/jpeg"};base64,${b.source?.data}` } }
-                : { type: "text", text: b.text || "" }
-            )
-          : String(m.content ?? ""),
-      }));
-      const resp = await client.chat.completions.create({
-        model: modelId,
-        max_completion_tokens: max_tokens,
-        messages: oaMessages as any,
-      });
-      const text     = resp.choices?.[0]?.message?.content || "";
-      const inTok    = resp.usage?.prompt_tokens    || 0;
-      const outTok   = resp.usage?.completion_tokens || 0;
-      const cost     = (inTok / 1000) * COST_PER_1K_INPUT + (outTok / 1000) * COST_PER_1K_OUTPUT;
-
-      if (!isScan) {
-        await logUsage(companyId, userId, projectId, feature, modelId, inTok, outTok, cost);
-      }
-
-      return NextResponse.json({ content: [{ type: "text", text }] });
-    }
-
+  if (!anthropicKey) {
     return NextResponse.json(
-      { error: { message: "No AI key configured. Add ANTHROPIC_API_KEY or OPENAI_API_KEY to .env.local.", code: "no_key" } },
+      { error: { message: "AI not configured. Add ANTHROPIC_API_KEY to environment variables.", code: "no_key" } },
       { status: 500 }
     );
+  }
+
+  try {
+    const modelId = process.env.ANTHROPIC_MODEL || body.model || "claude-opus-4-8";
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": anthropicKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({ model: modelId, max_tokens, messages }),
+    });
+    const data = await r.json();
+
+    if (!isScan && r.ok) {
+      const inTok  = data?.usage?.input_tokens  || 0;
+      const outTok = data?.usage?.output_tokens || 0;
+      const cost   = (inTok / 1000) * COST_PER_1K_INPUT + (outTok / 1000) * COST_PER_1K_OUTPUT;
+      await logUsage(companyId, userId, projectId, feature, modelId, inTok, outTok, cost, token);
+    }
+
+    return NextResponse.json(data, { status: r.status });
   } catch (e: any) {
     return NextResponse.json({ error: { message: e?.message || "AI proxy error" } }, { status: 500 });
   }

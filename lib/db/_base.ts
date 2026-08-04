@@ -9,27 +9,29 @@ import { supabase } from "../supabase";
 
 export type DbResult<T> = { data: T | null; error: string | null };
 
-let _cache: { userId: string | null; companyId: string | null } | null = null;
+let _cache: { userId: string | null; companyId: string | null; userName: string | null } | null = null;
 
-/** Resolve the current user's id and company_id from the session (cached per load). */
-export async function getIdentity(): Promise<{ userId: string | null; companyId: string | null }> {
+/** Resolve the current user's id, company_id, and display name (cached per load). */
+export async function getIdentity(): Promise<{ userId: string | null; companyId: string | null; userName: string | null }> {
   if (_cache) return _cache;
   try {
     const { data: u } = await supabase.auth.getUser();
     const userId = u?.user?.id ?? null;
     let companyId: string | null = null;
+    let userName: string | null = null;
     if (userId) {
       const { data: prof } = await supabase
         .from("profiles")
-        .select("company_id")
+        .select("company_id, full_name")
         .eq("id", userId)
         .single();
       companyId = prof?.company_id ?? null;
+      userName  = prof?.full_name  ?? null;
     }
-    _cache = { userId, companyId };
+    _cache = { userId, companyId, userName };
     return _cache;
   } catch {
-    return { userId: null, companyId: null };
+    return { userId: null, companyId: null, userName: null };
   }
 }
 
@@ -51,16 +53,21 @@ export async function logActivity(
   entityId: string | null,
   action: string,
   summary: string,
-  meta: Record<string, any> = {}
+  meta: Record<string, any> = {},
+  entityName?: string,
+  projectId?: string
 ): Promise<void> {
   try {
-    const { userId, companyId } = await getIdentity();
+    const { userId, companyId, userName } = await getIdentity();
     if (!companyId) return;
     await supabase.from("activity_logs").insert({
       company_id: companyId,
-      user_id: userId,
+      user_id:    userId,
+      user_name:  userName ?? null,
       entity_type: entityType,
-      entity_id: entityId,
+      entity_id:   entityId,
+      entity_name: entityName ?? null,
+      project_id:  projectId  ?? null,
       action,
       summary,
       meta,

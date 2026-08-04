@@ -31,9 +31,10 @@ import BoxMatrix from "./cabinet/BoxMatrix";
 import ProjectSetup from "./project/ProjectSetup";
 import WorkflowSelector from "./project/WorkflowSelector";
 import BillingPage from "./billing/BillingPage";
+import { PRODUCT_NAME, PRODUCT_EMAIL, COMPANY_NAME } from "../lib/constants";
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// QUANTAFLOW — Standalone Construction Estimating Platform
+// VERIXO — Joinery & Construction Estimating Platform
 // Takeoff · Estimating · Quoting · Job Costing · Variations · Claims · Xero
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -662,7 +663,7 @@ function ConfirmModal({title,message,confirmText="Delete",danger,onConfirm,onCan
 class ErrorBoundary extends Component {
   constructor(props){ super(props); this.state={error:null}; }
   static getDerivedStateFromError(error){ return {error}; }
-  componentDidCatch(error,info){ console.error("Verixo module error:",error,info); }
+  componentDidCatch(error,info){ console.error(`${PRODUCT_NAME} module error:`,error,info); }
   render(){
     if(this.state.error) return <div style={{padding:24,background:T.card,border:`1px solid ${T.red}55`,
       borderRadius:9,margin:20,color:T.text,fontFamily:T.font}}>
@@ -684,7 +685,7 @@ class ErrorBoundary extends Component {
 class SetupErrorBoundary extends Component {
   constructor(props){ super(props); this.state={error:null}; }
   static getDerivedStateFromError(error){ return {error}; }
-  componentDidCatch(error,info){ console.error("Verixo setup error:",error,info); }
+  componentDidCatch(error,info){ console.error(`${PRODUCT_NAME} setup error:`,error,info); }
   render(){
     if(this.state.error) return (
       <div style={{position:"fixed",inset:0,zIndex:9999,background:T.bg,
@@ -1338,7 +1339,7 @@ export default function App() {
           onComplete={({name})=>{
             setSetupComplete(true);
             if(name) setCompany(c=>({...c,name}));
-            pop("Setup complete — welcome to Verixo!");
+            pop(`Setup complete — welcome to ${PRODUCT_NAME}!`);
           }}
           onCreateProject={()=>{
             setSetupComplete(true);
@@ -1372,7 +1373,7 @@ export default function App() {
             </div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontWeight:800,fontSize:12,lineHeight:1.2,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{company.name}</div>
-              <div style={{color:T.muted,fontSize:10}}>Verixo <span style={{color:T.faint}}>by Shilacon</span></div>
+              <div style={{color:T.muted,fontSize:10}}>{PRODUCT_NAME} <span style={{color:T.faint}}>by {COMPANY_NAME}</span></div>
             </div>
             {/* Close button (mobile only) */}
             {isMobile&&<div onClick={()=>setSidebarOpen(false)} style={{
@@ -1617,13 +1618,13 @@ function CompanySetupWizard({onCreated, onJoinRequested}) {
         <div style={{width:52,height:52,borderRadius:12,background:T.accent,color:"#000",
           display:"flex",alignItems:"center",justifyContent:"center",
           fontWeight:900,fontSize:22,margin:"0 auto 12px"}}>Q</div>
-        <div style={{fontSize:11,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Verixo</div>
+        <div style={{fontSize:11,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>{PRODUCT_NAME}</div>
       </div>
 
       {/* Choose mode */}
       {!mode&&<Card hi>
         <div style={{textAlign:"center",marginBottom:22}}>
-          <div style={{fontSize:20,fontWeight:800,color:T.text,marginBottom:8}}>Welcome to Verixo</div>
+          <div style={{fontSize:20,fontWeight:800,color:T.text,marginBottom:8}}>Welcome to {PRODUCT_NAME}</div>
           <div style={{fontSize:13,color:T.muted,lineHeight:1.6}}>
             Are you setting up a new company, or joining an existing one?
           </div>
@@ -1956,7 +1957,7 @@ function SetupWizard({companyId, companyName, displayName, onComplete, onCreateP
         <div style={{width:52,height:52,borderRadius:12,background:T.accent,color:"#000",
           display:"flex",alignItems:"center",justifyContent:"center",
           fontWeight:900,fontSize:22,margin:"0 auto 12px"}}>Q</div>
-        <div style={{fontSize:11,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Verixo</div>
+        <div style={{fontSize:11,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>{PRODUCT_NAME}</div>
       </div>
 
       {/* Step indicators */}
@@ -2437,9 +2438,13 @@ function ReportingModule({projects, clients}) {
                       fontSize:12,flexShrink:0,color:T.accent}}>{actIcon(a.entity_type)}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:12,color:T.text,lineHeight:1.4,wordBreak:"break-word"}}>
+                        {a.user_name&&<span style={{fontWeight:600,color:T.accent}}>{a.user_name} </span>}
                         {a.summary||`${a.action} ${a.entity_type}`}
                       </div>
-                      <div style={{fontSize:10,color:T.faint,marginTop:2}}>{timeAgo(a.created_at)}</div>
+                      <div style={{fontSize:10,color:T.faint,marginTop:2}}>
+                        {timeAgo(a.created_at)}
+                        {a.entity_name&&<span style={{marginLeft:6,color:T.faint}}>· {a.entity_name}</span>}
+                      </div>
                     </div>
                   </div>)}
                 </div>
@@ -3674,7 +3679,7 @@ function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
         status:       "pending",
         ai_draft:     true,
         ai_source:    "ai_takeoff",
-        ai_confidence:70,
+        ai_confidence: Math.min(100, Math.max(0, Math.round(Number(it.cab?.ai_confidence ?? it.confidence ?? 70)))),
         sort_order:   i,
       }));
       createCabinets(proj.id, rows).then(({error}) => {
@@ -3850,6 +3855,11 @@ function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
     const buf = await getBuffer();
     const pdf = await lib.getDocument({data:buf.slice(0)}).promise;
     const n = pdf.numPages;
+    if(n>100){
+      pop(`This PDF has ${n} pages. Extraction is limited to 100 pages — please split the set and upload each part separately.`,"error");
+      return;
+    }
+    if(n>50) log(`Large set (${n} pages) — AI extraction may take several minutes.`,"warn");
     log(`${n} pages detected — generating preview thumbnails…`);
 
     const thumbs=[];
@@ -3869,31 +3879,34 @@ function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
     log(`Preview ready (${thumbs.length} thumbnails). Click AI Extract to analyse all ${n} pages.`,"success");
   }
 
-  // ── AI API call — connection-aware:
-  //  · "claude" (default): bare call, works only inside Claude.ai (proxied)
-  //  · "proxy": your own server endpoint holding the API key (PRODUCTION setup)
-  //  · "direct": API key in browser (DEV ONLY — key is visible to the user)
+  // ── AI API call — always routes through the Next.js server proxy (/api/ai).
+  // Direct-browser mode (API key in localStorage) was removed: it exposed the key
+  // in DevTools and bypassed server-side metering. Custom endpoint override is
+  // still supported via qf_ai.endpoint for self-hosted deployments.
   async function callAI(content, maxTok=1800, meta={}) {
-    let aiCfg={mode:"proxy",endpoint:"/api/ai",apiKey:""}; // default: built-in Next.js server proxy
-    try{ aiCfg={...aiCfg,...JSON.parse(localStorage.getItem("qf_ai")||"{}")}; }catch{}
-    const url = aiCfg.mode==="proxy"&&aiCfg.endpoint ? aiCfg.endpoint : "https://api.anthropic.com/v1/messages";
+    let endpoint="/api/ai";
+    try{ const stored=JSON.parse(localStorage.getItem("qf_ai")||"{}"); if(stored.endpoint) endpoint=stored.endpoint; }catch{}
     const headers={"Content-Type":"application/json"};
-    if(aiCfg.mode==="direct"&&aiCfg.apiKey){
-      headers["x-api-key"]=aiCfg.apiKey;
-      headers["anthropic-version"]="2023-06-01";
-      headers["anthropic-dangerous-direct-browser-access"]="true";
-    } else {
-      // Pass auth token so the server can meter usage per company
-      try {
-        const { data:{ session } } = await supabase.auth.getSession();
-        if(session?.access_token) headers["Authorization"]=`Bearer ${session.access_token}`;
-      } catch {}
+    // Pass auth token so the server can meter usage per company
+    try {
+      const { data:{ session } } = await supabase.auth.getSession();
+      if(session?.access_token) headers["Authorization"]=`Bearer ${session.access_token}`;
+    } catch {}
+    const controller=new AbortController();
+    const tid=setTimeout(()=>controller.abort(),270000); // 270s — just under server maxDuration=300
+    let r;
+    try{
+      r=await fetch(endpoint,{
+        method:"POST",headers,signal:controller.signal,
+        body:JSON.stringify({model:"claude-opus-4-8",max_tokens:maxTok,
+          messages:[{role:"user",content}], meta})
+      });
+    }catch(fe){
+      clearTimeout(tid);
+      if(fe.name==="AbortError") throw new Error("AI request timed out after 4.5 min. The page may be too complex — re-run to retry this batch.");
+      throw fe;
     }
-    const r=await fetch(url,{
-      method:"POST",headers,
-      body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:maxTok,
-        messages:[{role:"user",content}], meta})
-    });
+    clearTimeout(tid);
     const d=await r.json();
     if(d.error){
       const err=new Error(typeof d.error==="object"?d.error.message||JSON.stringify(d.error):String(d.error));
@@ -3911,7 +3924,7 @@ function TakeoffModule({proj, cabLib, company, onMutate, onGotoLibrary, pop}) {
   //    through every batch against a dead key/account (e.g. 26× quota errors)
   const isFatalAI = m => /exceeded your current quota|insufficient_quota|billing|credit balance|invalid api key|incorrect api key|authentication_error|invalid x-api-key|unauthorized|monthly AI takeoff allowance/i.test(m||"");
   const friendlyAI = m => /quota|billing|credit/i.test(m||"")
-    ? "Your AI provider account has no available credit. OpenAI: platform.openai.com → Settings → Billing → add credits. Anthropic: console.anthropic.com → Billing. Then restart the dev server (npm run dev) and re-run."
+    ? "Your Anthropic account has no available credit. Go to console.anthropic.com → Settings → Billing → add credits. Then restart the dev server (npm run dev) and re-run."
     : "Your AI key was rejected. Check the key in .env.local is correct and active, then restart the dev server (npm run dev).";
 
   function parseJSON(text) {
@@ -4017,6 +4030,8 @@ Pages: ${idxs.map(x=>x+1).join(",")}. JSON only: {"pages":[{"page":1,"score":3,"
       const skipped=Object.entries(scores).filter(([,v])=>v.score<2).map(([k])=>parseInt(k)+1);
       log(`Phase 1 done. ${highVal.length} pages selected, ${skipped.length} skipped.`,"success");
       if(skipped.length) log(`Skipped: pages ${skipped.join(", ")}`);
+      if(!highVal.length) throw new Error("No relevant pages found — all pages scored below threshold. Check that the uploaded file contains construction drawings.");
+      if(highVal.length>40) log(`${highVal.length} pages selected for extraction — this will take several minutes. Each batch saves independently so partial results are preserved if later batches fail.`,"warn");
 
       // ── PHASE 2: extract at 175dpi, 4 per batch
       const EXTRACT_SCHEMA=`{"buildingType":"","confidence":"high/medium/low","scale":"","storeys":0,"floorArea":0,"wallLength":0,"roofArea":0,"windows":0,"doors":0,"slidingDoors":0,"windowSchedule":[{"ref":"","size":"","type":"","spec":"","qty":0,"headHeight":"","sillHeight":""}],"slidingDoorSchedule":[{"ref":"","size":"","type":"","panels":0,"spec":"","qty":0}],"doorSchedule":[{"ref":"","size":"","frameType":"","headHeight":"","frl":"","hardware":"","spec":"","qty":0}],"finishesSchedule":[{"schemeName":"e.g. Light or Dark or Scheme A or 1","carcass":"e.g. Laminex Chalk 16mm HMR","fronts":"e.g. Polytec Driftwood PVC Wrap","benchtop":"e.g. Caesarstone Pure White 20mm","handle":"e.g. Brushed nickel bar 128mm","kickboard":"e.g. match carcass","notes":""}],"roomSchemes":{"Kitchen":"scheme name","Bathroom":"scheme name"},"cabinetryUnits":[{"unit":"e.g. Unit 1 or Apartment 1 or (blank if single dwelling)","rooms":[{"room":"e.g. Kitchen / Butlers / Laundry / Bathroom / Ensuite / Master WIR / Bed 2 Robe / TV Unit","scheme":"scheme name if room is annotated","cabinets":[{"type":"Base/Overhead/Tall/Panel/Hardware/Appliance","config":"e.g. 2 Door, 3 Drawer, 1 Door, End Panel, Kickboard, Wall Panel, Walk Brackets","width":0,"qty":0,"notes":"","finish":"scheme name or finish code if annotated on this specific cabinet"}],"benchtop":{"material":"e.g. stone/laminate/20mm reconstituted stone","linearMetres":0},"splashback":{"material":"","area":0}}]}],"rooms":[{"name":"","area":0}],"notes":"","dims":[]}`;
@@ -4609,22 +4624,32 @@ ${EXTRACT_SCHEMA}`;
       }));
     }
 
+    // Replace existing takeoff-sourced estimate lines if present
+    const existingTakeoffItems=(proj.lineItems||[]).filter(li=>li.source==="takeoff");
+    if(existingTakeoffItems.length>0){
+      try{
+        await Promise.all(existingTakeoffItems.map(li=>dbDeleteItem(li.id)));
+      }catch{}
+      onMutate(p=>({...p,lineItems:(p.lineItems||[]).filter(li=>li.source!=="takeoff")}));
+    }
+
     // Persist to Supabase, then update in-memory + roll up total.
     let withIds=toAdd;
     try{
       const { data:est }=await dbGetEstimate(proj.id);
       if(est?.estimate?.id){
-        const existingLen = (proj.lineItems||[]).length;
+        const nonTakeoffLen=(proj.lineItems||[]).filter(li=>li.source!=="takeoff").length;
         const saved=await dbAddItems(est.estimate.id, toAdd.map((it,i)=>({
           category:it.category, description:it.description, qty:it.qty, unit:it.unit,
-          rate:it.rate, margin_pct:it.margin??null, source:"takeoff", cab:it.cab||null, sort_order:existingLen+i,
+          rate:it.rate, margin_pct:it.margin??null, source:"takeoff", cab:it.cab||null, sort_order:nonTakeoffLen+i,
         })));
         if(saved.data) withIds=toAdd.map((li,i)=>saved.data[i]?{...li,id:saved.data[i].id}:li);
       }
     }catch{}
 
     onMutate(p=>{
-      const np={...p,lineItems:[...(p.lineItems||[]),...withIds]};
+      const currentNonTakeoff=(p.lineItems||[]).filter(li=>li.source!=="takeoff");
+      const np={...p,lineItems:[...currentNonTakeoff,...withIds]};
       try{ dbUpdateProjectQuoteValue(proj.id, calc(np).total); }catch{}
       return np;
     });
@@ -4730,9 +4755,9 @@ ${EXTRACT_SCHEMA}`;
           </div>
           <Row gap={8}>
             <Btn v="pri" onClick={()=>{
-              const sub=encodeURIComponent("Verixo — Purchase AI Credits");
+              const sub=encodeURIComponent(`${PRODUCT_NAME} — Purchase AI Credits`);
               const body=encodeURIComponent(`Hi,\n\nWe've reached our AI credit limit (${creditsExhausted.used}/${creditsExhausted.limit} used) and would like to purchase additional credits.\n\nPlease let us know the options.\n\nThanks`);
-              window.open(`mailto:hello@verixo.com.au?subject=${sub}&body=${body}`,"_self");
+              window.open(`mailto:${PRODUCT_EMAIL}?subject=${sub}&body=${body}`,"_self");
             }}>Purchase more credits</Btn>
             <Btn v="gho" onClick={()=>setCreditsExhausted(null)}>Dismiss</Btn>
           </Row>
@@ -5632,9 +5657,18 @@ ${EXTRACT_SCHEMA}`;
                   </div>
                 ))}
               </div>
-              <div style={{padding:"14px 22px",borderTop:`1px solid ${T.border}`,display:"flex",gap:8,justifyContent:"flex-end"}}>
-                <Btn v="gho" onClick={()=>setShowPushModal(false)}>Cancel</Btn>
-                <Btn v="grn" onClick={()=>pushToEstimate(pushSel)}>Push {items.length} items →</Btn>
+              <div style={{padding:"14px 22px",borderTop:`1px solid ${T.border}`}}>
+                {(()=>{const existing=(proj.lineItems||[]).filter(li=>li.source==="takeoff");
+                  return existing.length>0&&<div style={{fontSize:11,color:T.yellow,marginBottom:8,
+                    padding:"6px 10px",background:`${T.yellow}18`,borderRadius:5}}>
+                    ⚠ {existing.length} existing takeoff line{existing.length!==1?"s":""} will be replaced.
+                  </div>;})()}
+                <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                  <Btn v="gho" onClick={()=>setShowPushModal(false)}>Cancel</Btn>
+                  <Btn v="grn" onClick={()=>pushToEstimate(pushSel)}>
+                    {(proj.lineItems||[]).some(li=>li.source==="takeoff")?"Replace & Push":"Push"} {items.length} items →
+                  </Btn>
+                </div>
               </div>
             </div>
           </div>;
@@ -6262,12 +6296,33 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
 
 // Shared print-ready quote document. Accepts either a locked version snapshot
 // or a computed draft preview — caller normalises the data shape.
-function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, depositPct, versionNum, issuedAt, proj, company, variations, schemes}) {
+function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, depositPct, versionNum, issuedAt, proj, company, variations, schemes, cabConfig}) {
   const approvedVars = (variations||[]).filter(v=>v.status==="approved");
-  const varTotal = approvedVars.reduce((s,v)=>s+(v.amount||0),0);
-  const sub = (items||[]).reduce((s,item)=> s+(item.qty||0)*(item.rate||0)*(1+((item.margin_pct??marginPct??0)/100)), 0);
+
+  // Split locked-version rows by category so overhead is applied correctly.
+  // Extras and approved-variation rows are stored in quote_version_items with
+  // margin_pct=0 and special categories; they must NOT enter the overhead base.
+  const costItems    = (items||[]).filter(li=>li.category!=="Approved Variations"&&li.category!=="Project Costs");
+  const storedVarItems  = (items||[]).filter(li=>li.category==="Approved Variations");
+  const storedExtraItems= (items||[]).filter(li=>li.category==="Project Costs");
+
+  const sub  = costItems.reduce((s,item)=> s+(item.qty||0)*(item.rate||0)*(1+((item.margin_pct??marginPct??0)/100)), 0);
   const ovhd = sub*(overheadPct||0)/100;
-  const exGst = sub+ovhd+varTotal;
+
+  // varTotal: stored rows (locked) or live prop (draft preview)
+  const varTotal = storedVarItems.length>0
+    ? storedVarItems.reduce((s,li)=>s+(li.qty||0)*(li.rate||0),0)
+    : approvedVars.reduce((s,v)=>s+(v.amount||0),0);
+
+  // extrasTotal: stored rows (locked) or computed from cabConfig (draft preview)
+  const storedExtrasTotal = storedExtraItems.reduce((s,li)=>s+(li.qty||0)*(li.rate||0),0);
+  const cc = cabConfig||null;
+  const draftExtras = cc && storedExtraItems.length===0
+    ? (cc.pmAllowance||0)+(cc.deliveryAllowance||0)+(cc.protectionAllowance||0)+((cc.installSiteSetupHours||0)*(cc.installHourlyRate||0))
+    : 0;
+  const extrasTotal = storedExtrasTotal+draftExtras;
+
+  const exGst = sub+ovhd+varTotal+extrasTotal;
   const gstAmt = exGst*(gstPct||10)/100;
   const total = exGst+gstAmt;
   const depositAmt = total*(depositPct||0)/100;
@@ -6342,25 +6397,24 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
         <th style={{padding:"3px 0",textAlign:"right",fontWeight:600}}>Amount</th>
       </tr></thead>;
 
+      // costItems only — extras/variation rows are shown separately below the sections
       let sections=[];
       if(quoteView==="joinery") {
         // Summary: one row per joinery type, no per-item detail
         const g={};
-        (items||[]).forEach(li=>{const jc=joineryCategory(li);if(!g[jc])g[jc]={total:0,count:0};g[jc].total+=lineAmt(li);g[jc].count++;});
+        costItems.forEach(li=>{const jc=joineryCategory(li);if(!g[jc])g[jc]={total:0,count:0};g[jc].total+=lineAmt(li);g[jc].count++;});
         const ord=jcatOrder.filter(c=>g[c]).concat(Object.keys(g).filter(c=>!jcatOrder.includes(c)));
         sections=ord.map(c=>({key:c, hdr:c, mode:"summary", rows:[{desc:c, qty:g[c].count, unit:"items", total:g[c].total}]}));
       } else if(quoteView==="unit") {
         // Murcia-style: group by apartment unit type × level range, one summary row per group
-        // e.g. "Unit Type A — Level 3-15 (Total 10) $162,529"
         const g={};
-        (items||[]).forEach(li=>{
+        costItems.forEach(li=>{
           const ut=li.cab?.unitType||"Unassigned";
           const lvl=li.cab?.level||"Ground Floor";
           const key=`${ut}__${lvl}`;
           if(!g[key]) g[key]={unitType:ut,level:lvl,total:0,count:0,items:[]};
           g[key].total+=lineAmt(li); g[key].count++; g[key].items.push(li);
         });
-        // sort by UNIT_TYPES order then by BUILDING_LEVELS order
         const utOrder=UNIT_TYPES;
         const lvlOrder=BUILDING_LEVELS;
         const sorted=Object.values(g).sort((a,b)=>{
@@ -6377,7 +6431,7 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
       } else if(quoteView==="byunit") {
         // By actual unit number (101, 102, 103) — summary row per unit
         const g={};
-        (items||[]).forEach(li=>{
+        costItems.forEach(li=>{
           const un=li.cab?.unit||"";
           const key=un||"No Unit Assigned";
           if(!g[key]) g[key]={unit:un,label:un?`Unit ${un}`:"No Unit Assigned",total:0,count:0,rooms:{}};
@@ -6400,7 +6454,7 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
       } else if(quoteView==="unit-individual") {
         // Detail: every item listed, grouped under unit-type + level header
         const g={};
-        (items||[]).forEach(li=>{
+        costItems.forEach(li=>{
           const ut=li.cab?.unitType||"Unassigned";
           const lvl=li.cab?.level||"Ground Floor";
           const key=`${ut}__${lvl}`;
@@ -6421,16 +6475,16 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
       } else if(quoteView==="level") {
         // Detail: all items, grouped under building level header
         const g={};
-        (items||[]).forEach(li=>{const lvl=li.cab?.level||"Ground Floor";if(!g[lvl])g[lvl]=[];g[lvl].push(li);});
+        costItems.forEach(li=>{const lvl=li.cab?.level||"Ground Floor";if(!g[lvl])g[lvl]=[];g[lvl].push(li);});
         const sorted=levelOrder.filter(l=>g[l]).concat(Object.keys(g).filter(l=>!levelOrder.includes(l)));
         sections=sorted.map(l=>({key:l, hdr:l, mode:"detail", items:g[l]}));
       } else {
-        // Default: by trade category
-        const cats=[...new Set((items||[]).map(i=>i.category).filter(Boolean))];
-        sections=cats.map(cat=>({key:cat, hdr:cat, mode:"detail", items:(items||[]).filter(li=>li.category===cat)}));
+        // Default: by trade category (costItems only — extras/variations shown in their own blocks below)
+        const cats=[...new Set(costItems.map(i=>i.category).filter(Boolean))];
+        sections=cats.map(cat=>({key:cat, hdr:cat, mode:"detail", items:costItems.filter(li=>li.category===cat)}));
       }
 
-      if(sections.length===0&&!approvedVars.length)
+      if(sections.length===0&&!approvedVars.length&&!extrasTotal)
         return <div style={{color:"#9ca3af",fontSize:12,padding:"16px 0",textAlign:"center"}}>No line items.</div>;
 
       return sections.map(sec=>(
@@ -6477,15 +6531,41 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
       ));
     })()}
 
-    {approvedVars.length>0&&<div style={{marginBottom:18}}>
+    {/* Approved Variations — use stored rows (locked) or live prop (draft) */}
+    {(storedVarItems.length>0?storedVarItems:approvedVars).length>0&&<div style={{marginBottom:18}}>
       <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
         textTransform:"uppercase",letterSpacing:"0.05em",color:"#b45309",
         marginBottom:5,paddingBottom:3,borderBottom:"1px solid #e8d8b0"}}>Approved Variations</div>
-      {approvedVars.map(v=><div key={v.id} style={{display:"flex",justifyContent:"space-between",
-        padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0e8d8"}}>
-        <span>{v.ref}: {v.description}</span>
-        <span style={{fontFamily:"monospace",fontWeight:600}}>{$$(v.amount)}</span>
-      </div>)}
+      {storedVarItems.length>0
+        ? storedVarItems.map((li,i)=><div key={li.id||i} style={{display:"flex",justifyContent:"space-between",
+            padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0e8d8"}}>
+            <span>{li.description}</span>
+            <span style={{fontFamily:"monospace",fontWeight:600}}>{$$((li.qty||0)*(li.rate||0))}</span>
+          </div>)
+        : approvedVars.map(v=><div key={v.id} style={{display:"flex",justifyContent:"space-between",
+            padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0e8d8"}}>
+            <span>{v.ref}: {v.description}</span>
+            <span style={{fontFamily:"monospace",fontWeight:600}}>{$$(v.amount)}</span>
+          </div>)
+      }
+    </div>}
+
+    {/* Project Costs (extras) — stored breakdown (locked) or summary from cabConfig (draft) */}
+    {extrasTotal>0&&<div style={{marginBottom:18}}>
+      <div style={{fontWeight:700,fontFamily:"system-ui,sans-serif",fontSize:11,
+        textTransform:"uppercase",letterSpacing:"0.05em",color:"#b45309",
+        marginBottom:5,paddingBottom:3,borderBottom:"1px solid #e8d8b0"}}>Project Costs</div>
+      {storedExtraItems.length>0
+        ? storedExtraItems.map((li,i)=><div key={li.id||i} style={{display:"flex",justifyContent:"space-between",
+            padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0e8d8"}}>
+            <span>{li.description}</span>
+            <span style={{fontFamily:"monospace",fontWeight:600}}>{$$((li.qty||0)*(li.rate||0))}</span>
+          </div>)
+        : <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:"1px solid #f0e8d8"}}>
+            <span>Project Management, Delivery & Site Setup</span>
+            <span style={{fontFamily:"monospace",fontWeight:600}}>{$$(draftExtras)}</span>
+          </div>
+      }
     </div>}
 
     <div style={{marginTop:22,borderTop:"2px solid #b45309",paddingTop:16,maxWidth:310,marginLeft:"auto"}}>
@@ -6493,6 +6573,7 @@ function QuoteDocument({items, quoteView, marginPct, overheadPct, gstPct, deposi
         {l:"Subtotal",v:$$(sub)},
         {l:`Overhead & Margin (${overheadPct||0}%)`,v:$$(ovhd)},
         varTotal!==0&&{l:"Approved Variations",v:$$(varTotal)},
+        extrasTotal!==0&&{l:"Project Costs",v:$$(extrasTotal)},
         {l:"Total ex. GST",v:$$(exGst),bold:true},
         {l:`GST (${gstPct||10}%)`,v:$$(gstAmt)},
       ].filter(Boolean).map(r=><div key={r.l} style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
@@ -6770,11 +6851,12 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
   const [loadingItems, setLoadingItems] = useState(false);
   const [estimate,     setEstimate]     = useState(null);
   const [estItems,     setEstItems]     = useState([]);
-  const [showIssue,    setShowIssue]    = useState(false);
-  const [depositPct,   setDepositPct]   = useState(0);
-  const [gstPct,       setGstPct]       = useState(proj.gst||10);
-  const [issueNotes,   setIssueNotes]   = useState("");
-  const [busy,         setBusy]         = useState(false);
+  const [showIssue,           setShowIssue]           = useState(false);
+  const [depositPct,          setDepositPct]          = useState(0);
+  const [gstPct,              setGstPct]              = useState(proj.gst||10);
+  const [issueNotes,          setIssueNotes]          = useState("");
+  const [showExtrasBreakdown, setShowExtrasBreakdown] = useState(false);
+  const [busy,                setBusy]                = useState(false);
   const [quoteView,    setQuoteView]    = useState("category"); // "category"|"joinery"|"unit"|"byunit"|"unit-individual"|"level"
   const [schemes,      setSchemes]      = useState(null);
   const [viewDepInv,   setViewDepInv]   = useState(null); // quote version to show deposit invoice for
@@ -6815,7 +6897,17 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
 
   async function issue() {
     setBusy(true);
-    const { data, error } = await dbIssueQuote(proj.id, {gst_pct:gstPct, deposit_pct:depositPct, notes:issueNotes});
+    const cc = proj.cabConfig || null;
+    const extras = cc ? {
+      pm:         cc.pmAllowance        || 0,
+      delivery:   cc.deliveryAllowance  || 0,
+      protection: cc.protectionAllowance|| 0,
+      siteSetup:  (cc.installSiteSetupHours||0) * (cc.installHourlyRate||0),
+    } : undefined;
+    const { data, error } = await dbIssueQuote(proj.id, {
+      gst_pct: gstPct, deposit_pct: depositPct, notes: issueNotes,
+      extras, show_extras_breakdown: showExtrasBreakdown,
+    });
     setBusy(false);
     if(error) return pop(error,"error");
     setShowIssue(false);
@@ -6962,6 +7054,10 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
           onChange={v=>setDepositPct(parseFloat(v)||0)} sx={{width:100,marginBottom:0}}/>
         <Inp label="Notes (optional)" value={issueNotes}
           onChange={v=>setIssueNotes(v)} sx={{flex:1,minWidth:160,marginBottom:0}}/>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:T.muted,whiteSpace:"nowrap",marginBottom:12,cursor:"pointer"}}>
+          <input type="checkbox" checked={showExtrasBreakdown} onChange={e=>setShowExtrasBreakdown(e.target.checked)}/>
+          Show project costs as separate lines
+        </label>
         <Btn v="pri" onClick={issue} disabled={busy} sx={{marginBottom:12}}>{busy?"Issuing…":"Issue & Lock"}</Btn>
         <Btn onClick={()=>setShowIssue(false)} sx={{marginBottom:12}}>Cancel</Btn>
       </Row>
@@ -7016,7 +7112,8 @@ function QuoteModule({proj, company, c, variations, clients, onMutate, pop}) {
             proj={proj}
             company={company}
             variations={variations}
-            schemes={schemes}/>
+            schemes={schemes}
+            cabConfig={isDraft?proj.cabConfig:null}/>
     }
   </div>;
 }
@@ -11604,9 +11701,9 @@ function CreditTopupModal({companyId, onClose, pop}) {
     });
     setSubmitting(false);
     if(error){pop(error.message,"error");return;}
-    const sub=encodeURIComponent("Verixo — Credit Top-Up Request");
+    const sub=encodeURIComponent(`${PRODUCT_NAME} — Credit Top-Up Request`);
     const body=encodeURIComponent(`Hi,\n\nI'd like to purchase the ${pack.label} (${pack.credits} AI credits for $${pack.aud} AUD).\n\nPlease send me a payment link.\n\nThanks`);
-    window.open(`mailto:hello@verixo.com.au?subject=${sub}&body=${body}`,"_self");
+    window.open(`mailto:${PRODUCT_EMAIL}?subject=${sub}&body=${body}`,"_self");
     pop(`Credit request sent — we'll email you a payment link. Your ${pack.credits} credits will be added on payment.`,"success");
     onClose();
   }
@@ -11987,7 +12084,7 @@ function SettingsModule({company, setCompany, companyId, userRole, userTier, tra
           <div style={{fontSize:11,color:T.faint,marginTop:4}}>This name shows at the top of the app and on your activity.</div>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"flex-end"}}>
-          <Btn v="red" onClick={()=>{ if(safeConfirm("Log out of Verixo?")) onSignOut?.(); }}>Log out</Btn>
+          <Btn v="red" onClick={()=>{ if(safeConfirm(`Log out of ${PRODUCT_NAME}?`)) onSignOut?.(); }}>Log out</Btn>
           <Btn v="gho" sm onClick={async()=>{
             if(!user?.email) return;
             const { error } = await supabase.auth.resetPasswordForEmail(user.email, {
@@ -12150,7 +12247,7 @@ function SettingsModule({company, setCompany, companyId, userRole, userTier, tra
           <Row gap={8}>
             <Btn v="grn" onClick={()=>{
               const staticKeys=["qf_rates","qf_cablib","qf_company","qf_xero","qf_templates","qf_ai"];
-              const dump={exportedAt:new Date().toISOString(),app:"Verixo",data:{}};
+              const dump={exportedAt:new Date().toISOString(),app:PRODUCT_NAME,data:{}};
               // Static keys
               staticKeys.forEach(k=>{try{const v=localStorage.getItem(k);if(v)dump.data[k]=JSON.parse(v);}catch{}});
               // Dynamic per-project keys (actual costs, production status, schemes)
@@ -12175,7 +12272,7 @@ function SettingsModule({company, setCompany, companyId, userRole, userTier, tra
                 r.onload=ev=>{
                   try{
                     const dump=JSON.parse(ev.target.result);
-                    if(!dump.data) throw new Error("Not a valid Verixo backup file");
+                    if(!dump.data) throw new Error(`Not a valid ${PRODUCT_NAME} backup file`);
                     if(!safeConfirm("Restore will REPLACE all current data with the backup. Continue?")) return;
                     Object.entries(dump.data).forEach(([k,v])=>localStorage.setItem(k,JSON.stringify(v)));
                     pop("Backup restored — reloading…");
