@@ -8,8 +8,6 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
-const ADMIN_EMAILS = ["stuart.dean.nicholas@gmail.com", "stuartdeannicholas@gmail.com"];
-
 const C = {
   bg: "#07090c", panel: "#0d1117", card: "#101820", card2: "#141e2a", faint: "#1e2d3d",
   border: "#1e293b", text: "#f1f5f9", muted: "#64748b",
@@ -152,7 +150,7 @@ export default function ShilaconAdmin() {
   useEffect(() => {
     (async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session || !ADMIN_EMAILS.includes(session.user.email || "")) { setDenied(true); setLoading(false); return; }
+      if (!session) { setDenied(true); setLoading(false); return; }
       setReady(true);
       setToken(session.access_token);
       await load(session.access_token);
@@ -162,7 +160,8 @@ export default function ShilaconAdmin() {
   async function load(t: string) {
     setLoading(true);
     try {
-      const res  = await fetch("/api/admin", { headers: { Authorization: `Bearer ${t}` } });
+      const res = await fetch("/api/admin", { headers: { Authorization: `Bearer ${t}` } });
+      if (res.status === 401) { setDenied(true); return; }
       const json = await res.json();
       setData(json);
     } finally { setLoading(false); }
