@@ -10254,8 +10254,12 @@ function priceCabinet(cab, rules, rates) {
   const rAssembly = P.rate_assembly  ??R.rate_assembly  ??null;
   const rPacking  = P.rate_packing   ??R.rate_packing   ??null;
 
-  const labourCost = draftingHrs*(rDrafting??0) + cuttingHrs*(rCutting??0) +
-                     edgingHrs*(rEdging??0) + assemblyHrs*(rAssembly??0) + packingHrs*(rPacking??0);
+  const draftingCost = draftingHrs*(rDrafting??0);
+  const cuttingCost  = cuttingHrs *(rCutting ??0);
+  const edgingCost   = edgingHrs  *(rEdging  ??0);
+  const assemblyCost = assemblyHrs*(rAssembly??0);
+  const packingCost  = packingHrs *(rPacking ??0);
+  const labourCost   = draftingCost+cuttingCost+edgingCost+assemblyCost+packingCost;
 
   // Legacy assembly: suppressed only when BOTH assembly hours AND rate are calibrated
   const hasNewAssemblyCost = assemblyHrs>0 && rAssembly!=null && +rAssembly>0;
@@ -10296,6 +10300,9 @@ function priceCabinet(cab, rules, rates) {
       doorHwCost:+doorHwCost.toFixed(2), drawerHwCost:+drawerHwCost.toFixed(2),
       frontCost:+frontCost.toFixed(2),
       labourCost:+labourCost.toFixed(2),
+      draftingCost:+draftingCost.toFixed(2), cuttingCost:+cuttingCost.toFixed(2),
+      edgingCost:+edgingCost.toFixed(2), assemblyCost:+assemblyCost.toFixed(2),
+      packingCost:+packingCost.toFixed(2),
       legacyAssembly:+legacyAssembly.toFixed(2),
       assembly:+legacyAssembly.toFixed(2),
       calibration:1,
@@ -10329,6 +10336,9 @@ function priceCabinet(cab, rules, rates) {
     hingeCost:+hingeCost.toFixed(2), handleCost:+handleCost.toFixed(2),
     footCost:+footCost.toFixed(2),
     labourCost:+labourCost.toFixed(2),
+    draftingCost:+draftingCost.toFixed(2), cuttingCost:+cuttingCost.toFixed(2),
+    edgingCost:+edgingCost.toFixed(2), assemblyCost:+assemblyCost.toFixed(2),
+    packingCost:+packingCost.toFixed(2),
     legacyAssembly:+legacyAssembly.toFixed(2),
     assembly:+legacyAssembly.toFixed(2),
     total:+total.toFixed(2),
@@ -11295,6 +11305,8 @@ function CabinetLibraryTab({pop}) {
     finally{ setLoading(false); }
   })();},[]);
 
+  const [expandedKey,setExpandedKey]=useState(null);
+
   if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading library…</div></Card>;
   if(err) return <Card><div style={{color:T.red,fontSize:13}}>Couldn't load: {err}</div>
     <div style={{color:T.faint,fontSize:12,marginTop:6}}>If this mentions a missing column, run the CABINET-LIBRARY Layer 6 SQL in Supabase.</div></Card>;
@@ -11306,22 +11318,23 @@ function CabinetLibraryTab({pop}) {
     if(search){ const s=search.toLowerCase(); return `${c.type} ${c.config} ${c.width}`.toLowerCase().includes(s); }
     return true;
   });
-  // group by type|config for display
   const groups={};
   filtered.forEach(c=>{ const k=`${c.type} · ${c.config}`; (groups[k]=groups[k]||[]).push(c); });
+
+  const COL_COUNT=7;
 
   return <div>
     <Card hi sx={{marginBottom:14}}>
       <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>Generated cabinet library</div>
-      <div style={{color:T.faint,fontSize:12,lineHeight:1.6,marginBottom:12,maxWidth:640}}>
-        Every cabinet type, config and width — priced live from your Cabinet Formula and the rates below. Nothing is stored; change a rate or the formula and the whole library re-prices instantly. This is the list your Estimate and Takeoff pick-lists draw from.
+      <div style={{color:T.faint,fontSize:12,lineHeight:1.6,marginBottom:10,maxWidth:680}}>
+        Every cabinet type, config and width — priced live from your Cabinet Formula. Nothing is stored; change a rate or the formula and the whole library re-prices instantly.
+        Labour $ uses the formula's saved $/hr rates. Hardware $ uses the formula's configured hardware rates.
+        The material rates below are reference preview values only — real project pricing uses each project's selected and snapshotted material and hardware rates.
+        Click any row to see the full cost breakdown.
       </div>
       <Row gap={10} sx={{flexWrap:"wrap",alignItems:"flex-end"}}>
-        <Inp label="House carcass board $/m²" value={rates.carcass} onChange={v=>setRates(r=>({...r,carcass:+v||0}))} type="number" mono sx={{width:160,marginBottom:0}}/>
-        <Inp label="House finish (fronts) $/m²" value={rates.front} onChange={v=>setRates(r=>({...r,front:+v||0}))} type="number" mono sx={{width:160,marginBottom:0}}/>
-        <div style={{color:T.faint,fontSize:11,maxWidth:280}}>
-          These are reference rates for the preview. Real quotes use each project's chosen catalogue items via its Cabinet Preset.
-        </div>
+        <Inp label="Preview carcass $/m²" value={rates.carcass} onChange={v=>setRates(r=>({...r,carcass:+v||0}))} type="number" mono sx={{width:160,marginBottom:0}}/>
+        <Inp label="Preview fronts $/m²" value={rates.front} onChange={v=>setRates(r=>({...r,front:+v||0}))} type="number" mono sx={{width:160,marginBottom:0}}/>
       </Row>
     </Card>
 
@@ -11342,22 +11355,53 @@ function CabinetLibraryTab({pop}) {
         </div>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-            <thead><tr style={{color:T.faint,fontSize:11,textAlign:"left"}}>
-              {["Width","Carcass m²","Carcass $","Hardware $","Assembly $","× Calib.","Supply $","Fronts $","Cabinet $"].map((h,i)=>
-                <th key={i} style={{padding:"6px 12px",fontWeight:600,textAlign:i>0?"right":"left"}}>{h}</th>)}
+            <thead><tr style={{color:T.faint,fontSize:11,background:T.bg}}>
+              {["Width","Carcass m²","Carcass $","Fronts $","Hardware $","Labour $","Total $"].map((h,i)=>
+                <th key={i} style={{padding:"6px 12px",fontWeight:600,textAlign:i===0?"left":"right",whiteSpace:"nowrap"}}>{h}</th>)}
+              <th style={{padding:"6px 8px",width:20}}/>
             </tr></thead>
             <tbody>
-              {cabs.map(c=>{const b=c.breakdown;return <tr key={c.key} style={{borderTop:`1px solid ${T.border}`}}>
-                <td style={{padding:"5px 12px",fontWeight:700}}>{c.width}mm</td>
-                <td style={{padding:"5px 12px",textAlign:"right",color:T.muted,fontFamily:T.mono}}>{b.carcassM2}</td>
-                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$(b.carcassCost)}</td>
-                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$((b.doorHwCost||0)+(b.drawerHwCost||0))}</td>
-                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$(b.assembly)}</td>
-                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.faint}}>×{b.calibration}</td>
-                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.text}}>{$$(b.supplyCost)}</td>
-                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$(b.frontCost)}</td>
-                <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,fontWeight:800,color:T.accent}}>{$$(c.price)}</td>
-              </tr>;})}
+              {cabs.map(c=>{
+                const b=c.breakdown;
+                const isOpen=expandedKey===c.key;
+                const hw=(b.doorHwCost||0)+(b.drawerHwCost||0)+(b.hingeCost||0)+(b.handleCost||0)+(b.footCost||0);
+                const {W,H,D}=b.dims||{};
+                return [
+                  <tr key={c.key} onClick={()=>setExpandedKey(isOpen?null:c.key)}
+                    style={{borderTop:`1px solid ${T.border}`,cursor:"pointer",background:isOpen?T.accentDim:"transparent"}}>
+                    <td style={{padding:"5px 12px",fontWeight:700}}>{c.width}mm</td>
+                    <td style={{padding:"5px 12px",textAlign:"right",color:T.muted,fontFamily:T.mono}}>{b.carcassM2}</td>
+                    <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$(b.carcassCost)}</td>
+                    <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$(b.frontCost)}</td>
+                    <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:T.muted}}>{$$(hw)}</td>
+                    <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,color:b.labourCost>0?T.text:T.faint}}>{$$(b.labourCost)}</td>
+                    <td style={{padding:"5px 12px",textAlign:"right",fontFamily:T.mono,fontWeight:800,color:T.accent}}>{$$(c.price)}</td>
+                    <td style={{padding:"5px 8px",textAlign:"center",color:T.muted,fontSize:10}}>{isOpen?"▲":"▼"}</td>
+                  </tr>,
+                  isOpen&&<tr key={`${c.key}_detail`} style={{background:T.bg,borderTop:`1px solid ${T.border}`}}>
+                    <td colSpan={COL_COUNT+1} style={{padding:"10px 16px"}}>
+                      <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"4px 20px",fontSize:11,maxWidth:640}}>
+                        <span style={{color:T.faint,fontWeight:600}}>Dims</span>
+                        <span style={{fontFamily:T.mono,color:T.text}}>{W}×{H}×{D} mm</span>
+                        <span style={{color:T.faint,fontWeight:600}}>Front m²</span>
+                        <span style={{fontFamily:T.mono,color:T.muted}}>{b.frontM2}</span>
+                      </div>
+                      <div style={{marginTop:8,display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6,maxWidth:560}}>
+                        {[["Drafting",b.draftingCost],["Cutting",b.cuttingCost],["Edging",b.edgingCost],
+                          ["Assembly",b.assemblyCost],["Packing",b.packingCost]].map(([op,val])=>
+                          <div key={op} style={{background:T.card,borderRadius:5,padding:"6px 8px",border:`1px solid ${T.border}`}}>
+                            <div style={{fontSize:10,color:T.faint,fontWeight:600,marginBottom:2}}>{op}</div>
+                            <div style={{fontFamily:T.mono,fontSize:12,color:val>0?T.text:T.faint}}>{$$(val)}</div>
+                          </div>
+                        )}
+                      </div>
+                      {b.legacyAssembly>0&&<div style={{marginTop:8,fontSize:11,color:T.yellow}}>
+                        Legacy assembly: {$$(b.legacyAssembly)} — fallback per-cabinet charge; suppressed once assembly hours and assembly $/hr rate are both configured.
+                      </div>}
+                    </td>
+                  </tr>
+                ];
+              })}
             </tbody>
           </table>
         </div>
