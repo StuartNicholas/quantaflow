@@ -4572,8 +4572,8 @@ ${EXTRACT_SCHEMA}`;
          ti.cab.type!=="Benchtop" && ti.cab.type!=="Splashback"){
         const {doors,drawers}=parseCabConfig(ti.cab.config);
         const roomRates=ratesFor(ti.cab.room, pricing);
-        const pr=priceCabinet({type:ti.cab.type,width:ti.cab.width,doors,drawers}, pricing.rules, roomRates);
-        rate=pr.total;
+        const pr=priceCabinet({type:ti.cab.type,config:ti.cab.config,width:ti.cab.width,doors,drawers}, pricing.rules, roomRates);
+        rate=pr.reviewRequired?0:pr.total;
       }
       return {
         id:uid(),
@@ -5784,6 +5784,13 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
     });
     return ()=>{on=false;};
   },[proj.id]);
+  const [cabPricing,setCabPricing]=useState(null);
+  useEffect(()=>{
+    if(!proj.company_id||!proj.id) return;
+    let on=true;
+    loadCabinetPricing(proj.company_id,proj.id).then(p=>{ if(on) setCabPricing(p); });
+    return ()=>{on=false;};
+  },[proj.company_id,proj.id]);
   const [showCabSetup,setShowCabSetup]=useState(false);
   const [nli, setNli] = useState({category:CATS[0],description:"",qty:1,unit:"m²",rate:0,margin:proj.margin||20});
   const [templates,setTemplates]=useLS("qf_templates",[]);
@@ -5929,20 +5936,42 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
   function setCCDim(type,k,v){ onMutate(p=>({...p,cabConfig:{...p.cabConfig,dims:{...p.cabConfig.dims,[type]:{...p.cabConfig.dims[type],[k]:v}}}})); }
 
   function repriceCabItems(){
+    if(!cabPricing?.ready){
+      pop("Cabinet Preset not configured — set up the Cabinet Preset tab first.","error");
+      return;
+    }
     const cfg=proj.cabConfig||cabLib||SEED_CABLIB;
-    onMutate(p=>{
-      const np={...p,lineItems:p.lineItems.map(li=>{
-        if(!li.cab) return li;
+    // Compute prices synchronously before touching state so we can report review flags
+    const updates=new Map(), needsReview=[];
+    (proj.lineItems||[]).forEach(li=>{
+      if(!li.cab) return;
+      const isStdCab=["Base","Overhead","Tall"].includes(li.cab.type);
+      if(isStdCab){
+        const {doors,drawers}=parseCabConfig(li.cab.config||"");
+        const pr=priceCabinet({...li.cab,doors,drawers},cabPricing.rules,
+          ratesFor(li.cab.room,cabPricing));
+        if(pr.reviewRequired) needsReview.push({id:li.id,missingRates:pr.missingRates});
+        else updates.set(li.id,parseFloat(pr.total.toFixed(2)));
+      } else {
+        // Panels, Splashbacks, Benchtops — keep on legacy engine
         const priced=priceCabLine(li.cab,cfg);
-        if(!priced) return li;
-        const rate=priced.installMode!=="ea"?priced.supply+priced.installCost:priced.unitCost;
-        const r=parseFloat(rate.toFixed(2));
-        persistUpdate(li.id,{rate:r});
-        return {...li,rate:r};
-      })};
+        if(priced){
+          const r=priced.installMode!=="ea"?priced.supply+priced.installCost:priced.unitCost;
+          updates.set(li.id,parseFloat(r.toFixed(2)));
+        }
+      }
+    });
+    updates.forEach((rate,id)=>persistUpdate(id,{rate}));
+    onMutate(p=>{
+      const np={...p,lineItems:p.lineItems.map(li=>updates.has(li.id)?{...li,rate:updates.get(li.id)}:li)};
       rollupTotal(np); return np;
     });
-    pop("Cabinetry items re-priced with current project config.");
+    if(needsReview.length>0){
+      const allMissing=[...new Set(needsReview.flatMap(x=>x.missingRates))];
+      pop(`Re-priced ${updates.size} item(s). ${needsReview.length} cabinet item(s) not updated — configure Cabinet Preset: ${allMissing.join(", ")}.`,"warn");
+    } else {
+      pop("Cabinetry items re-priced.");
+    }
   }
 
   function updLI(id,k,v) {
@@ -6018,20 +6047,32 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
       </div>}
       {(proj.takeoffItems||[]).length>0&&<Btn v="tel" onClick={async()=>{
         const cfg=proj.cabConfig||cabLib||SEED_CABLIB;
+        let reviewCount=0;
         const add=(proj.takeoffItems||[]).map(ti=>{
-          let rate=0;
+          let rate=0, description=ti.label;
           if(ti.cab){
-            const priced=priceCabLine(ti.cab,cfg);
-            if(priced) rate=parseFloat((priced.installMode!=="ea"?priced.supply+priced.installCost:priced.unitCost).toFixed(2));
+            const isStdCab=["Base","Overhead","Tall"].includes(ti.cab.type);
+            if(isStdCab && cabPricing?.ready){
+              const {doors,drawers}=parseCabConfig(ti.cab.config||"");
+              const pr=priceCabinet({...ti.cab,doors,drawers},cabPricing.rules,
+                ratesFor(ti.cab.room,cabPricing));
+              if(pr.reviewRequired){ reviewCount++; description=`⚠ REVIEW REQUIRED — ${ti.label}`; }
+              else { rate=parseFloat(pr.total.toFixed(2)); }
+            } else {
+              // Panels, Splashbacks, Benchtops — legacy engine
+              const priced=priceCabLine(ti.cab,cfg);
+              if(priced) rate=parseFloat((priced.installMode!=="ea"?priced.supply+priced.installCost:priced.unitCost).toFixed(2));
+            }
           }
           return {id:uid(),
             category:ti.cab?(["Benchtop","Splashback"].includes(ti.cab.type)?"Benchtops":"Cabinetry"):(ti.type==="count"?"Windows & Doors":ti.type==="area"?"Foundations":"Framing"),
-            description:ti.label,qty:ti.qty,unit:ti.unit,rate,margin:proj.margin||20,source:"takeoff",cab:ti.cab||undefined};
+            description,qty:ti.qty,unit:ti.unit,rate,margin:proj.margin||20,source:"takeoff",cab:ti.cab||undefined};
         });
         const saved=await persistBulk(add);
         const withIds=add.map((li,i)=>saved[i]?{...li,id:saved[i].id}:li);
         onMutate(p=>{ const np={...p,lineItems:[...(p.lineItems||[]),...withIds]}; rollupTotal(np); return np; });
-        pop(`${add.length} takeoff items imported.`);
+        if(reviewCount>0) pop(`${add.length} items imported. ${reviewCount} cabinet item(s) need Cabinet Preset configuration (marked ⚠ REVIEW REQUIRED).`,"warn");
+        else pop(`${add.length} takeoff items imported.`);
       }}>⬡ Import from Takeoff</Btn>}
     </Row>
 
@@ -6146,18 +6187,24 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
 
       {/* Live price preview */}
       <div style={{marginTop:12,padding:"10px 14px",background:T.bg,borderRadius:6,border:`1px solid ${T.border}`}}>
-        <div style={{fontWeight:600,fontSize:11,color:T.muted,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Live price check</div>
-        <Row gap={18} wrap>
-          {[{type:"Base",config:"2 Door",width:900},{type:"Base",config:"3 Drawer",width:900},
-            {type:"Overhead",config:"2 Door",width:900},{type:"Tall",config:"2 Door",width:900}].map((s,i)=>{
-            const pr=priceCabLine(s,cc);
-            return <div key={i} style={{fontSize:11}}>
-              <span style={{color:T.muted}}>{s.type} {s.config} {s.width}: </span>
-              <span style={{fontFamily:T.mono,color:T.accent,fontWeight:700}}>{$$(pr.unitCost)}</span>
-              <span style={{color:T.faint}}> (supply {$$(pr.supply,true)} + install {pr.installHours}h)</span>
-            </div>;
-          })}
-        </Row>
+        <div style={{fontWeight:600,fontSize:11,color:T.muted,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Live price check (manufactured cost)</div>
+        {!cabPricing?.ready
+          ? <div style={{fontSize:11,color:T.muted}}>Configure Cabinet Preset to see live pricing.</div>
+          : <Row gap={18} wrap>
+              {[{type:"Base",config:"2 Door",width:900},{type:"Base",config:"3 Drawer",width:900},
+                {type:"Overhead",config:"2 Door",width:900},{type:"Tall",config:"2 Door",width:900}].map((s,i)=>{
+                const {doors,drawers}=parseCabConfig(s.config);
+                const pr=priceCabinet({...s,doors,drawers},cabPricing.rules,cabPricing.rates);
+                return <div key={i} style={{fontSize:11}}>
+                  <span style={{color:T.muted}}>{s.type} {s.config} {s.width}: </span>
+                  {pr.reviewRequired
+                    ? <span style={{color:"#f59e0b",fontWeight:600}}>REVIEW REQUIRED ({pr.missingRates.join(", ")})</span>
+                    : <span style={{fontFamily:T.mono,color:T.accent,fontWeight:700}}>{$$(pr.total)}</span>
+                  }
+                </div>;
+              })}
+            </Row>
+        }
       </div>
     </Card>}
 
@@ -10172,7 +10219,7 @@ const inlineInput={background:"transparent",border:"none",color:T.text,fontSize:
 function priceCabinet(cab, rules, rates) {
   const R=rules||{}, P=rates||{};
   const type=(cab.type||"Base");
-  // fill missing dims from company defaults
+  const cabConfig=cab.config||"";
   let W=+cab.width||0, H=+cab.height||0, D=+cab.depth||0;
   if(!H||!D){
     if(/over|wall|upper/i.test(type)){ H=H||R.default_over_h||720; D=D||R.default_over_d||320; }
@@ -10181,69 +10228,111 @@ function priceCabinet(cab, rules, rates) {
   }
   if(!W) W=600;
   const m2=(mm2)=>mm2/1e6;
-  // carcass board area (panels), m²
   let carcassM2=0;
-  if(R.include_sides!==false)     carcassM2 += 2*m2(H*D);     // 2 sides
-  if(R.include_topbottom!==false) carcassM2 += 2*m2(W*D);     // top + bottom
-  if(R.include_back!==false)      carcassM2 += m2(W*H);       // back
-  carcassM2 += (R.shelves_per_cab??1)*m2(W*D);               // shelves
-  // match spreadsheet: round carcass m² to 3 decimals before costing
+  if(R.include_sides!==false)     carcassM2 += 2*m2(H*D);
+  if(R.include_topbottom!==false) carcassM2 += 2*m2(W*D);
+  if(R.include_back!==false)      carcassM2 += m2(W*H);
+  carcassM2 += (R.shelves_per_cab??1)*m2(W*D);
   carcassM2 = Math.round(carcassM2*1000)/1000;
-  // door/drawer front area, m² (fronts cover the cabinet face: W×H)
   const doors=+cab.doors||0, drawers=+cab.drawers||0;
   const fronts=doors+drawers;
   const frontM2 = fronts>0 ? m2(W*H) : 0;
 
-  const carcassCost = carcassM2*(+P.carcass||0);
+  // Production hours keyed by "Type|Config|Width" — zero until calibrated
+  const hrsKey=`${type}|${cabConfig}|${W}`;
+  const hrs=(R.default_hrs&&R.default_hrs[hrsKey])||{};
+  const draftingHrs=+(hrs.drafting||0);
+  const cuttingHrs =+(hrs.cutting ||0);
+  const edgingHrs  =+(hrs.edging  ||0);
+  const assemblyHrs=+(hrs.assembly||0);
+  const packingHrs =+(hrs.packing ||0);
 
-  // ── SPREADSHEET model (default): flat hardware $/door & $/drawer, a supplier
-  //    calibration multiplier on the carcass+hardware+assembly subtotal, and
-  //    fronts priced separately at the finish rate. Reproduces the real sheet.
+  // Labour rates: project snapshot → company rate → null (no hardcoded fallback)
+  const rDrafting = P.rate_drafting  ??R.rate_drafting  ??null;
+  const rCutting  = P.rate_cutting   ??R.rate_cutting   ??null;
+  const rEdging   = P.rate_edging    ??R.rate_edging    ??null;
+  const rAssembly = P.rate_assembly  ??R.rate_assembly  ??null;
+  const rPacking  = P.rate_packing   ??R.rate_packing   ??null;
+
+  const labourCost = draftingHrs*(rDrafting??0) + cuttingHrs*(rCutting??0) +
+                     edgingHrs*(rEdging??0) + assemblyHrs*(rAssembly??0) + packingHrs*(rPacking??0);
+
+  // Legacy assembly: suppressed only when BOTH assembly hours AND rate are calibrated
+  const hasNewAssemblyCost = assemblyHrs>0 && rAssembly!=null && +rAssembly>0;
+  const legacyAssembly = hasNewAssemblyCost ? 0 : (+R.assembly_per_cab||0);
+
+  // Carcass: P.carcass===null means not configured (distinct from explicitly $0)
+  const carcassRate = P.carcass??null;
+  const carcassCost = carcassM2*(carcassRate??0);
+
+  // Missing-rate detection (shared: carcass + labour)
+  const missingRates=[];
+  if(carcassM2>0 && carcassRate===null)  missingRates.push("carcass");
+  if(draftingHrs>0 && rDrafting===null)  missingRates.push("rate_drafting");
+  if(cuttingHrs >0 && rCutting ===null)  missingRates.push("rate_cutting");
+  if(edgingHrs  >0 && rEdging  ===null)  missingRates.push("rate_edging");
+  if(assemblyHrs>0 && rAssembly===null)  missingRates.push("rate_assembly");
+  if(packingHrs >0 && rPacking ===null)  missingRates.push("rate_packing");
+
+  // ── SPREADSHEET model (default) ─────────────────────────────────────────────
   if((R.pricing_model||"spreadsheet")==="spreadsheet"){
-    const doorHwEach   = R.door_hardware_cost   ?? 12;
-    const drawerHwEach  = R.drawer_hardware_cost ?? 95;
-    const calibration  = R.supplier_calibration ?? 1;
-    const finishRate   = (+P.front)||R.default_finish_rate||165; // project front rate else company finish rate
-    const doorHwCost   = doors*doorHwEach;
-    const drawerHwCost = drawers*drawerHwEach;
-    const assembly     = +R.assembly_per_cab||0;
-    const baseCost     = carcassCost + doorHwCost + drawerHwCost + assembly; // "Base Cabinet Cost" (N)
-    const supplyCost   = baseCost*calibration;                              // "Supplier C&A Cost" (O)
-    const frontCost    = frontM2*finishRate;                                // fronts via finish library
-    const total        = supplyCost + frontCost;
+    // Hardware: project snapshot → company rate → null (no hardcoded commercial fallback)
+    const doorHwRate   = P.door_hardware_rate  ??R.door_hardware_cost  ??null;
+    const drawerHwRate = P.drawer_hardware_rate??R.drawer_hardware_cost??null;
+    if(doors  >0 && doorHwRate  ===null) missingRates.push("door_hardware");
+    if(drawers>0 && drawerHwRate===null) missingRates.push("drawer_hardware");
+    const doorHwCost   = doors  *(doorHwRate  ??0);
+    const drawerHwCost = drawers*(drawerHwRate??0);
+    // Front: project snapshot → company default → null
+    const finishRate = P.front??R.default_finish_rate??null;
+    if(frontM2>0 && finishRate===null) missingRates.push("front");
+    const frontCost  = frontM2*(finishRate??0);
+    const total = carcassCost+doorHwCost+drawerHwCost+frontCost+labourCost+legacyAssembly;
     return {
       model:"spreadsheet",
       dims:{W,H,D}, carcassM2:+carcassM2.toFixed(3), frontM2:+frontM2.toFixed(3),
       doors, drawers,
       carcassCost:+carcassCost.toFixed(2),
       doorHwCost:+doorHwCost.toFixed(2), drawerHwCost:+drawerHwCost.toFixed(2),
-      assembly:+assembly.toFixed(2),
-      baseCost:+baseCost.toFixed(2),
-      calibration,
-      supplyCost:+supplyCost.toFixed(2),
       frontCost:+frontCost.toFixed(2),
+      labourCost:+labourCost.toFixed(2),
+      legacyAssembly:+legacyAssembly.toFixed(2),
+      assembly:+legacyAssembly.toFixed(2),
+      calibration:1,
       total:+total.toFixed(2),
+      missingRates, reviewRequired:missingRates.length>0,
     };
   }
 
-  // ── COMPONENT model (alternative): per-hinge/handle/foot pricing.
+  // ── COMPONENT model ──────────────────────────────────────────────────────────
   const hinges = doors*(R.hinges_per_door??2);
-  const handles= doors*(R.handles_per_door??1) + drawers*(R.handles_per_drawer??1);
-  const feet   = /base/i.test(type) ? (R.feet_per_base??4) : 0;
-  const frontCost   = frontM2*(+P.front||0);
-  const hingeCost   = hinges*(+P.hinge||0);
-  const handleCost  = handles*(+P.handle||0);
-  const footCost    = feet*(+P.foot||0);
-  const assembly    = +R.assembly_per_cab||0;
-  const total = carcassCost+frontCost+hingeCost+handleCost+footCost+assembly;
+  const handles= doors*(R.handles_per_door??1)+drawers*(R.handles_per_drawer??1);
+  const feet   = /base/i.test(type)?(R.feet_per_base??4):0;
+  const hingeRate  = P.hinge ??null;
+  const handleRate = P.handle??null;
+  const footRate   = P.foot  ??null;
+  const frontRate2 = P.front ??null;
+  if(hinges >0 && hingeRate ===null) missingRates.push("hinge");
+  if(handles>0 && handleRate===null) missingRates.push("handle");
+  if(feet   >0 && footRate  ===null) missingRates.push("foot");
+  if(frontM2>0 && frontRate2===null) missingRates.push("front");
+  const frontCost  = frontM2 *(frontRate2??0);
+  const hingeCost  = hinges  *(hingeRate ??0);
+  const handleCost = handles *(handleRate??0);
+  const footCost   = feet    *(footRate  ??0);
+  const total = carcassCost+frontCost+hingeCost+handleCost+footCost+labourCost+legacyAssembly;
   return {
     model:"components",
     dims:{W,H,D}, carcassM2:+carcassM2.toFixed(3), frontM2:+frontM2.toFixed(3),
     hinges, handles, feet,
     carcassCost:+carcassCost.toFixed(2), frontCost:+frontCost.toFixed(2),
     hingeCost:+hingeCost.toFixed(2), handleCost:+handleCost.toFixed(2),
-    footCost:+footCost.toFixed(2), assembly:+assembly.toFixed(2),
+    footCost:+footCost.toFixed(2),
+    labourCost:+labourCost.toFixed(2),
+    legacyAssembly:+legacyAssembly.toFixed(2),
+    assembly:+legacyAssembly.toFixed(2),
     total:+total.toFixed(2),
+    missingRates, reviewRequired:missingRates.length>0,
   };
 }
 
@@ -10263,6 +10352,44 @@ const CABINET_TYPES = [
   {type:"Tall",     config:"1 Door",  doors:1, drawers:0, wMin:300, wMax:600},
   {type:"Tall",     config:"2 Door",  doors:2, drawers:0, wMin:500, wMax:1200},
 ];
+
+// Provisional production hours derived from the Mitchelton calibration model.
+// Keyed by "Type|Config" — applied to every generated width on first seed.
+const PROVISIONAL_HRS = {
+  "Base|1 Door":    {drafting:0.062, cutting:0.044, edging:0.044, assembly:0.111, packing:0.022},
+  "Base|2 Door":    {drafting:0.079, cutting:0.057, edging:0.057, assembly:0.143, packing:0.029},
+  "Base|1 Drawer":  {drafting:0.088, cutting:0.063, edging:0.063, assembly:0.159, packing:0.032},
+  "Base|2 Drawer":  {drafting:0.115, cutting:0.083, edging:0.083, assembly:0.206, packing:0.041},
+  "Base|3 Drawer":  {drafting:0.141, cutting:0.102, edging:0.102, assembly:0.254, packing:0.051},
+  "Base|4 Drawer":  {drafting:0.168, cutting:0.121, edging:0.121, assembly:0.302, packing:0.060},
+  "Base|5 Drawer":  {drafting:0.194, cutting:0.140, edging:0.140, assembly:0.349, packing:0.070},
+  "Overhead|1 Door":{drafting:0.079, cutting:0.057, edging:0.057, assembly:0.143, packing:0.029},
+  "Overhead|2 Door":{drafting:0.097, cutting:0.070, edging:0.070, assembly:0.175, packing:0.035},
+  "Tall|1 Door":    {drafting:0.141, cutting:0.102, edging:0.102, assembly:0.254, packing:0.051},
+  "Tall|2 Door":    {drafting:0.194, cutting:0.140, edging:0.140, assembly:0.349, packing:0.070},
+};
+const HRS_OPS=["drafting","cutting","edging","assembly","packing"];
+
+// Returns {merged, changed}. Per-operation: only fills absent/null/0 values.
+// Called only when default_hrs_seeded_at IS NULL — after that the company's
+// saved values (including intentional zeros) are never touched automatically.
+function seedDefaultHrs(existing, cabinetTypes, step, minW, maxW){
+  const merged={...existing};
+  let changed=false;
+  cabinetTypes.forEach(ct=>{
+    const prov=PROVISIONAL_HRS[`${ct.type}|${ct.config}`];
+    if(!prov) return;
+    const lo=Math.max(ct.wMin,minW), hi=Math.min(ct.wMax,maxW);
+    for(let w=lo;w<=hi;w+=step){
+      const key=`${ct.type}|${ct.config}|${w}`;
+      const cur=merged[key]||{};
+      const patched={...cur};
+      HRS_OPS.forEach(op=>{ if(!+cur[op]){ patched[op]=prov[op]; changed=true; } });
+      merged[key]=patched;
+    }
+  });
+  return {merged,changed};
+}
 
 // Build the full priced library for a project given formula rules + resolved rates.
 function generateCabinetLibrary(rules, rates){
@@ -10376,21 +10503,32 @@ async function loadCabinetPricing(companyId, projectId){
   ]);
   if(!rules||!preset) return {rules,preset,rates:null,roomPresets:[],rateMap:{},ready:false};
   const roomPresets=roomRows||[];
-  // collect all unique catalogue item IDs: project-level + every room override in one query
   const projectIds=[preset.carcass_item_id,preset.front_item_id,preset.hinge_item_id,preset.handle_item_id,preset.foot_item_id];
   const roomIds=roomPresets.flatMap(r=>[r.carcass_item_id,r.front_item_id,r.hinge_item_id,r.handle_item_id,r.foot_item_id]);
   const ids=[...new Set([...projectIds,...roomIds])].filter(Boolean);
   let rateMap={};
   if(ids.length){
     const {data:items}=await supabase.from("catalogue_items").select("id,rate").in("id",ids);
-    (items||[]).forEach(it=>{ rateMap[it.id]=+it.rate||0; });
+    // Store exact numeric rate; undefined if item not found (treated as null sentinel by slotRate)
+    (items||[]).forEach(it=>{ rateMap[it.id]=+it.rate; });
   }
+  // null = slot not configured or item missing; explicit $0 remains $0
+  const slotRate=id=>id!=null?(rateMap[id]??null):null;
   const rates={
-    carcass: rateMap[preset.carcass_item_id]||0,
-    front:   rateMap[preset.front_item_id]||0,
-    hinge:   rateMap[preset.hinge_item_id]||0,
-    handle:  rateMap[preset.handle_item_id]||0,
-    foot:    rateMap[preset.foot_item_id]||0,
+    carcass: slotRate(preset.carcass_item_id),
+    front:   slotRate(preset.front_item_id),
+    hinge:   slotRate(preset.hinge_item_id),
+    handle:  slotRate(preset.handle_item_id),
+    foot:    slotRate(preset.foot_item_id),
+    // Snapshotted hardware rates (project_cabinet_preset columns)
+    door_hardware_rate:   preset.door_hardware_rate  ??null,
+    drawer_hardware_rate: preset.drawer_hardware_rate??null,
+    // Snapshotted operational rates
+    rate_drafting:  preset.rate_drafting ??null,
+    rate_cutting:   preset.rate_cutting  ??null,
+    rate_edging:    preset.rate_edging   ??null,
+    rate_assembly:  preset.rate_assembly ??null,
+    rate_packing:   preset.rate_packing  ??null,
   };
   const ready = !!(preset.carcass_item_id||preset.front_item_id);
   return {rules,preset,rates,roomPresets,rateMap,ready};
@@ -10406,12 +10544,22 @@ function ratesFor(room, pricing){
   const rp=roomPresets.find(r=>(r.room_name||r.room||"").toLowerCase()===name);
   if(!rp) return pricing.rates;
   const m=pricing.rateMap||{};
+  const slotRate=id=>id!=null?(m[id]??null):null;
   return {
-    carcass: rp.carcass_item_id ? (m[rp.carcass_item_id]||0) : pricing.rates.carcass,
-    front:   rp.front_item_id   ? (m[rp.front_item_id]||0)   : pricing.rates.front,
-    hinge:   rp.hinge_item_id   ? (m[rp.hinge_item_id]||0)   : pricing.rates.hinge,
-    handle:  rp.handle_item_id  ? (m[rp.handle_item_id]||0)  : pricing.rates.handle,
-    foot:    rp.foot_item_id    ? (m[rp.foot_item_id]||0)    : pricing.rates.foot,
+    // Room-overrideable catalogue slots
+    carcass: rp.carcass_item_id!=null ? slotRate(rp.carcass_item_id) : pricing.rates.carcass,
+    front:   rp.front_item_id  !=null ? slotRate(rp.front_item_id)   : pricing.rates.front,
+    hinge:   rp.hinge_item_id  !=null ? slotRate(rp.hinge_item_id)   : pricing.rates.hinge,
+    handle:  rp.handle_item_id !=null ? slotRate(rp.handle_item_id)  : pricing.rates.handle,
+    foot:    rp.foot_item_id   !=null ? slotRate(rp.foot_item_id)    : pricing.rates.foot,
+    // Not room-overrideable — always from project-level snapshot
+    door_hardware_rate:   pricing.rates.door_hardware_rate,
+    drawer_hardware_rate: pricing.rates.drawer_hardware_rate,
+    rate_drafting:  pricing.rates.rate_drafting,
+    rate_cutting:   pricing.rates.rate_cutting,
+    rate_edging:    pricing.rates.rate_edging,
+    rate_assembly:  pricing.rates.rate_assembly,
+    rate_packing:   pricing.rates.rate_packing,
   };
 }
 
@@ -10878,8 +11026,9 @@ function CabinetFormula({pop}) {
   const [loading,setLoading]=useState(true);
   const [err,setErr]=useState(null);
   // worked-example inputs + sample rates so the shop sees the maths
-  const [ex,setEx]=useState({type:"Base",width:1000,height:720,depth:560,doors:2,drawers:0});
-  const [exRates,setExRates]=useState({carcass:52,front:85,hinge:3.5,handle:6,foot:1.2});
+  const [ex,setEx]=useState({type:"Base",config:"2 Door",width:1000,height:720,depth:560,doors:2,drawers:0});
+  const [exRates,setExRates]=useState({carcass:52,front:85,hinge:3.5,handle:6,foot:1.2,door_hardware_rate:12,drawer_hardware_rate:95,rate_drafting:45,rate_cutting:55,rate_edging:40,rate_assembly:50,rate_packing:35});
+  const [openGroups,setOpenGroups]=useState(new Set());
 
   useEffect(()=>{(async()=>{
     setLoading(true); setErr(null);
@@ -10895,12 +11044,28 @@ function CabinetFormula({pop}) {
         const { data:created }=await supabase.from("cabinet_formula").insert({company_id:cid}).select().single();
         f=created;
       }
+      // One-time provisional seed — only runs when default_hrs_seeded_at IS NULL.
+      // After the first seed, the company's saved values (including intentional zeros)
+      // are never touched automatically.
+      if(!f.default_hrs_seeded_at){
+        const step=f.width_step||50, minW=f.width_min??300, maxW=f.width_max??1200;
+        const {merged,changed}=seedDefaultHrs(f.default_hrs||{},CABINET_TYPES,step,minW,maxW);
+        const now=new Date().toISOString();
+        await supabase.from("cabinet_formula")
+          .update({default_hrs:merged,default_hrs_seeded_at:now})
+          .eq("company_id",cid);
+        f={...f,default_hrs:merged,default_hrs_seeded_at:now};
+      }
       setRules(f);
     }catch(e){ setErr(e?.message||String(e)); }
     finally{ setLoading(false); }
   })();},[]);
 
   function setRule(k,v){ setRules(r=>({...r,[k]:v})); }
+  function toggleGroup(k){ setOpenGroups(g=>{ const n=new Set(g); n.has(k)?n.delete(k):n.add(k); return n; }); }
+  function setHrs(type,config,width,op,val){
+    setRules(r=>{ const h={...(r.default_hrs||{})}; const k=`${type}|${config}|${width}`; h[k]={...(h[k]||{}),[op]:+val||0}; return {...r,default_hrs:h}; });
+  }
   async function save(){
     if(!canEdit) return pop("Library is locked — only the master editor can change the formula.","error");
     const { error }=await supabase.from("cabinet_formula").update({...rules,updated_at:new Date().toISOString()}).eq("company_id",companyId);
@@ -10915,7 +11080,11 @@ function CabinetFormula({pop}) {
   const r=rules||{};
   const calc=priceCabinet(ex, r, exRates);
 
-  return <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14}}>
+  const step=r.width_step||50;
+  const gMin=r.width_min??300, gMax=r.width_max??1200;
+
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+  <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14}}>
     {/* RULES */}
     <Card>
       <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>How a cabinet's cost is built</div>
@@ -10947,6 +11116,18 @@ function CabinetFormula({pop}) {
         <Inp label="Tall H" value={r.default_tall_h} onChange={v=>setRule("default_tall_h",parseInt(v)||0)} type="number" mono sx={{flex:1}}/>
       </Row>
       <Inp label="Assembly / labour add-on per cabinet ($)" value={r.assembly_per_cab} onChange={v=>setRule("assembly_per_cab",parseFloat(v)||0)} type="number" mono/>
+      <div style={{color:T.faint,fontSize:11,marginTop:-6,marginBottom:10}}>Fallback only — suppressed once production hours and assembly rate are both set.</div>
+
+      <div style={{fontWeight:600,fontSize:11,color:T.accent,textTransform:"uppercase",letterSpacing:"0.05em",margin:"14px 0 8px"}}>Production labour rates ($/hr)</div>
+      <Row gap={8}>
+        <Inp label="Drafting $/hr" value={r.rate_drafting} onChange={v=>setRule("rate_drafting",parseFloat(v)||0)} type="number" mono sx={{flex:1}}/>
+        <Inp label="Cutting $/hr" value={r.rate_cutting} onChange={v=>setRule("rate_cutting",parseFloat(v)||0)} type="number" mono sx={{flex:1}}/>
+      </Row>
+      <Row gap={8}>
+        <Inp label="Edging $/hr" value={r.rate_edging} onChange={v=>setRule("rate_edging",parseFloat(v)||0)} type="number" mono sx={{flex:1}}/>
+        <Inp label="Assembly $/hr" value={r.rate_assembly} onChange={v=>setRule("rate_assembly",parseFloat(v)||0)} type="number" mono sx={{flex:1}}/>
+        <Inp label="Packing $/hr" value={r.rate_packing} onChange={v=>setRule("rate_packing",parseFloat(v)||0)} type="number" mono sx={{flex:1}}/>
+      </Row>
 
       {canEdit
         ? <Btn v="pri" full sx={{marginTop:8}} onClick={save}>Save formula</Btn>
@@ -10961,7 +11142,8 @@ function CabinetFormula({pop}) {
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr 1fr",gap:8}}>
-        <Sel label="Type" value={ex.type} onChange={v=>setEx(x=>({...x,type:v}))} options={["Base","Overhead","Tall"]}/>
+        <Sel label="Type" value={ex.type} onChange={v=>setEx(x=>({...x,type:v,config:CABINET_TYPES.find(ct=>ct.type===v)?.config||x.config}))} options={["Base","Overhead","Tall"]}/>
+        <Sel label="Config" value={ex.config} onChange={v=>setEx(x=>({...x,config:v}))} options={CABINET_TYPES.filter(ct=>ct.type===ex.type).map(ct=>ct.config)}/>
         <Inp label="Width mm" value={ex.width} onChange={v=>setEx(x=>({...x,width:+v||0}))} type="number" mono/>
         <Inp label="Height mm" value={ex.height} onChange={v=>setEx(x=>({...x,height:+v||0}))} type="number" mono/>
         <Inp label="Depth mm" value={ex.depth} onChange={v=>setEx(x=>({...x,depth:+v||0}))} type="number" mono/>
@@ -10971,10 +11153,12 @@ function CabinetFormula({pop}) {
 
       <div style={{fontWeight:600,fontSize:11,color:T.muted,textTransform:"uppercase",letterSpacing:"0.05em",margin:"12px 0 6px"}}>Sample rates (from catalogue)</div>
       {(r.pricing_model||"spreadsheet")==="spreadsheet"
-        ? <Row gap={6}>
-            <Inp label="Carc board $/m²" value={exRates.carcass} onChange={v=>setExRates(x=>({...x,carcass:+v||0}))} type="number" mono sx={{flex:1}}/>
-            <Inp label="Fronts (finish) $/m²" value={exRates.front} onChange={v=>setExRates(x=>({...x,front:+v||0}))} type="number" mono sx={{flex:1}}/>
-          </Row>
+        ? <div style={{display:"grid",gridTemplateColumns:mobile?"1fr 1fr":"1fr 1fr 1fr 1fr",gap:6}}>
+            <Inp label="Carc $/m²" value={exRates.carcass} onChange={v=>setExRates(x=>({...x,carcass:+v||0}))} type="number" mono/>
+            <Inp label="Fronts $/m²" value={exRates.front} onChange={v=>setExRates(x=>({...x,front:+v||0}))} type="number" mono/>
+            <Inp label="Door hw $/door" value={exRates.door_hardware_rate} onChange={v=>setExRates(x=>({...x,door_hardware_rate:+v||0}))} type="number" mono/>
+            <Inp label="Drawer hw $/drwr" value={exRates.drawer_hardware_rate} onChange={v=>setExRates(x=>({...x,drawer_hardware_rate:+v||0}))} type="number" mono/>
+          </div>
         : <div style={{display:"grid",gridTemplateColumns:mobile?"1fr 1fr":"1fr 1fr 1fr 1fr 1fr",gap:6}}>
             <Inp label="Carc/m²" value={exRates.carcass} onChange={v=>setExRates(x=>({...x,carcass:+v||0}))} type="number" mono/>
             <Inp label="Front/m²" value={exRates.front} onChange={v=>setExRates(x=>({...x,front:+v||0}))} type="number" mono/>
@@ -10982,28 +11166,34 @@ function CabinetFormula({pop}) {
             <Inp label="Handle" value={exRates.handle} onChange={v=>setExRates(x=>({...x,handle:+v||0}))} type="number" mono/>
             <Inp label="Foot" value={exRates.foot} onChange={v=>setExRates(x=>({...x,foot:+v||0}))} type="number" mono/>
           </div>}
+      <div style={{display:"grid",gridTemplateColumns:mobile?"1fr 1fr":"repeat(5,1fr)",gap:6,marginTop:6}}>
+        <Inp label="Drafting $/hr" value={exRates.rate_drafting} onChange={v=>setExRates(x=>({...x,rate_drafting:+v||0}))} type="number" mono/>
+        <Inp label="Cutting $/hr" value={exRates.rate_cutting} onChange={v=>setExRates(x=>({...x,rate_cutting:+v||0}))} type="number" mono/>
+        <Inp label="Edging $/hr" value={exRates.rate_edging} onChange={v=>setExRates(x=>({...x,rate_edging:+v||0}))} type="number" mono/>
+        <Inp label="Assembly $/hr" value={exRates.rate_assembly} onChange={v=>setExRates(x=>({...x,rate_assembly:+v||0}))} type="number" mono/>
+        <Inp label="Packing $/hr" value={exRates.rate_packing} onChange={v=>setExRates(x=>({...x,rate_packing:+v||0}))} type="number" mono/>
+      </div>
 
       <div style={{marginTop:14,background:T.bg,borderRadius:8,padding:14,border:`1px solid ${T.border}`}}>
         {(calc.model==="spreadsheet" ? [
-          ["Carcass board",   `${calc.carcassM2} m² × $${exRates.carcass}/m²`,              calc.carcassCost],
-          ["Door hardware",   `${calc.doors} × $${r.door_hardware_cost??12}/door`,           calc.doorHwCost],
-          ["Drawer hardware", `${calc.drawers} × $${r.drawer_hardware_cost??95}/drawer`,     calc.drawerHwCost],
-          ["Assembly",        "",                                                              calc.assembly],
-          ["Fronts (finish)", `${calc.frontM2} m² × $${exRates.front}/m²`,                  calc.frontCost],
+          ["Carcass board",    `${calc.carcassM2} m² × $${exRates.carcass}/m²`,                           calc.carcassCost],
+          ["Door hardware",    `${calc.doors} × $${exRates.door_hardware_rate??0}/door`,                   calc.doorHwCost],
+          ["Drawer hardware",  `${calc.drawers} × $${exRates.drawer_hardware_rate??0}/drawer`,             calc.drawerHwCost],
+          ["Fronts (finish)",  `${calc.frontM2} m² × $${exRates.front}/m²`,                               calc.frontCost],
+          ["Labour",           calc.labourCost>0?"from production hours":"set hours in calibration below", calc.labourCost],
+          ["Assembly (legacy)","fallback — suppressed when assembly hrs + rate both set",                   calc.legacyAssembly],
         ] : [
           ["Carcass board",      `${calc.carcassM2} m² × $${exRates.carcass}/m²`, calc.carcassCost],
           ["Door/drawer fronts", `${calc.frontM2} m² × $${exRates.front}/m²`,     calc.frontCost],
           ["Hinges",             `${calc.hinges} × $${exRates.hinge}`,             calc.hingeCost],
           ["Handles",            `${calc.handles} × $${exRates.handle}`,           calc.handleCost],
           ["Feet",               `${calc.feet} × $${exRates.foot}`,                calc.footCost],
-          ["Assembly",           "",                                                calc.assembly],
-        ]).map(([label,detail,val])=>(val>0||label==="Assembly")&&<div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6,fontSize:12}}>
+          ["Labour",             calc.labourCost>0?"from production hours":"set hours in calibration below",calc.labourCost],
+          ["Assembly (legacy)",  "fallback — suppressed when assembly hrs + rate both set",                 calc.legacyAssembly],
+        ]).map(([label,detail,val])=>(val>0||label==="Labour"||label==="Assembly (legacy)")&&<div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6,fontSize:12}}>
           <span style={{color:T.text}}>{label} <span style={{color:T.faint,fontSize:11,fontFamily:T.mono}}>{detail}</span></span>
           <span style={{fontFamily:T.mono,color:T.muted}}>{$$(val)}</span>
         </div>)}
-        {calc.model==="spreadsheet"&&calc.calibration!==1&&<div style={{fontSize:11,color:T.yellow,marginBottom:6}}>
-          Supplier calibration ×{calc.calibration} applied to supply subtotal.
-        </div>}
         <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${T.border}`,paddingTop:9,marginTop:6}}>
           <span style={{fontWeight:800,fontSize:14}}>Cabinet cost</span>
           <span style={{fontFamily:T.mono,fontWeight:800,fontSize:16,color:T.accent}}>{$$(calc.total)}</span>
@@ -11013,6 +11203,65 @@ function CabinetFormula({pop}) {
         Computed live — no stored cabinet types. The AI takeoff runs this same formula on every cabinet it reads, using the project's selected catalogue items.
       </div>
     </Card>
+  </div>
+
+  {/* PRODUCTION HOURS CALIBRATION */}
+  <Card>
+    <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>Production Hours Calibration</div>
+    <div style={{color:T.faint,fontSize:11,marginBottom:4}}>
+      Set how many hours each operation takes per cabinet size. Keyed by Type | Config | Width (mm). Labour cost = hours × your $/hr rates above. Changes save with the formula.
+    </div>
+    <div style={{fontSize:11,color:"#f59e0b",marginBottom:12,fontWeight:600}}>
+      Provisional starting values — calibrate against your company's actual production times.
+    </div>
+    {CABINET_TYPES.map(ct=>{
+      const lo=Math.max(ct.wMin,gMin), hi=Math.min(ct.wMax,gMax);
+      const widths=[]; for(let w=lo;w<=hi;w+=step) widths.push(w);
+      const groupKey=`${ct.type}|${ct.config}`;
+      const isOpen=openGroups.has(groupKey);
+      const filledCount=widths.filter(w=>{
+        const h=(r.default_hrs||{})[`${groupKey}|${w}`]||{};
+        return ["drafting","cutting","edging","assembly","packing"].some(op=>+h[op]>0);
+      }).length;
+      return <div key={groupKey} style={{borderBottom:`1px solid ${T.border}`}}>
+        <div onClick={()=>toggleGroup(groupKey)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",cursor:"pointer",userSelect:"none"}}>
+          <span style={{fontWeight:600,fontSize:12,color:T.text}}>{ct.type} — {ct.config}</span>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:11,color:filledCount>0?T.accent:T.faint}}>{filledCount}/{widths.length} widths calibrated</span>
+            <span style={{color:T.muted,fontSize:12}}>{isOpen?"▲":"▼"}</span>
+          </div>
+        </div>
+        {isOpen&&<div style={{overflowX:"auto",paddingBottom:10}}>
+          <table style={{borderCollapse:"collapse",fontSize:11,minWidth:480}}>
+            <thead><tr style={{background:T.bg}}>
+              <th style={{padding:"4px 10px",textAlign:"left",color:T.faint,fontWeight:600,minWidth:70}}>Width</th>
+              {["Drafting h","Cutting h","Edging h","Assembly h","Packing h"].map(op=>
+                <th key={op} style={{padding:"4px 10px",textAlign:"left",color:T.faint,fontWeight:600,minWidth:86}}>{op}</th>
+              )}
+            </tr></thead>
+            <tbody>
+              {widths.map(w=>{
+                const h=(r.default_hrs||{})[`${groupKey}|${w}`]||{};
+                return <tr key={w} style={{borderTop:`1px solid ${T.border}`}}>
+                  <td style={{padding:"3px 10px",color:T.muted,fontFamily:T.mono,whiteSpace:"nowrap"}}>{w}mm</td>
+                  {["drafting","cutting","edging","assembly","packing"].map(op=>
+                    <td key={op} style={{padding:"3px 6px"}}>
+                      {canEdit
+                        ? <input type="number" step="0.05" min="0"
+                            value={h[op]||""} placeholder="0"
+                            onChange={e=>setHrs(ct.type,ct.config,w,op,e.target.value)}
+                            style={{width:72,fontFamily:T.mono,fontSize:11,color:T.text,background:"transparent",border:`1px solid ${T.border}`,borderRadius:4,padding:"2px 5px"}}/>
+                        : <span style={{fontFamily:T.mono,color:T.muted,paddingLeft:5}}>{h[op]||"0"}</span>}
+                    </td>
+                  )}
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>}
+      </div>;
+    })}
+  </Card>
   </div>;
 }
 
