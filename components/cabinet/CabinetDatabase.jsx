@@ -248,6 +248,23 @@ function CabinetRow({ cab, onEdit, onDelete, onDuplicate, onStatusChange, select
   );
 }
 
+// ── Cabinet field helpers (module-level so React sees stable component types) ─
+
+function CabField({ label, ls, children }) {
+  return <div style={{ marginBottom: 12 }}><label style={ls}>{label}</label>{children}</div>;
+}
+function CabInp({ k, type = "text", step, form, set, s }) {
+  return <input type={type} step={step} value={form[k] ?? ""} onChange={e => set(k, type === "number" ? (parseFloat(e.target.value) || 0) : e.target.value)} style={s} />;
+}
+function CabSel({ k, options, form, set, s }) {
+  return (
+    <select value={form[k] || ""} onChange={e => set(k, e.target.value)} style={{ ...s, cursor: "pointer" }}>
+      <option value="">—</option>
+      {options.map(o => typeof o === "string" ? <option key={o} value={o}>{o}</option> : <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
+
 // ── Cabinet Editor (inline full form) ────────────────────────────────────────
 
 function CabinetEditor({ cab, onSave, onCancel, onApprove, T, isMobile }) {
@@ -262,16 +279,6 @@ function CabinetEditor({ cab, onSave, onCancel, onApprove, T, isMobile }) {
     padding: "7px 10px", fontSize: 12, fontFamily: "monospace",
   };
   const labelStyle = { fontSize: 10, color: T.faint, marginBottom: 4, display: "block", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" };
-  const F = ({ label, children }) => <div style={{ marginBottom: 12 }}><label style={labelStyle}>{label}</label>{children}</div>;
-  const Inp = ({ k, type = "text", step }) => (
-    <input type={type} step={step} value={form[k] ?? ""} onChange={e => set(k, type === "number" ? (parseFloat(e.target.value) || 0) : e.target.value)} style={inputStyle} />
-  );
-  const Sel = ({ k, options }) => (
-    <select value={form[k] || ""} onChange={e => set(k, e.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
-      <option value="">—</option>
-      {options.map(o => typeof o === "string" ? <option key={o} value={o}>{o}</option> : <option key={o.value} value={o.value}>{o.label}</option>)}
-    </select>
-  );
 
   async function handleSave() {
     setBusy(true);
@@ -293,30 +300,30 @@ function CabinetEditor({ cab, onSave, onCancel, onApprove, T, isMobile }) {
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: "0 14px" }}>
         {/* Section: Identity */}
         <div style={{ gridColumn: "1/-1", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.accent, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${T.border}` }}>Identity</div>
-        <F label="Cabinet Number"><Inp k="cabinet_number" /></F>
-        <F label="Cabinet Type"><Sel k="cabinet_type" options={CABINET_TYPES} /></F>
-        <F label="Description" ><div style={{ gridColumn: "span 2" }}><input style={{ ...inputStyle, width: "100%" }} value={form.description} onChange={e => set("description", e.target.value)} /></div></F>
+        <CabField ls={labelStyle} label="Cabinet Number"><CabInp k="cabinet_number" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Cabinet Type"><CabSel k="cabinet_type" options={CABINET_TYPES} form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Description" ><div style={{ gridColumn: "span 2" }}><input style={{ ...inputStyle, width: "100%" }} value={form.description} onChange={e => set("description", e.target.value)} /></div></CabField>
 
         {/* Section: Location */}
         <div style={{ gridColumn: "1/-1", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.accent, margin: "8px 0", paddingBottom: 6, borderBottom: `1px solid ${T.border}` }}>Location</div>
-        <F label="Room"><Inp k="room" /></F>
-        <F label="Unit Type"><Inp k="unit_type" /></F>
-        <F label="Joinery Type"><Inp k="joinery_type" /></F>
-        <F label="Level"><Inp k="level" /></F>
-        <F label="Building"><Inp k="building" /></F>
+        <CabField ls={labelStyle} label="Room"><CabInp k="room" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Unit Type"><CabInp k="unit_type" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Joinery Type"><CabInp k="joinery_type" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Level"><CabInp k="level" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Building"><CabInp k="building" form={form} set={set} s={inputStyle} /></CabField>
 
         {/* Section: Dimensions */}
         <div style={{ gridColumn: "1/-1", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.accent, margin: "8px 0", paddingBottom: 6, borderBottom: `1px solid ${T.border}` }}>Dimensions (mm)</div>
-        <F label="Width"><Inp k="width" type="number" /></F>
-        <F label="Height"><Inp k="height" type="number" /></F>
-        <F label="Depth"><Inp k="depth" type="number" /></F>
+        <CabField ls={labelStyle} label="Width"><CabInp k="width" type="number" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Height"><CabInp k="height" type="number" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Depth"><CabInp k="depth" type="number" form={form} set={set} s={inputStyle} /></CabField>
 
         {/* Section: Finishes */}
         <div style={{ gridColumn: "1/-1", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.accent, margin: "8px 0", paddingBottom: 6, borderBottom: `1px solid ${T.border}` }}>Finishes & Hardware</div>
-        <F label="Material / Carcass"><Inp k="material" /></F>
-        <F label="Door Style"><Inp k="door_style" /></F>
-        <F label="Door Qty"><Inp k="door_qty" type="number" /></F>
-        <F label="Drawer Qty"><Inp k="drawer_qty" type="number" /></F>
+        <CabField ls={labelStyle} label="Material / Carcass"><CabInp k="material" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Door Style"><CabInp k="door_style" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Door Qty"><CabInp k="door_qty" type="number" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Drawer Qty"><CabInp k="drawer_qty" type="number" form={form} set={set} s={inputStyle} /></CabField>
 
         <div style={{ display: "flex", gap: 16, alignItems: "center", gridColumn: "1/-1", marginBottom: 12 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.muted, cursor: "pointer" }}>
@@ -332,15 +339,15 @@ function CabinetEditor({ cab, onSave, onCancel, onApprove, T, isMobile }) {
 
         {/* Section: Costing */}
         <div style={{ gridColumn: "1/-1", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.accent, margin: "8px 0", paddingBottom: 6, borderBottom: `1px solid ${T.border}` }}>Costing</div>
-        <F label="Labour Hours"><Inp k="labour_hours" type="number" step="0.25" /></F>
-        <F label="Unit Cost ($)"><Inp k="unit_cost" type="number" step="0.01" /></F>
-        <F label="Sell Price ($)"><Inp k="sell_price" type="number" step="0.01" /></F>
+        <CabField ls={labelStyle} label="Labour Hours"><CabInp k="labour_hours" type="number" step="0.25" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Unit Cost ($)"><CabInp k="unit_cost" type="number" step="0.01" form={form} set={set} s={inputStyle} /></CabField>
+        <CabField ls={labelStyle} label="Sell Price ($)"><CabInp k="sell_price" type="number" step="0.01" form={form} set={set} s={inputStyle} /></CabField>
 
         {/* Section: Status */}
         <div style={{ gridColumn: "1/-1", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.accent, margin: "8px 0", paddingBottom: 6, borderBottom: `1px solid ${T.border}` }}>Status</div>
-        <F label="Production Status">
-          <Sel k="status" options={STATUSES.map(s => ({ value: s.key, label: s.label }))} />
-        </F>
+        <CabField ls={labelStyle} label="Production Status">
+          <CabSel k="status" options={STATUSES.map(s => ({ value: s.key, label: s.label }))} form={form} set={set} s={inputStyle} />
+        </CabField>
       </div>
 
       {/* Actions */}

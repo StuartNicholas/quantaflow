@@ -18,6 +18,7 @@ import { getTakeoff as dbGetTakeoff, saveTakeoff as dbSaveTakeoff, addTakeoffIte
 import { listPurchaseOrders as dbListPurchaseOrders, createPurchaseOrder as dbCreatePurchaseOrder, updatePurchaseOrder as dbUpdatePurchaseOrder, deletePurchaseOrder as dbDeletePurchaseOrder, addPurchaseOrderItem as dbAddPurchaseOrderItem, addPurchaseOrderItems as dbAddPurchaseOrderItems, deletePurchaseOrderItem as dbDeletePurchaseOrderItem, getPOCommittedTotal as dbGetPOCommittedTotal } from "../lib/db/purchase_orders";
 import { listDefects as dbListDefects, createDefect as dbCreateDefect, updateDefect as dbUpdateDefect, deleteDefect as dbDeleteDefect, listHandoverItems as dbListHandoverItems, seedHandoverItems as dbSeedHandoverItems, createHandoverItem as dbCreateHandoverItem, toggleHandoverItem as dbToggleHandoverItem, deleteHandoverItem as dbDeleteHandoverItem } from "../lib/db/handover";
 import { getActivityFeed as dbGetActivityFeed, getQuoteVersionStats as dbGetQuoteVersionStats } from "../lib/db/reporting";
+import { previewSupplierImport, confirmSupplierImport, listSupplierProducts, listImportBatches, activateToLibrary, reviewStaleItem, computeEffectiveRate } from "../lib/db/supplierProducts";
 import { listClaims as dbListClaims, createClaim as dbCreateClaim, updateClaim as dbUpdateClaim, deleteClaim as dbDeleteClaim, addClaimItem as dbAddClaimItem, addClaimItems as dbAddClaimItems, deleteClaimItem as dbDeleteClaimItem } from "../lib/db/claims";
 import { createCompany as dbCreateCompany, submitJoinRequest as dbSubmitJoinRequest, approveJoinRequest as dbApproveJoinRequest, rejectJoinRequest as dbRejectJoinRequest, listJoinRequests as dbListJoinRequests, listTeamMembers as dbListTeamMembers, getMyPendingRequest as dbGetMyPendingRequest, updateMemberRole as dbUpdateMemberRole } from "../lib/db/team";
 import { listActualCosts as dbListActualCosts, createActualCost as dbCreateActualCost, deleteActualCost as dbDeleteActualCost } from "../lib/db/actual_costs";
@@ -2876,7 +2877,7 @@ const WORKSPACE_TABS = [
   {id:"boxmatrix",   label:"📊 Box Matrix"},
   {id:"takeoff",     label:"① Takeoff"},
   {id:"schemes",     label:"🎨 Schemes"},
-  {id:"preset",      label:"② Cabinet Preset"},
+  {id:"preset",      label:"⚙ Project Spec"},
   {id:"estimate",    label:"③ Estimate"},
   {id:"quote",       label:"④ Quote"},
   {id:"orderlist",   label:"🧾 Order List"},
@@ -2967,209 +2968,418 @@ function ProjectWorkspace({proj,tab,setTab,userRole,userTier,userPermissions,cli
   </div>;
 }
 
+// ── Project Spec helpers (module-level — stable refs prevent focus loss) ─────
+const numOrNull=v=>(v===null||v===undefined||v==="")? null:isNaN(+v)?null:+v;
+
+function CatPicker({items,value,onChange,onPick,placeholder}){
+  const [open,setOpen]=useState(false);
+  const [q,setQ]=useState(value||"");
+  const wrapRef=useRef(null);
+  useEffect(()=>{setQ(value||"");},[value]);
+  const filtered=(!items?.length)?[]:(q.trim()
+    ?items.filter(it=>it.name.toLowerCase().includes(q.toLowerCase()))
+    :items).slice(0,25);
+  function pick(it){setQ(it.name);onChange(it.name);onPick(it);setOpen(false);}
+  function handleChange(e){const v=e.target.value;setQ(v);onChange(v||null);setOpen(true);}
+  return(
+    <div ref={wrapRef} style={{position:"relative",width:"100%"}}>
+      <input
+        style={{background:T.bg,border:`1px solid ${open?T.accent:T.border}`,color:T.text,borderRadius:4,padding:"5px 9px",fontSize:12,width:"100%",boxSizing:"border-box",outline:"none"}}
+        placeholder={placeholder||"search catalogue..."}
+        value={q}
+        onChange={handleChange}
+        onFocus={()=>setOpen(true)}
+        onBlur={()=>setTimeout(()=>setOpen(false),120)}
+      />
+      {open&&filtered.length>0&&(
+        <div style={{position:"absolute",top:"calc(100% + 2px)",left:0,right:0,zIndex:500,background:T.card,border:`1px solid ${T.borderHi}`,borderRadius:5,maxHeight:200,overflowY:"auto",boxShadow:"0 8px 24px rgba(0,0,0,0.6)"}}>
+          {filtered.map(it=>(
+            <div key={it.id}
+              style={{padding:"7px 10px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:`1px solid ${T.border}`}}
+              onMouseDown={()=>pick(it)}>
+              <span style={{fontSize:12,color:T.text}}>{it.name}</span>
+              <span style={{fontSize:11,color:T.muted,fontFamily:T.mono,marginLeft:10,flexShrink:0}}>${(+it.rate||0).toFixed(2)}{it.unit?"/"+it.unit:""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SpecRow({label,unit,nameVal,namePh,onName,coVal,projVal,onProj,catItems,onCatPick}){
+  const hasProj=projVal!==null&&projVal!==undefined&&projVal!=="";
+  const appType=hasProj?"proj":coVal===null?"unset":+coVal===0?"zero":"co";
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"140px 1fr 105px 125px 95px",gap:10,alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${T.border}`}}>
+      <div><div style={{fontSize:12,fontWeight:600,color:T.text}}>{label}</div><div style={{fontSize:10,color:T.faint,marginTop:1}}>{unit}</div></div>
+      {onName
+        ? (catItems?.length
+          ? <CatPicker items={catItems} value={nameVal||""} onChange={onName} onPick={it=>{onCatPick&&onCatPick(it);}} placeholder={namePh||"search catalogue..."}/>
+          : <input style={{background:T.bg,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:"5px 9px",fontSize:12,width:"100%",boxSizing:"border-box",outline:"none"}} placeholder={namePh||"brand / description"} value={nameVal||""} onChange={e=>onName(e.target.value||null)} />)
+        : <div/>}
+      <div style={{fontFamily:T.mono,fontSize:12,textAlign:"right",color:coVal===null?T.faint:+coVal===0?T.red:T.muted}}>
+        {coVal===null?"—":`$${(+coVal).toFixed(2)}`}
+      </div>
+      <div style={{display:"flex",alignItems:"center",background:hasProj?T.accentDim:T.bg,border:`1px solid ${hasProj?"rgba(245,158,11,0.35)":T.border}`,borderRadius:4,padding:"1px 8px"}}>
+        <span style={{fontFamily:T.mono,fontSize:12,color:T.faint}}>$</span>
+        <input type="number" style={{background:"none",border:"none",outline:"none",fontFamily:T.mono,fontSize:12,color:T.text,width:68,textAlign:"right",padding:"4px 0"}} placeholder="—" value={projVal??""} onChange={e=>onProj(numOrNull(e.target.value))} />
+      </div>
+      <div style={{textAlign:"right"}}>
+        {appType==="proj"  && <span style={{background:T.accentDim,color:T.accent,border:`1px solid ${T.accentBrd}`,borderRadius:4,padding:"2px 7px",fontSize:11,fontFamily:T.mono,fontWeight:700}}>${(+projVal).toFixed(2)}</span>}
+        {appType==="co"    && <span style={{background:T.bg,color:T.muted,border:`1px solid ${T.border}`,borderRadius:4,padding:"2px 7px",fontSize:11,fontFamily:T.mono}}>Co.&nbsp;${(+coVal).toFixed(2)}</span>}
+        {appType==="zero"  && <span style={{background:T.redDim,color:T.red,border:"1px solid rgba(239,68,68,0.25)",borderRadius:4,padding:"2px 7px",fontSize:11,fontFamily:T.mono,fontWeight:700}}>⚠ $0</span>}
+        {appType==="unset" && <span style={{background:T.redDim,color:T.red,border:"1px solid rgba(239,68,68,0.25)",borderRadius:4,padding:"2px 7px",fontSize:11,fontFamily:T.mono,fontWeight:700}}>⚠ Not set</span>}
+      </div>
+    </div>
+  );
+}
+
+const SPEC_RATE_FIELDS=[
+  {label:"Carcass Board",   unit:"per m²",         nameF:"carcass_name",  rateF:"carcass_rate",         catF:"carcass_item_id",  formulaF:null},
+  {label:"Door / Front",    unit:"per m²",          nameF:"front_name",    rateF:"front_rate",           catF:"front_item_id",    formulaF:null},
+  {label:"Hinges",          unit:"per hinge",       nameF:"hinge_name",    rateF:"hinge_rate",           catF:"hinge_item_id",    formulaF:null},
+  {label:"Handles",         unit:"per door/drawer", nameF:"handle_name",   rateF:"handle_rate",          catF:"handle_item_id",   formulaF:null},
+  {label:"Drawer Runners",  unit:"per drawer",      nameF:"runner_name",   rateF:"drawer_hardware_rate", catF:null,               formulaF:"drawer_hardware_cost"},
+  {label:"Feet / Legs",     unit:"per cabinet",     nameF:"foot_name",     rateF:"foot_rate",            catF:"foot_item_id",     formulaF:null},
+];
+
+// Sub-components at module level — stable refs prevent SpecRow focus loss.
+function OverrideGrid({overrides,patchField,namePh,preset,catItems}){
+  const OVERRIDE_FIELDS=[
+    {label:"Carcass Board",  unit:"per m²",          nameF:"carcass_name",  rateF:"carcass_rate"},
+    {label:"Door / Front",   unit:"per m²",           nameF:"front_name",    rateF:"front_rate"},
+    {label:"Hinges",         unit:"per hinge",        nameF:"hinge_name",    rateF:"hinge_rate"},
+    {label:"Handles",        unit:"per door/drawer",  nameF:"handle_name",   rateF:"handle_rate"},
+    {label:"Drawer Runners", unit:"per drawer",       nameF:"runner_name",   rateF:"drawer_hardware_rate"},
+    {label:"Feet / Legs",    unit:"per cabinet",      nameF:"foot_name",     rateF:"foot_rate"},
+  ];
+  return(
+    <div style={{padding:"0 12px 12px",borderTop:`1px solid ${T.border}`}}>
+      <div style={{display:"grid",gridTemplateColumns:"140px 1fr 105px 125px 95px",gap:10,marginBottom:6,marginTop:8,paddingBottom:6,borderBottom:`2px solid ${T.border}`}}>
+        <div style={{fontSize:10,color:T.faint,fontWeight:700,textTransform:"uppercase"}}>Item</div>
+        <div style={{fontSize:10,color:T.faint,fontWeight:700,textTransform:"uppercase"}}>Brand / Desc.</div>
+        <div style={{fontSize:10,color:T.faint,fontWeight:700,textTransform:"uppercase",textAlign:"right"}}>Project Default</div>
+        <div style={{fontSize:10,color:T.faint,fontWeight:700,textTransform:"uppercase",textAlign:"center"}}>Override</div>
+        <div style={{fontSize:10,color:T.faint,fontWeight:700,textTransform:"uppercase",textAlign:"right"}}>Applied</div>
+      </div>
+      {OVERRIDE_FIELDS.map(f=>{
+        const projDefault=preset?.[f.rateF]??null;
+        const ov=overrides?.[f.rateF]??null;
+        return(
+          <SpecRow key={f.rateF}
+            label={f.label} unit={f.unit}
+            nameVal={overrides?.[f.nameF]} namePh={namePh}
+            onName={v=>patchField(f.nameF,v)}
+            coVal={projDefault}
+            projVal={ov??""}
+            onProj={v=>patchField(f.rateF,v)}
+            catItems={catItems}
+            onCatPick={it=>{patchField(f.nameF,it.name);patchField(f.rateF,+it.rate);}}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function AccordionSection({overridesMap,patchField,removeEntry,openSet,setOpen,namePh,preset,catItems}){
+  const keys=Object.keys(overridesMap).sort();
+  return(
+    <div>
+      {keys.length===0
+        ?<div style={{color:T.faint,fontSize:12,padding:"8px 0"}}>None set — use the button above to add one.</div>
+        :keys.map(name=>{
+          const isOpen=openSet.has(name);
+          const ovCount=Object.keys(overridesMap[name]||{}).length;
+          return(
+            <div key={name} style={{marginBottom:8,border:`1px solid ${T.border}`,borderRadius:6,overflow:"hidden"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 12px",cursor:"pointer",background:isOpen?T.card2:"transparent"}}
+                onClick={()=>setOpen(s=>{const n=new Set(s);isOpen?n.delete(name):n.add(name);return n;})}>
+                <span style={{fontWeight:600,fontSize:13,color:T.text}}>{name}</span>
+                <Row gap={8}>
+                  {ovCount>0&&<span style={{background:T.accentDim,color:T.accent,border:`1px solid ${T.accentBrd}`,borderRadius:4,padding:"1px 6px",fontSize:10,fontWeight:700}}>{ovCount} override{ovCount!==1?"s":""}</span>}
+                  <Btn sm v="red" onClick={e=>{e.stopPropagation();removeEntry(name);}}>✕</Btn>
+                  <span style={{color:T.faint,fontSize:10}}>{isOpen?"▲":"▼"}</span>
+                </Row>
+              </div>
+              {isOpen&&<OverrideGrid overrides={overridesMap[name]} patchField={(f,v)=>patchField(name,f,v)} namePh={namePh} preset={preset} catItems={catItems}/>}
+            </div>
+          );
+        })}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// CABINET PRESET — per project: choose which catalogue items feed the formula.
+// PROJECT SPEC — material, hardware, room/unit overrides, labour rates.
+// Auto-saves on change. Rates flow immediately to Estimate / Takeoff.
 // ═══════════════════════════════════════════════════════════════════════════
 function CabinetPreset({proj, pop}) {
-  const [companyId,setCompanyId]=useState(null);
-  const [items,setItems]=useState([]);
-  const [sections,setSections]=useState([]);   // trade + section tabs
-  const [preset,setPreset]=useState(null);
-  const [rules,setRules]=useState(null);
-  const [templates,setTemplates]=useState([]);
   const [loading,setLoading]=useState(true);
   const [err,setErr]=useState(null);
-  const [modal,setModal]=useState(null);
-
-  // Slot → catalogue-section mapping. Cabinetry is pre-wired by section NAME;
-  // editable per project and saveable in a template (slot_map).
-  const SLOTS=[
-    {key:"carcass_item_id", label:"Carcass board", defaultSection:"Board",    rate:"$/m²"},
-    {key:"front_item_id",   label:"Door/drawer front board", defaultSection:"Board", rate:"$/m²"},
-    {key:"hinge_item_id",   label:"Hinge",   defaultSection:"Hardware", rate:"$/ea"},
-    {key:"handle_item_id",  label:"Handle",  defaultSection:"Hardware", rate:"$/ea"},
-    {key:"foot_item_id",    label:"Foot/leg",defaultSection:"Hardware", rate:"$/ea"},
-  ];
+  const [rules,setRules]=useState(null);
+  const [preset,setPreset]=useState(null);
+  const [catItems,setCatItems]=useState([]);
+  const [saving,setSaving]=useState(false);
+  const saveTimer=useRef(null);
+  const [openRooms,setOpenRooms]=useState(new Set());
+  const [newRoom,setNewRoom]=useState("");
+  const [addingRoom,setAddingRoom]=useState(false);
+  const [openUnits,setOpenUnits]=useState(new Set());
+  const [newUnit,setNewUnit]=useState("");
+  const [addingUnit,setAddingUnit]=useState(false);
 
   useEffect(()=>{(async()=>{
-    setLoading(true); setErr(null);
+    setLoading(true);setErr(null);
     try{
-      const { data:u }=await supabase.auth.getUser();
-      const uid=u?.user?.id; if(!uid) throw new Error("Not signed in.");
-      const { data:prof }=await supabase.from("profiles").select("company_id").eq("id",uid).single();
-      const cid=prof?.company_id; setCompanyId(cid);
-      const [{data:its},{data:secs},{data:r},{data:pr},{data:tpls}]=await Promise.all([
-        supabase.from("catalogue_items").select("id,name,unit,rate,section_id").eq("company_id",cid).order("name"),
-        supabase.from("catalogue_sections").select("id,name,parent_id").eq("company_id",cid),
+      const {data:u}=await supabase.auth.getUser();
+      const uid=u?.user?.id;if(!uid)throw new Error("Not signed in.");
+      const {data:prof}=await supabase.from("profiles").select("company_id").eq("id",uid).single();
+      const cid=prof?.company_id;
+      const [{data:r},{data:pr},{data:its}]=await Promise.all([
         supabase.from("cabinet_formula").select("*").eq("company_id",cid).maybeSingle(),
         supabase.from("project_cabinet_preset").select("*").eq("project_id",proj.id).maybeSingle(),
-        supabase.from("preset_templates").select("*").eq("company_id",cid).order("name"),
+        supabase.from("catalogue_items").select("id,name,unit,rate").eq("company_id",cid).eq("active",true),
       ]);
-      setItems(its||[]); setSections(secs||[]); setRules(r); setTemplates(tpls||[]);
-      if(pr) setPreset(pr);
-      else {
-        const { data:created }=await supabase.from("project_cabinet_preset")
+      setRules(r);setCatItems(its||[]);
+      if(pr)setPreset(pr);
+      else{
+        const {data:created}=await supabase.from("project_cabinet_preset")
           .insert({project_id:proj.id,company_id:cid}).select().single();
         setPreset(created);
       }
-    }catch(e){ setErr(e?.message||String(e)); }
-    finally{ setLoading(false); }
+    }catch(e){setErr(e?.message||String(e));}
+    finally{setLoading(false);}
   })();},[proj.id]);
 
-  async function setField(field,value){
-    setPreset(p=>({...p,[field]:value}));
-    await supabase.from("project_cabinet_preset").update({[field]:value||null,updated_at:new Date().toISOString()}).eq("project_id",proj.id);
+  function patch(updates){
+    setPreset(p=>({...p,...updates}));
+    if(saveTimer.current)clearTimeout(saveTimer.current);
+    setSaving(true);
+    saveTimer.current=setTimeout(async()=>{
+      await supabase.from("project_cabinet_preset").update({...updates,updated_at:new Date().toISOString()}).eq("project_id",proj.id);
+      setSaving(false);
+    },700);
   }
 
-  // slot_map stored on the preset row (jsonb) lets a slot point at a section by id.
-  const slotMap=preset?.slot_map||{};
-  async function setSlotSection(slotKey,sectionId){
-    const next={...slotMap,[slotKey]:sectionId||undefined};
-    setPreset(p=>({...p,slot_map:next}));
-    await supabase.from("project_cabinet_preset").update({slot_map:next}).eq("project_id",proj.id);
+  function coRate(catF,formulaF){
+    if(catF&&preset?.[catF]){
+      const item=catItems.find(x=>x.id===preset[catF]);
+      if(item&&item.rate!=null)return +item.rate;
+    }
+    if(formulaF&&rules?.[formulaF]!=null)return +rules[formulaF];
+    return null;
   }
 
-  // Resolve which section a slot should filter on: explicit slot_map → else
-  // match a section whose name contains the slot's defaultSection word.
-  function sectionForSlot(slot){
-    if(slotMap[slot.key]) return slotMap[slot.key];
-    const want=slot.defaultSection.toLowerCase();
-    const hit=sections.find(s=>s.parent_id&&s.name.toLowerCase().includes(want))
-            ||sections.find(s=>s.name.toLowerCase().includes(want));
-    return hit?.id||null;
+  const roomOverrides=preset?.room_overrides||{};
+  function patchRoomField(room,field,val){
+    const cur=roomOverrides[room]||{};
+    let roomData;
+    if(val===null||val===undefined||val===""){roomData={...cur};delete roomData[field];}
+    else{roomData={...cur,[field]:val};}
+    const next=Object.keys(roomData).length===0
+      ?(()=>{const n={...roomOverrides};delete n[room];return n;})()
+      :{...roomOverrides,[room]:roomData};
+    patch({room_overrides:next});
   }
-  function itemsForSlot(slot){
-    const secId=sectionForSlot(slot);
-    const list = secId ? items.filter(it=>it.section_id===secId) : items;
-    return [{value:"",label:"— not set —"},
-      ...list.map(it=>({value:it.id,label:`${it.name} ($${(+it.rate).toFixed(2)}${it.unit?"/"+it.unit:""})`}))];
+  function addRoom(){
+    const name=newRoom.trim();if(!name)return;
+    patch({room_overrides:{...roomOverrides,[name]:roomOverrides[name]||{}}});
+    setOpenRooms(s=>new Set([...s,name]));
+    setNewRoom("");setAddingRoom(false);
   }
-
-  async function applyTemplate(t){
-    const patch={
-      carcass_item_id:t.carcass_item_id, front_item_id:t.front_item_id,
-      hinge_item_id:t.hinge_item_id, handle_item_id:t.handle_item_id,
-      foot_item_id:t.foot_item_id, slot_map:t.slot_map||{},
-    };
-    setPreset(p=>({...p,...patch}));
-    await supabase.from("project_cabinet_preset").update(patch).eq("project_id",proj.id);
-    setModal(null); pop(`Applied template "${t.name}".`);
-  }
-  async function saveTemplate(name){
-    setModal(null); if(!name) return;
-    const row={company_id:companyId,name,trade:"cabinetry",
-      carcass_item_id:preset?.carcass_item_id||null, front_item_id:preset?.front_item_id||null,
-      hinge_item_id:preset?.hinge_item_id||null, handle_item_id:preset?.handle_item_id||null,
-      foot_item_id:preset?.foot_item_id||null, slot_map:slotMap};
-    const { data,error }=await supabase.from("preset_templates").insert(row).select().single();
-    if(error) return pop(error.message,"error");
-    setTemplates(t=>[...t,data]); pop(`Saved template "${name}" — reuse it on any project.`);
-  }
-  async function delTemplate(id){
-    await supabase.from("preset_templates").delete().eq("id",id);
-    setTemplates(t=>t.filter(x=>x.id!==id)); pop("Template deleted.");
+  function removeRoom(room){
+    const next={...roomOverrides};delete next[room];
+    patch({room_overrides:next});
+    setOpenRooms(s=>{const n=new Set(s);n.delete(room);return n;});
   }
 
-  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading preset…</div></Card>;
-  if(err) return <Card><div style={{color:T.red,fontSize:13}}>Couldn't load: {err}</div>
-    <div style={{color:T.faint,fontSize:12,marginTop:6}}>If this mentions a missing table, run the Layer 3 & 4 SQL in Supabase.</div></Card>;
+  const unitOverrides=preset?.unit_type_overrides||{};
+  function patchUnitField(unit,field,val){
+    const cur=unitOverrides[unit]||{};
+    let unitData;
+    if(val===null||val===undefined||val===""){unitData={...cur};delete unitData[field];}
+    else{unitData={...cur,[field]:val};}
+    const next=Object.keys(unitData).length===0
+      ?(()=>{const n={...unitOverrides};delete n[unit];return n;})()
+      :{...unitOverrides,[unit]:unitData};
+    patch({unit_type_overrides:next});
+  }
+  function addUnit(){
+    const name=newUnit.trim();if(!name)return;
+    patch({unit_type_overrides:{...unitOverrides,[name]:unitOverrides[name]||{}}});
+    setOpenUnits(s=>new Set([...s,name]));
+    setNewUnit("");setAddingUnit(false);
+  }
+  function removeUnit(unit){
+    const next={...unitOverrides};delete next[unit];
+    patch({unit_type_overrides:next});
+    setOpenUnits(s=>{const n=new Set(s);n.delete(unit);return n;});
+  }
 
-  const noItems=items.length===0;
-  const subSections=sections.filter(s=>s.parent_id);
-  const rateOf=id=>{ const it=items.find(x=>x.id===id); return it?+it.rate:0; };
-  const sampleRates={
-    carcass:rateOf(preset?.carcass_item_id), front:rateOf(preset?.front_item_id),
-    hinge:rateOf(preset?.hinge_item_id), handle:rateOf(preset?.handle_item_id), foot:rateOf(preset?.foot_item_id),
-  };
-  const sample=rules?priceCabinet({type:"Base",width:1000,height:720,depth:560,doors:2,drawers:0},rules,sampleRates):null;
+  if(loading)return <Card><div style={{color:T.muted,fontSize:13}}>Loading project spec…</div></Card>;
+  if(err)return <Card>
+    <div style={{color:T.red,fontSize:13}}>Couldn't load: {err}</div>
+    <div style={{color:T.faint,fontSize:12,marginTop:6}}>If this mentions a missing column, run the Project Spec SQL migration in Supabase SQL Editor.</div>
+  </Card>;
 
-  return <div>
-    {modal?.type==="saveTpl"&&<PromptModal title="Save as preset template"
-      label="Template name" placeholder="e.g. Standard Kitchen, Budget Laundry"
-      confirmText="Save template" onConfirm={saveTemplate} onCancel={()=>setModal(null)}/>}
-    {modal?.type==="applyTpl"&&<Modal title="Apply a preset template" onClose={()=>setModal(null)}>
-      {templates.length===0
-        ? <div style={{color:T.faint,fontSize:13}}>No templates yet. Set up this project's preset, then “Save as template”.</div>
-        : templates.map(t=><div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${T.border}`}}>
-            <span style={{fontSize:13,color:T.text,fontWeight:600}}>{t.name}</span>
-            <Row gap={6}>
-              <Btn sm v="grn" onClick={()=>applyTemplate(t)}>Apply</Btn>
-              <Btn sm v="red" onClick={()=>delTemplate(t.id)}>✕</Btn>
-            </Row>
-          </div>)}
-    </Modal>}
+  const hdr={display:"grid",gridTemplateColumns:"140px 1fr 105px 125px 95px",gap:10,marginBottom:6,paddingBottom:6,borderBottom:`2px solid ${T.border}`};
+  const hc={fontSize:10,color:T.faint,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"};
+  const sh={fontWeight:700,fontSize:11,color:T.accent,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:10};
+  const inputS={background:T.bg,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:"5px 9px",fontSize:12,boxSizing:"border-box",outline:"none"};
 
-    <Card hi sx={{marginBottom:14}}>
-      <Row gap={8} sx={{flexWrap:"wrap",alignItems:"center"}}>
-        <div>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>Cabinet pricing for this project</div>
-          <div style={{color:T.faint,fontSize:12,lineHeight:1.6,maxWidth:560}}>
-            Pick the materials and hardware for this job — each dropdown shows only items from the matching catalogue section. Change them and every cabinet re-prices. Save a setup as a template to reuse across projects.
+  const MAT=[
+    {label:"Carcass Board",  unit:"per m²",         nameF:"carcass_name",  rateF:"carcass_rate",        catF:"carcass_item_id", formulaF:null},
+    {label:"Door / Front",   unit:"per m²",          nameF:"front_name",    rateF:"front_rate",          catF:"front_item_id",  formulaF:null},
+    {label:"Benchtop",       unit:"per m²",          nameF:"benchtop_name", rateF:"benchtop_rate",       catF:null,             formulaF:null},
+  ];
+  const HW=[
+    {label:"Hinges",         unit:"per hinge",       nameF:"hinge_name",    rateF:"hinge_rate",          catF:"hinge_item_id",  formulaF:null},
+    {label:"Handles",        unit:"per door/drawer", nameF:"handle_name",   rateF:"handle_rate",         catF:"handle_item_id", formulaF:null},
+    {label:"Drawer Runners", unit:"per drawer",      nameF:"runner_name",   rateF:"drawer_hardware_rate",catF:null,             formulaF:"drawer_hardware_cost"},
+    {label:"Feet / Legs",    unit:"per cabinet",     nameF:"foot_name",     rateF:"foot_rate",           catF:"foot_item_id",   formulaF:null},
+    {label:"Door Hardware",  unit:"per door",        nameF:null,            rateF:"door_hardware_rate",  catF:null,             formulaF:"door_hardware_cost"},
+  ];
+  const LABOUR=[
+    {label:"Drafting / Design",   unit:"$/hr", rateF:"rate_drafting",  formulaF:"rate_drafting"},
+    {label:"Cutting / Machining", unit:"$/hr", rateF:"rate_cutting",   formulaF:"rate_cutting"},
+    {label:"Edging",              unit:"$/hr", rateF:"rate_edging",    formulaF:"rate_edging"},
+    {label:"Assembly",            unit:"$/hr", rateF:"rate_assembly",  formulaF:"rate_assembly"},
+    {label:"Packing",             unit:"$/hr", rateF:"rate_packing",   formulaF:"rate_packing"},
+  ];
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+
+      {/* Header */}
+      <Card hi>
+        <Row gap={8} sx={{alignItems:"flex-start"}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>Project Spec — Materials, Hardware & Rates</div>
+            <div style={{color:T.faint,fontSize:12,lineHeight:1.6,maxWidth:640}}>
+              Set project-wide rates here. The Estimate, Takeoff, and Order List all read from this page in real time.
+              Enter a <span style={{color:T.accent,fontWeight:600}}>Project Override</span> to lock in a project price; leave it blank to use the company default.
+              Add room or unit type overrides below for areas with different materials.
+            </div>
           </div>
-        </div>
-        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
-          <Btn sm v="gho" onClick={()=>setModal({type:"applyTpl"})}>📋 Apply template</Btn>
-          <Btn sm v="pri" onClick={()=>setModal({type:"saveTpl"})}>💾 Save as template</Btn>
-        </div>
-      </Row>
-    </Card>
+          {saving&&<div style={{marginLeft:"auto",color:T.faint,fontSize:11,whiteSpace:"nowrap",paddingTop:2}}>Saving…</div>}
+        </Row>
+      </Card>
 
-    {noItems
-      ? <Card><div style={{color:T.muted,fontSize:13}}>Your catalogue is empty. Add board and hardware items in <b>Rate Library → Catalogue</b> first, then choose them here.</div></Card>
-      : <div style={{display:"grid",gridTemplateColumns:mobile?"1fr":"1fr 1fr",gap:14}}>
-        <Card>
-          <div style={{fontWeight:700,fontSize:12,color:T.accent,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.05em"}}>Materials & hardware for this project</div>
-          {SLOTS.map(slot=>{
-            const secId=sectionForSlot(slot);
-            const secName=sections.find(s=>s.id===secId)?.name;
-            return <div key={slot.key} style={{marginBottom:12}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:2}}>
-                <span style={{fontSize:13,color:T.muted}}>{slot.label} <span style={{color:T.faint,fontSize:11}}>({slot.rate})</span></span>
-                <select value={secId||""} onChange={e=>setSlotSection(slot.key,e.target.value)}
-                  title="Which catalogue section this dropdown pulls from"
-                  style={{background:"transparent",border:"none",color:T.faint,fontSize:11,cursor:"pointer",textAlign:"right"}}>
-                  <option value="">auto: {slot.defaultSection}</option>
-                  {subSections.map(s=><option key={s.id} value={s.id}>from: {s.name}</option>)}
-                </select>
-              </div>
-              <Sel value={preset?.[slot.key]||""} onChange={v=>setField(slot.key,v)} options={itemsForSlot(slot)}/>
-              {secId&&itemsForSlot(slot).length<=1&&<div style={{color:T.yellow,fontSize:10,marginTop:2}}>
-                No items in “{secName}”. Add some in the catalogue, or repoint the section above.
-              </div>}
-            </div>;
-          })}
-          <div style={{color:T.faint,fontSize:11,marginTop:2}}>
-            Each dropdown is filtered to one catalogue section so the list stays short. Use the small “from:” selector on the right to repoint a slot to a different section.
+      {/* Materials */}
+      <Card>
+        <div style={sh}>Materials</div>
+        <div style={hdr}>
+          <div style={hc}>Material</div><div style={hc}>Brand / Description</div>
+          <div style={{...hc,textAlign:"right"}}>Co. Default</div>
+          <div style={{...hc,textAlign:"center"}}>Project Override</div>
+          <div style={{...hc,textAlign:"right"}}>Applied</div>
+        </div>
+        {MAT.map(f=>(
+          <SpecRow key={f.rateF}
+            label={f.label} unit={f.unit}
+            nameVal={preset?.[f.nameF]} namePh="search catalogue..."
+            onName={v=>patch({[f.nameF]:v})}
+            coVal={coRate(f.catF,f.formulaF)}
+            projVal={preset?.[f.rateF]??""}
+            onProj={v=>patch({[f.rateF]:v})}
+            catItems={catItems}
+            onCatPick={it=>patch({[f.nameF]:it.name,[f.rateF]:+it.rate})}
+          />
+        ))}
+      </Card>
+
+      {/* Hardware */}
+      <Card>
+        <div style={sh}>Hardware</div>
+        <div style={hdr}>
+          <div style={hc}>Hardware</div><div style={hc}>Brand / Description</div>
+          <div style={{...hc,textAlign:"right"}}>Co. Default</div>
+          <div style={{...hc,textAlign:"center"}}>Project Override</div>
+          <div style={{...hc,textAlign:"right"}}>Applied</div>
+        </div>
+        {HW.map(f=>(
+          <SpecRow key={f.rateF}
+            label={f.label} unit={f.unit}
+            nameVal={f.nameF?preset?.[f.nameF]:null} namePh="search catalogue..."
+            onName={f.nameF?v=>patch({[f.nameF]:v}):null}
+            coVal={coRate(f.catF,f.formulaF)}
+            projVal={preset?.[f.rateF]??""}
+            onProj={v=>patch({[f.rateF]:v})}
+            catItems={f.nameF?catItems:null}
+            onCatPick={f.nameF?it=>patch({[f.nameF]:it.name,[f.rateF]:+it.rate}):null}
+          />
+        ))}
+      </Card>
+
+      {/* Labour Rates */}
+      <Card>
+        <div style={sh}>Labour Rates</div>
+        <div style={{color:T.faint,fontSize:11,marginBottom:10}}>Co. Default pulls from the company formula. Leave Project Override blank to use the company rate.</div>
+        <div style={hdr}>
+          <div style={hc}>Rate</div><div/>
+          <div style={{...hc,textAlign:"right"}}>Co. Default</div>
+          <div style={{...hc,textAlign:"center"}}>Project Override</div>
+          <div style={{...hc,textAlign:"right"}}>Applied</div>
+        </div>
+        {LABOUR.map(f=>(
+          <SpecRow key={f.rateF}
+            label={f.label} unit={f.unit}
+            nameVal={null} onName={null}
+            coVal={rules?.[f.formulaF]??null}
+            projVal={preset?.[f.rateF]??""}
+            onProj={v=>patch({[f.rateF]:v})}
+          />
+        ))}
+      </Card>
+
+      {/* Room Overrides */}
+      <Card>
+        <Row gap={8} sx={{alignItems:"center",marginBottom:8}}>
+          <div style={sh}>Room Overrides</div>
+          <div style={{marginLeft:"auto"}}>
+            {addingRoom
+              ?<Row gap={6}>
+                <input autoFocus style={{...inputS,width:160}} placeholder="Room name…" value={newRoom}
+                  onChange={e=>setNewRoom(e.target.value)}
+                  onKeyDown={e=>{if(e.key==="Enter")addRoom();if(e.key==="Escape"){setAddingRoom(false);setNewRoom("");}}}/>
+                <Btn sm v="grn" onClick={addRoom}>Add</Btn>
+                <Btn sm v="gho" onClick={()=>{setAddingRoom(false);setNewRoom("");}}>Cancel</Btn>
+              </Row>
+              :<Btn sm v="pri" onClick={()=>setAddingRoom(true)}>+ Add Room</Btn>}
           </div>
-        </Card>
+        </Row>
+        <div style={{color:T.faint,fontSize:11,marginBottom:8}}>Override rates for specific rooms — only set values that differ from the project defaults above.</div>
+        <AccordionSection
+          overridesMap={roomOverrides} patchField={patchRoomField} removeEntry={removeRoom}
+          openSet={openRooms} setOpen={setOpenRooms} namePh="room-specific brand" preset={preset} catItems={catItems}/>
+      </Card>
 
-        <Card hi>
-          <div style={{fontWeight:700,fontSize:12,color:T.muted,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.05em"}}>Sample: 2-Door 1000mm Base</div>
-          {!rules
-            ? <div style={{color:T.faint,fontSize:12}}>Set up the company formula in Rate Library → Cabinet Formula first.</div>
-            : sample&&<div style={{background:T.bg,borderRadius:8,padding:14,border:`1px solid ${T.border}`}}>
-              {[
-                ["Carcass",`${sample.carcassM2} m²`,sample.carcassCost],
-                ["Fronts",`${sample.frontM2} m²`,sample.frontCost],
-                ["Hinges",`${sample.hinges}`,sample.hingeCost],
-                ["Handles",`${sample.handles}`,sample.handleCost],
-                ["Feet",`${sample.feet}`,sample.footCost],
-                ["Assembly","",sample.assembly],
-              ].map(([l,d,v])=>(v>0||l==="Assembly")&&<div key={l} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:5}}>
-                <span style={{color:T.text}}>{l} <span style={{color:T.faint,fontSize:11,fontFamily:T.mono}}>{d}</span></span>
-                <span style={{fontFamily:T.mono,color:T.muted}}>{$$(v)}</span>
-              </div>)}
-              <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${T.border}`,paddingTop:8,marginTop:4}}>
-                <span style={{fontWeight:800,fontSize:13}}>Per cabinet</span>
-                <span style={{fontFamily:T.mono,fontWeight:800,fontSize:15,color:T.accent}}>{$$(sample.total)}</span>
-              </div>
-            </div>}
-          {(!preset?.carcass_item_id||!preset?.front_item_id)&&<div style={{color:T.yellow,fontSize:11,marginTop:10}}>
-            ⚠ Choose at least a carcass and front board for cabinets to price on this project.
-          </div>}
-        </Card>
-      </div>}
-  </div>;
+      {/* Unit Type Overrides */}
+      <Card>
+        <Row gap={8} sx={{alignItems:"center",marginBottom:8}}>
+          <div style={sh}>Unit Type Overrides</div>
+          <div style={{marginLeft:"auto"}}>
+            {addingUnit
+              ?<Row gap={6}>
+                <input autoFocus style={{...inputS,width:190}} placeholder="Unit type e.g. Vanity…" value={newUnit}
+                  onChange={e=>setNewUnit(e.target.value)}
+                  onKeyDown={e=>{if(e.key==="Enter")addUnit();if(e.key==="Escape"){setAddingUnit(false);setNewUnit("");}}}/>
+                <Btn sm v="grn" onClick={addUnit}>Add</Btn>
+                <Btn sm v="gho" onClick={()=>{setAddingUnit(false);setNewUnit("");}}>Cancel</Btn>
+              </Row>
+              :<Btn sm v="pri" onClick={()=>setAddingUnit(true)}>+ Add Unit Type</Btn>}
+          </div>
+        </Row>
+        <div style={{color:T.faint,fontSize:11,marginBottom:8}}>Override rates for a specific unit type (e.g. "Pantry", "Vanity"). Applies across all rooms for cabinets of that type.</div>
+        <AccordionSection
+          overridesMap={unitOverrides} patchField={patchUnitField} removeEntry={removeUnit}
+          openSet={openUnits} setOpen={setOpenUnits} namePh="unit-specific brand" preset={preset} catItems={catItems}/>
+      </Card>
+
+    </div>
+  );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -4571,7 +4781,7 @@ ${EXTRACT_SCHEMA}`;
       if(ti.cab && pricing?.ready && pricing.rules &&
          ti.cab.type!=="Benchtop" && ti.cab.type!=="Splashback"){
         const {doors,drawers}=parseCabConfig(ti.cab.config);
-        const roomRates=ratesFor(ti.cab.room, pricing);
+        const roomRates=ratesFor(ti.cab.room, pricing, ti.cab.unit_type||ti.cab.unitType);
         const pr=priceCabinet({type:ti.cab.type,config:ti.cab.config,width:ti.cab.width,doors,drawers}, pricing.rules, roomRates);
         rate=pr.reviewRequired?0:pr.total;
       }
@@ -5109,7 +5319,7 @@ ${EXTRACT_SCHEMA}`;
               ? <div style={{color:T.muted,fontSize:13}}>Loading your library…</div>
               : <>
                 <div style={{color:T.faint,fontSize:11,marginBottom:10}}>
-                  Every item comes from your library — this keeps quotes to company standard. Type any words in any order (e.g. “base 900”, “3 drawer”). Can't find it? Add it to your library first.
+                  Every item comes from your library — this keeps quotes to company standard. Type any words in any order (e.g. "base 900", "3 drawer"). Can't find it? Add it to your library first.
                 </div>
                 <Row gap={8} sx={{marginBottom:10,flexWrap:"wrap",alignItems:"flex-end"}}>
                   <div style={{marginBottom:0}}>
@@ -5140,7 +5350,7 @@ ${EXTRACT_SCHEMA}`;
                 {/* contained, scrollable results list (NOT full screen) */}
                 <div style={{maxHeight:280,overflowY:"auto",border:`1px solid ${T.border}`,borderRadius:7,background:T.bg}}>
                   {(()=>{ const m=pickMatches(); if(cabinetLibrary.length===0) return <div style={{padding:14,color:T.faint,fontSize:12}}>No cabinet library found. Set up your Cabinet Formula in Rate Library.</div>;
-                    if(m.length===0) return <div style={{padding:14,color:T.faint,fontSize:12}}>No matches for “{pickSearch}”.</div>;
+                    if(m.length===0) return <div style={{padding:14,color:T.faint,fontSize:12}}>No matches for "{pickSearch}".</div>;
                     return m.slice(0,400).map(c=>(
                       <div key={c.key} onClick={()=>pickCabinet(c)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
                         padding:"8px 12px",borderBottom:`1px solid ${T.border}`,cursor:"pointer"}}
@@ -5949,7 +6159,7 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
       if(isStdCab){
         const {doors,drawers}=parseCabConfig(li.cab.config||"");
         const pr=priceCabinet({...li.cab,doors,drawers},cabPricing.rules,
-          ratesFor(li.cab.room,cabPricing));
+          ratesFor(li.cab.room,cabPricing,li.cab.unit_type||li.cab.unitType));
         if(pr.reviewRequired) needsReview.push({id:li.id,missingRates:pr.missingRates});
         else updates.set(li.id,parseFloat(pr.total.toFixed(2)));
       } else {
@@ -6055,7 +6265,7 @@ function EstimateModule({proj, rates, cabLib, onMutate, c, pop}) {
             if(isStdCab && cabPricing?.ready){
               const {doors,drawers}=parseCabConfig(ti.cab.config||"");
               const pr=priceCabinet({...ti.cab,doors,drawers},cabPricing.rules,
-                ratesFor(ti.cab.room,cabPricing));
+                ratesFor(ti.cab.room,cabPricing,ti.cab.unit_type||ti.cab.unitType));
               if(pr.reviewRequired){ reviewCount++; description=`⚠ REVIEW REQUIRED — ${ti.label}`; }
               else { rate=parseFloat(pr.total.toFixed(2)); }
             } else {
@@ -10189,11 +10399,13 @@ function RateLibrary({rates, setRates, cabLib, setCabLib, companyId, pop}) {
   return <div>
     <Hdr sub="Build your cost catalogue, set how cabinets are priced, and manage your trade rates.">Rate Library</Hdr>
     <Tabs tabs={[
-      {id:"catalogue",label:"📚 Catalogue"},
+      {id:"supplier",label:"🏭 Supplier Catalogue"},
+      {id:"catalogue",label:"📚 Active Library"},
       {id:"formula",label:"🧮 Cabinet Formula"},
       {id:"library",label:"🗄️ Cabinet Library"},
       {id:"traderates",label:"⚡ Trade Rates"},
     ]} active={tab} onChange={setTab}/>
+    {tab==="supplier"   && <SupplierCatalogue pop={pop}/>}
     {tab==="catalogue"  && <CatalogueLibrary pop={pop}/>}
     {tab==="formula"    && <CabinetFormula pop={pop}/>}
     {tab==="library"    && <CabinetLibraryTab pop={pop}/>}
@@ -10522,60 +10734,674 @@ async function loadCabinetPricing(companyId, projectId){
     // Store exact numeric rate; undefined if item not found (treated as null sentinel by slotRate)
     (items||[]).forEach(it=>{ rateMap[it.id]=+it.rate; });
   }
-  // null = slot not configured or item missing; explicit $0 remains $0
-  const slotRate=id=>id!=null?(rateMap[id]??null):null;
-  const rates={
-    carcass: slotRate(preset.carcass_item_id),
-    front:   slotRate(preset.front_item_id),
-    hinge:   slotRate(preset.hinge_item_id),
-    handle:  slotRate(preset.handle_item_id),
-    foot:    slotRate(preset.foot_item_id),
-    // Snapshotted hardware rates (project_cabinet_preset columns)
-    door_hardware_rate:   preset.door_hardware_rate  ??null,
-    drawer_hardware_rate: preset.drawer_hardware_rate??null,
-    // Snapshotted operational rates
-    rate_drafting:  preset.rate_drafting ??null,
-    rate_cutting:   preset.rate_cutting  ??null,
-    rate_edging:    preset.rate_edging   ??null,
-    rate_assembly:  preset.rate_assembly ??null,
-    rate_packing:   preset.rate_packing  ??null,
+  // Direct project rate wins over catalogue item rate; catalogue wins over null.
+  const slotRate=(directRate,itemId)=>{
+    if(directRate!==null&&directRate!==undefined)return +directRate;
+    return itemId!=null?(rateMap[itemId]??null):null;
   };
-  const ready = !!(preset.carcass_item_id||preset.front_item_id);
+  const rates={
+    carcass: slotRate(preset.carcass_rate, preset.carcass_item_id),
+    front:   slotRate(preset.front_rate,   preset.front_item_id),
+    hinge:   slotRate(preset.hinge_rate,   preset.hinge_item_id),
+    handle:  slotRate(preset.handle_rate,  preset.handle_item_id),
+    foot:    slotRate(preset.foot_rate,    preset.foot_item_id),
+    door_hardware_rate:   preset.door_hardware_rate  ??rules?.door_hardware_cost  ??null,
+    drawer_hardware_rate: preset.drawer_hardware_rate??rules?.drawer_hardware_cost??null,
+    // Labour: project override → company formula default → null
+    rate_drafting:  preset.rate_drafting ??rules?.rate_drafting ??null,
+    rate_cutting:   preset.rate_cutting  ??rules?.rate_cutting  ??null,
+    rate_edging:    preset.rate_edging   ??rules?.rate_edging   ??null,
+    rate_assembly:  preset.rate_assembly ??rules?.rate_assembly ??null,
+    rate_packing:   preset.rate_packing  ??rules?.rate_packing  ??null,
+  };
+  const ready=!!(rates.carcass!==null||rates.front!==null);
   return {rules,preset,rates,roomPresets,rateMap,ready};
 }
 
-// Resolve the correct rates object for a given room name.
-// Falls back to the project-level rates if no matching room override exists.
-// Unset slots in a room row inherit from the project-level rate (partial overrides are fine).
-function ratesFor(room, pricing){
+// Resolve the correct rates object for a given room name and optional unit type.
+// Priority: JSON room_overrides → JSON unit_type_overrides → project-level rates.
+// Legacy project_room_preset table rows still apply for backward compatibility.
+function ratesFor(room, pricing, unitType){
+  const base=pricing.rates;
+  if(!base) return base;
+
+  // Start from project base, then layer unit-type overrides, then room overrides.
+  const unitOvs=(pricing.preset?.unit_type_overrides||{})[unitType]||{};
+  const roomOvs=(pricing.preset?.room_overrides||{})[room]||{};
+
+  // Also check legacy project_room_preset table rows
   const roomPresets=pricing.roomPresets||[];
-  if(!room||!roomPresets.length) return pricing.rates;
   const name=(room||"").toLowerCase();
   const rp=roomPresets.find(r=>(r.room_name||r.room||"").toLowerCase()===name);
-  if(!rp) return pricing.rates;
   const m=pricing.rateMap||{};
-  const slotRate=id=>id!=null?(m[id]??null):null;
-  return {
-    // Room-overrideable catalogue slots
-    carcass: rp.carcass_item_id!=null ? slotRate(rp.carcass_item_id) : pricing.rates.carcass,
-    front:   rp.front_item_id  !=null ? slotRate(rp.front_item_id)   : pricing.rates.front,
-    hinge:   rp.hinge_item_id  !=null ? slotRate(rp.hinge_item_id)   : pricing.rates.hinge,
-    handle:  rp.handle_item_id !=null ? slotRate(rp.handle_item_id)  : pricing.rates.handle,
-    foot:    rp.foot_item_id   !=null ? slotRate(rp.foot_item_id)    : pricing.rates.foot,
-    // Not room-overrideable — always from project-level snapshot
-    door_hardware_rate:   pricing.rates.door_hardware_rate,
-    drawer_hardware_rate: pricing.rates.drawer_hardware_rate,
-    rate_drafting:  pricing.rates.rate_drafting,
-    rate_cutting:   pricing.rates.rate_cutting,
-    rate_edging:    pricing.rates.rate_edging,
-    rate_assembly:  pricing.rates.rate_assembly,
-    rate_packing:   pricing.rates.rate_packing,
+  const tableSlot=(id,fallback)=>id!=null?(m[id]??null)??fallback:fallback;
+
+  const merged={
+    carcass:         roomOvs.carcass_rate ??unitOvs.carcass_rate ??(rp?.carcass_item_id!=null?tableSlot(rp.carcass_item_id,base.carcass):base.carcass),
+    front:           roomOvs.front_rate   ??unitOvs.front_rate   ??(rp?.front_item_id  !=null?tableSlot(rp.front_item_id,  base.front)  :base.front),
+    hinge:           roomOvs.hinge_rate   ??unitOvs.hinge_rate   ??(rp?.hinge_item_id  !=null?tableSlot(rp.hinge_item_id,  base.hinge)  :base.hinge),
+    handle:          roomOvs.handle_rate  ??unitOvs.handle_rate  ??(rp?.handle_item_id !=null?tableSlot(rp.handle_item_id, base.handle) :base.handle),
+    foot:            roomOvs.foot_rate    ??unitOvs.foot_rate    ??(rp?.foot_item_id   !=null?tableSlot(rp.foot_item_id,   base.foot)   :base.foot),
+    drawer_hardware_rate: roomOvs.drawer_hardware_rate??unitOvs.drawer_hardware_rate??base.drawer_hardware_rate,
+    door_hardware_rate:   base.door_hardware_rate,
+    rate_drafting:   base.rate_drafting,
+    rate_cutting:    base.rate_cutting,
+    rate_edging:     base.rate_edging,
+    rate_assembly:   base.rate_assembly,
+    rate_packing:    base.rate_packing,
   };
+  return merged;
 }
 
 
 
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPLIER CATALOGUE + ACTIVE LIBRARY COMPONENTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseSupplierCSV(text) {
+  const lines=text.replace(/^﻿/,"").split(/\r?\n/).filter(l=>l.trim());
+  if(lines.length<2) return {headers:[],rows:[]};
+  function parseLine(line){
+    const res=[]; let inQ=false,cur="";
+    for(let i=0;i<line.length;i++){
+      const ch=line[i];
+      if(ch==='"'){inQ=!inQ;}
+      else if(ch===","&&!inQ){res.push(cur.trim());cur="";}
+      else{cur+=ch;}
+    }
+    res.push(cur.trim()); return res;
+  }
+  const hdrs=parseLine(lines[0]);
+  const rs=lines.slice(1).map(l=>parseLine(l)).filter(r=>r.some(c=>c.trim()));
+  return {headers:hdrs,rows:rs};
+}
+
+const SP_COL_FIELDS=[
+  {field:"product_name",label:"Product Name",required:true},
+  {field:"pack_price",label:"Pack / Unit Price",required:true},
+  {field:"purchase_unit",label:"Purchase Unit",required:false},
+  {field:"sku",label:"SKU / Code",required:false},
+  {field:"category",label:"Category",required:false},
+  {field:"brand",label:"Brand",required:false},
+  {field:"pack_quantity",label:"Pack Quantity",required:false},
+  {field:"sheet_length_mm",label:"Sheet Length (mm)",required:false},
+  {field:"sheet_width_mm",label:"Sheet Width (mm)",required:false},
+  {field:"thickness_mm",label:"Thickness (mm)",required:false},
+  {field:"colour",label:"Colour",required:false},
+  {field:"finish",label:"Finish",required:false},
+  {field:"range",label:"Range",required:false},
+  {field:"material_type",label:"Material Type",required:false},
+  {field:"supplier_price_date",label:"Price Date (YYYY-MM-DD)",required:false},
+  {field:"subcategory",label:"Subcategory",required:false},
+  {field:"description",label:"Description",required:false},
+  {field:"notes",label:"Notes",required:false},
+  {field:"active",label:"Active (true/false)",required:false},
+];
+
+function autoDetectColMap(headers){
+  const lh=headers.map(h=>h.toLowerCase().trim());
+  const pick=re=>headers[lh.findIndex(h=>re.test(h))]||"";
+  return {
+    product_name: pick(/name|product|item|desc|material/),
+    pack_price:   pick(/price|cost|rate|amount|each|ea|pack.?price|unit.?price/),
+    purchase_unit:pick(/unit|uom|measure/),
+    sku:          pick(/sku|code|ref|part/),
+    category:     pick(/^cat/),
+    brand:        pick(/brand/),
+    pack_quantity:pick(/qty|quantity|pack.?qty|pack.?q/),
+    sheet_length_mm:pick(/length|len/),
+    sheet_width_mm: pick(/width|wid/),
+    thickness_mm:   pick(/thick/),
+    colour:         pick(/colou?r/),
+    finish:         pick(/finish/),
+    range:          pick(/range/),
+    material_type:  pick(/material.?type|mat.?type/),
+    supplier_price_date: pick(/date/),
+    subcategory:    pick(/sub.?cat/),
+    description:    pick(/desc/),
+    notes:          pick(/note|comment|remark/),
+    active:         pick(/active|enabled/),
+  };
+}
+
+function ActivateModal({product,onClose,onActivated,pop}){
+  const [sections,setSections]=useState([]);
+  const [sectionId,setSectionId]=useState("");
+  const [wasteFactor,setWasteFactor]=useState("1.0");
+  const [priceSource,setPriceSource]=useState("supplier");
+  const [accountPrice,setAccountPrice]=useState("");
+  const [busy,setBusy]=useState(false);
+
+  const unitPrice=product.unit_price||0;
+  const wf=parseFloat(wasteFactor)||1.0;
+  const bp=priceSource==="account"?(parseFloat(accountPrice)||0):unitPrice;
+  const effectiveRate=computeEffectiveRate(
+    product.purchase_unit,bp,wf,product.sheet_length_mm,product.sheet_width_mm
+  );
+  const rateLabel=product.purchase_unit==="sheet"?"$/m2":"$/"+product.purchase_unit;
+
+  useEffect(()=>{
+    supabase.from("catalogue_sections").select("id,name,parent_id").order("name")
+      .then(({data})=>setSections(data||[]));
+  },[]);
+
+  const childSections=sections.filter(s=>s.parent_id);
+
+  async function doActivate(){
+    if(!sectionId) return pop("Select a library section first.","error");
+    setBusy(true);
+    const opts={sectionId,wasteFactor:wf,priceSource};
+    if(priceSource==="account") opts.buyPrice=parseFloat(accountPrice)||0;
+    const {data,error}=await activateToLibrary(product.id,opts);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    if(data.alreadyActive){
+      pop("Already in your Active Library.","error");
+    } else {
+      pop("Added to Active Library.");
+      onActivated&&onActivated();
+      onClose();
+    }
+  }
+
+  return <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:24,width:"100%",maxWidth:520,boxShadow:"0 24px 72px rgba(0,0,0,0.7)"}}>
+      <div style={{fontWeight:800,fontSize:15,marginBottom:4,color:T.text}}>Add to Active Library</div>
+      <div style={{fontSize:12,color:T.muted,marginBottom:16}}>{product.product_name} — {product.supplier_name}</div>
+
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:11,color:T.faint,fontWeight:600,textTransform:"uppercase",marginBottom:4}}>Library section</div>
+        <select value={sectionId} onChange={e=>setSectionId(e.target.value)}
+          style={{background:T.card2,color:T.text,border:`1px solid ${!sectionId?T.red:T.border}`,borderRadius:7,padding:"8px 12px",width:"100%",fontSize:13}}>
+          <option value="">-- select section --</option>
+          {childSections.map(s=>{
+            const trade=sections.find(t=>t.id===s.parent_id);
+            return <option key={s.id} value={s.id}>{trade?`${trade.name} / `:""}{s.name}</option>;
+          })}
+        </select>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+        <div>
+          <div style={{fontSize:11,color:T.faint,fontWeight:600,textTransform:"uppercase",marginBottom:4}}>Price source</div>
+          <select value={priceSource} onChange={e=>setPriceSource(e.target.value)}
+            style={{background:T.card2,color:T.text,border:`1px solid ${T.border}`,borderRadius:7,padding:"8px 10px",width:"100%",fontSize:13}}>
+            <option value="supplier">Supplier list price</option>
+            <option value="account">Account / negotiated price</option>
+            <option value="manual">Manual rate</option>
+          </select>
+        </div>
+        <Inp label="Waste factor (1.0 = no waste)" value={wasteFactor} onChange={setWasteFactor} type="number" mono placeholder="1.0" sx={{marginBottom:0}}/>
+      </div>
+
+      {priceSource==="account"&&<Inp label="Account buy price (per unit)" value={accountPrice} onChange={setAccountPrice} type="number" mono placeholder="0.00" sx={{marginBottom:12}}/>}
+
+      <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:8,padding:"10px 14px",marginBottom:16}}>
+        <div style={{fontSize:11,color:T.faint,marginBottom:4}}>
+          {product.purchase_unit==="sheet"
+            ? `Supplier: $${(product.pack_price||0).toFixed(2)}/sheet — ${(product.sheet_length_mm||0).toLocaleString()}×${(product.sheet_width_mm||0).toLocaleString()} mm`
+            : `Supplier unit price: $${(unitPrice||0).toFixed(4)}`}
+        </div>
+        <div style={{display:"flex",alignItems:"baseline",gap:6}}>
+          <span style={{fontFamily:T.mono,fontSize:18,fontWeight:700,color:effectiveRate?T.accent:T.red}}>
+            {effectiveRate!=null?"$"+(effectiveRate).toFixed(4):"—"}
+          </span>
+          <span style={{fontSize:12,color:T.muted}}>{rateLabel} effective estimating rate</span>
+        </div>
+        {product.purchase_unit==="sheet"&&effectiveRate&&<div style={{fontSize:11,color:T.faint,marginTop:2}}>
+          (${(product.pack_price/((product.sheet_length_mm*product.sheet_width_mm)/1e6)).toFixed(4)}/m2 raw × {wf.toFixed(2)} waste)
+        </div>}
+      </div>
+
+      <Row gap={8} sx={{justifyContent:"flex-end"}}>
+        <Btn v="gho" onClick={onClose}>Cancel</Btn>
+        <Btn v="pri" onClick={doActivate} disabled={busy||!sectionId}>{busy?"Adding…":"Add to Library"}</Btn>
+      </Row>
+    </div>
+  </div>;
+}
+
+function StaleReviewModal({item,onClose,onReviewed,pop}){
+  const [action,setAction]=useState("keep_existing");
+  const [newBuyPrice,setNewBuyPrice]=useState(String(item.buy_price||""));
+  const [newWasteFactor,setNewWasteFactor]=useState(String(item.waste_factor||"1.0"));
+  const [newPriceSource,setNewPriceSource]=useState(item.price_source||"supplier");
+  const [busy,setBusy]=useState(false);
+
+  const wf=parseFloat(newWasteFactor)||1.0;
+  const bp=parseFloat(newBuyPrice)||null;
+  const preview=action!=="accept_supplier"&&bp
+    ? computeEffectiveRate(item.purchase_unit||"each",bp,wf,item.sheet_length_mm,item.sheet_width_mm)
+    : null;
+
+  async function doReview(){
+    setBusy(true);
+    const opts={};
+    if(action==="update_buy_price"){
+      opts.newBuyPrice=parseFloat(newBuyPrice)||undefined;
+      opts.newWasteFactor=wf;
+      opts.newPriceSource=newPriceSource;
+    }
+    const {data,error}=await reviewStaleItem(item.id,action,opts);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    pop("Price reviewed.");
+    onReviewed&&onReviewed(data);
+    onClose();
+  }
+
+  return <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:24,width:"100%",maxWidth:500,boxShadow:"0 24px 72px rgba(0,0,0,0.7)"}}>
+      <div style={{fontWeight:800,fontSize:15,marginBottom:4,color:T.text}}>Review Price Update</div>
+      <div style={{fontSize:12,color:T.muted,marginBottom:16}}>{item.name} — supplier updated their price</div>
+
+      <div style={{background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:8,padding:"10px 14px",marginBottom:14}}>
+        <div style={{fontSize:11,color:T.muted}}>Current estimating rate</div>
+        <div style={{fontFamily:T.mono,fontSize:16,color:T.accent,fontWeight:700}}>${(item.rate||0).toFixed(4)}/{item.unit||"unit"}</div>
+        <div style={{fontSize:11,color:T.faint,marginTop:2}}>Price source: {item.price_source||"manual"}</div>
+      </div>
+
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:11,color:T.faint,fontWeight:600,textTransform:"uppercase",marginBottom:8}}>Action</div>
+        {[
+          {val:"accept_supplier",label:"Accept supplier price",desc:"Recompute rate from latest supplier data"},
+          {val:"update_buy_price",label:"Enter new buy price",desc:"Set account or negotiated price"},
+          {val:"keep_existing",label:"Keep current rate",desc:"Dismiss alert — no rate change"},
+        ].map(opt=>(
+          <label key={opt.val} style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:8,cursor:"pointer"}}>
+            <input type="radio" name="stale_action" value={opt.val} checked={action===opt.val} onChange={()=>setAction(opt.val)} style={{marginTop:3}}/>
+            <div>
+              <div style={{fontSize:13,color:T.text,fontWeight:600}}>{opt.label}</div>
+              <div style={{fontSize:11,color:T.muted}}>{opt.desc}</div>
+            </div>
+          </label>
+        ))}
+      </div>
+
+      {action==="update_buy_price"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
+        <Inp label="Buy price (per unit)" value={newBuyPrice} onChange={setNewBuyPrice} type="number" mono sx={{marginBottom:0}}/>
+        <Inp label="Waste factor" value={newWasteFactor} onChange={setNewWasteFactor} type="number" mono sx={{marginBottom:0}}/>
+        <div>
+          <div style={{fontSize:11,color:T.faint,marginBottom:4}}>Price source</div>
+          <select value={newPriceSource} onChange={e=>setNewPriceSource(e.target.value)}
+            style={{background:T.card2,color:T.text,border:`1px solid ${T.border}`,borderRadius:6,padding:"7px 8px",width:"100%",fontSize:12}}>
+            <option value="account">Account</option>
+            <option value="supplier">Supplier</option>
+            <option value="manual">Manual</option>
+          </select>
+        </div>
+      </div>}
+
+      {preview!=null&&<div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:6,padding:"8px 12px",marginBottom:14}}>
+        <span style={{fontSize:11,color:T.faint}}>New rate: </span>
+        <span style={{fontFamily:T.mono,fontSize:14,color:T.accent,fontWeight:700}}>${preview.toFixed(4)}</span>
+      </div>}
+
+      <Row gap={8} sx={{justifyContent:"flex-end"}}>
+        <Btn v="gho" onClick={onClose}>Cancel</Btn>
+        <Btn v="pri" onClick={doReview} disabled={busy}>{busy?"Saving…":"Confirm"}</Btn>
+      </Row>
+    </div>
+  </div>;
+}
+
+function SupplierCsvImportModal({onClose,onImported,pop}){
+  const [step,setStep]=useState(1);
+  const [spSuppliers,setSpSuppliers]=useState([]);
+  const [file,setFile]=useState(null);
+  const [headers,setHeaders]=useState([]);
+  const [rawRows,setRawRows]=useState([]);
+  const [supplierId,setSupplierId]=useState("");
+  const [supplierPriceDate,setSupplierPriceDate]=useState("");
+  const [colMap,setColMap]=useState({});
+  const [preview,setPreview]=useState(null);
+  const [previewTab,setPreviewTab]=useState("new");
+  const [confirmed,setConfirmed]=useState(new Set());
+  const [busy,setBusy]=useState(false);
+
+  useEffect(()=>{
+    dbListSuppliers().then(({data})=>setSpSuppliers(data||[]));
+  },[]);
+
+  function handleFile(f){
+    setFile(f);
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const {headers:hdrs,rows:rs}=parseSupplierCSV(e.target.result);
+      setHeaders(hdrs); setRawRows(rs);
+      setColMap(autoDetectColMap(hdrs));
+    };
+    reader.readAsText(f);
+  }
+
+  function buildMappedRows(){
+    return rawRows.map(row=>{
+      const out={};
+      SP_COL_FIELDS.forEach(({field})=>{
+        const hdr=colMap[field];
+        const idx=hdr?headers.indexOf(hdr):-1;
+        if(idx>=0) out[field]=row[idx]||"";
+      });
+      return out;
+    });
+  }
+
+  async function doPreview(){
+    if(!supplierId) return pop("Select a supplier first.","error");
+    const sup=spSuppliers.find(s=>s.id===supplierId);
+    setBusy(true);
+    const mapped=buildMappedRows();
+    const {data,error}=await previewSupplierImport(
+      mapped,supplierId,sup?.name||"",supplierPriceDate||null,file?.name||null
+    );
+    setBusy(false);
+    if(error) return pop(error,"error");
+    setPreview(data);
+    setConfirmed(new Set(data.rows.filter(r=>r.classification==="new"||r.classification==="update").map(r=>r.rowIndex)));
+    setStep(3);
+  }
+
+  async function doConfirm(){
+    if(!preview) return;
+    setBusy(true);
+    const {data,error}=await confirmSupplierImport(preview,confirmed);
+    setBusy(false);
+    if(error) return pop(error,"error");
+    pop(`Import complete: ${data.created_count} new, ${data.updated_count} updated.`);
+    onImported&&onImported();
+    onClose();
+  }
+
+  function toggleRow(rowIndex){
+    setConfirmed(prev=>{
+      const next=new Set(prev);
+      if(next.has(rowIndex)) next.delete(rowIndex); else next.add(rowIndex);
+      return next;
+    });
+  }
+
+  const tabRows=preview?preview.rows.filter(r=>r.classification===previewTab):[];
+  const confirmable=preview?preview.rows.filter(r=>(r.classification==="new"||r.classification==="update")&&confirmed.has(r.rowIndex)).length:0;
+
+  const modalStyle={position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",padding:20};
+  const panelStyle={background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:24,width:"100%",maxWidth:820,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 24px 72px rgba(0,0,0,0.7)"};
+
+  return <div onClick={onClose} style={modalStyle}>
+    <div onClick={e=>e.stopPropagation()} style={panelStyle}>
+      <Row gap={0} sx={{marginBottom:20,alignItems:"center"}}>
+        <div style={{fontWeight:800,fontSize:15,color:T.text}}>Import Supplier Catalogue CSV</div>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          {[1,2,3].map(n=><div key={n} style={{width:24,height:24,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,background:step===n?T.accent:step>n?T.green:T.card2,color:step>=n?T.bg:T.faint}}>{n}</div>)}
+        </div>
+      </Row>
+
+      {step===1&&<>
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:12,fontWeight:600,color:T.muted,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Supplier</div>
+          <select value={supplierId} onChange={e=>setSupplierId(e.target.value)}
+            style={{background:T.card2,color:T.text,border:`1px solid ${!supplierId?T.red:T.border}`,borderRadius:7,padding:"8px 12px",width:"100%",fontSize:13}}>
+            <option value="">-- select supplier --</option>
+            {spSuppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <div style={{fontSize:11,color:T.faint,marginTop:4}}>If the supplier is not listed, add them in the Suppliers tab first.</div>
+        </div>
+        <Inp label="Supplier price date (YYYY-MM-DD, optional)" value={supplierPriceDate} onChange={setSupplierPriceDate} placeholder="e.g. 2026-07-01" sx={{marginBottom:14}}/>
+        {!file
+          ? <label style={{display:"block",border:`2px dashed ${T.border}`,borderRadius:10,padding:40,textAlign:"center",cursor:"pointer"}}
+              onDragOver={e=>e.preventDefault()}
+              onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files[0];if(f)handleFile(f);}}>
+              <input type="file" accept=".csv,text/csv" style={{display:"none"}} onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
+              <div style={{fontSize:34,marginBottom:8}}>📄</div>
+              <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>Click to upload or drag & drop a CSV</div>
+              <div style={{color:T.muted,fontSize:12}}>Verixo V1 Supplier Catalogue format — see contract below for column names</div>
+            </label>
+          : <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:8,padding:"10px 14px"}}>
+              <div style={{fontSize:13,color:T.text,fontWeight:600}}>{file.name}</div>
+              <div style={{fontSize:12,color:T.muted}}>{rawRows.length} data rows detected</div>
+              <span onClick={()=>{setFile(null);setHeaders([]);setRawRows([]);}} style={{fontSize:11,color:T.accent,cursor:"pointer"}}>Change file</span>
+            </div>}
+        <Row gap={8} sx={{justifyContent:"flex-end",marginTop:16}}>
+          <Btn v="gho" onClick={onClose}>Cancel</Btn>
+          <Btn v="pri" onClick={()=>setStep(2)} disabled={!file||!supplierId}>Next: Map Columns</Btn>
+        </Row>
+      </>}
+
+      {step===2&&<>
+        <div style={{fontSize:12,color:T.muted,marginBottom:14}}>
+          <strong style={{color:T.text}}>{file?.name}</strong> — match CSV columns to the fields below. Auto-detected from header names.
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+          {SP_COL_FIELDS.map(({field,label,required})=>(
+            <div key={field}>
+              <div style={{color:T.faint,fontSize:11,marginBottom:3}}>{label}{required?" *":""}</div>
+              <select value={colMap[field]||""} onChange={e=>setColMap(m=>({...m,[field]:e.target.value}))}
+                style={{background:T.card2,color:T.text,width:"100%",fontSize:12,padding:"5px 7px",
+                  border:`1px solid ${required&&!colMap[field]?T.red:T.border}`,borderRadius:6}}>
+                <option value="">-- skip --</option>
+                {headers.map(h=><option key={h} value={h}>{h}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+        <Row gap={8} sx={{justifyContent:"flex-end"}}>
+          <Btn v="gho" onClick={()=>setStep(1)}>Back</Btn>
+          <Btn v="pri" onClick={doPreview} disabled={busy||!colMap.product_name||!colMap.pack_price}>
+            {busy?"Classifying…":"Preview Import"}
+          </Btn>
+        </Row>
+      </>}
+
+      {step===3&&preview&&<>
+        <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+          {[
+            {id:"new",label:"New",count:preview.counts.new,color:T.green},
+            {id:"update",label:"Updates",count:preview.counts.update,color:T.accent},
+            {id:"unchanged",label:"Unchanged",count:preview.counts.unchanged,color:T.muted},
+            {id:"rejected",label:"Rejected",count:preview.counts.rejected,color:T.red},
+          ].map(t=>(
+            <div key={t.id} onClick={()=>setPreviewTab(t.id)}
+              style={{padding:"6px 14px",borderRadius:7,cursor:"pointer",fontSize:13,fontWeight:600,
+                background:previewTab===t.id?T.accentDim:"transparent",
+                border:`1px solid ${previewTab===t.id?T.accentBrd:T.border}`,
+                color:previewTab===t.id?T.accent:T.muted}}>
+              {t.label} <span style={{fontFamily:T.mono,color:t.color,marginLeft:4}}>{t.count}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{overflowX:"auto",border:`1px solid ${T.border}`,borderRadius:8,marginBottom:14,maxHeight:320,overflowY:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+            <thead><tr style={{background:T.bg}}>
+              {(previewTab==="new"||previewTab==="update")&&<th style={{padding:"6px 10px",color:T.faint,textAlign:"left",fontWeight:600,width:30}}>
+                <input type="checkbox"
+                  checked={tabRows.length>0&&tabRows.every(r=>confirmed.has(r.rowIndex))}
+                  onChange={e=>{
+                    if(e.target.checked) setConfirmed(prev=>{const n=new Set(prev);tabRows.forEach(r=>n.add(r.rowIndex));return n;});
+                    else setConfirmed(prev=>{const n=new Set(prev);tabRows.forEach(r=>n.delete(r.rowIndex));return n;});
+                  }}/>
+              </th>}
+              <th style={{padding:"6px 10px",color:T.faint,textAlign:"left",fontWeight:600}}>Product</th>
+              <th style={{padding:"6px 10px",color:T.faint,textAlign:"left",fontWeight:600}}>Category</th>
+              <th style={{padding:"6px 10px",color:T.faint,textAlign:"left",fontWeight:600}}>SKU</th>
+              <th style={{padding:"6px 10px",color:T.faint,textAlign:"right",fontWeight:600}}>Unit Price</th>
+              {previewTab==="update"&&<th style={{padding:"6px 10px",color:T.faint,textAlign:"left",fontWeight:600}}>Changes</th>}
+              {previewTab==="rejected"&&<th style={{padding:"6px 10px",color:T.faint,textAlign:"left",fontWeight:600}}>Reason</th>}
+            </tr></thead>
+            <tbody>
+              {tabRows.length===0&&<tr><td colSpan={7} style={{padding:"16px 12px",color:T.faint,fontSize:12}}>None in this category.</td></tr>}
+              {tabRows.map(row=>(
+                <tr key={row.rowIndex} style={{borderTop:`1px solid ${T.border}`,opacity:confirmed.has(row.rowIndex)||previewTab==="unchanged"||previewTab==="rejected"?1:0.5}}>
+                  {(previewTab==="new"||previewTab==="update")&&<td style={{padding:"5px 10px"}}>
+                    <input type="checkbox" checked={confirmed.has(row.rowIndex)} onChange={()=>toggleRow(row.rowIndex)}/>
+                  </td>}
+                  <td style={{padding:"5px 10px",color:T.text,maxWidth:200}}>{row.data.product_name||"—"}</td>
+                  <td style={{padding:"5px 10px",color:T.muted}}>{row.data.category||"—"}</td>
+                  <td style={{padding:"5px 10px",color:T.muted,fontFamily:T.mono,fontSize:10}}>{row.data.sku||"—"}</td>
+                  <td style={{padding:"5px 10px",color:T.accent,fontFamily:T.mono,textAlign:"right"}}>{row.data.unit_price!=null?"$"+row.data.unit_price.toFixed(4):"—"}</td>
+                  {previewTab==="update"&&<td style={{padding:"5px 10px",color:T.muted,fontSize:10}}>
+                    {row.changes?Object.entries(row.changes).map(([k,v])=>`${k}: ${v.from}→${v.to}`).join(", "):"—"}
+                  </td>}
+                  {previewTab==="rejected"&&<td style={{padding:"5px 10px",color:T.red,fontSize:10}}>{row.rejectionReason||"—"}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <Row gap={8} sx={{justifyContent:"flex-end"}}>
+          <Btn v="gho" onClick={()=>setStep(2)}>Back</Btn>
+          <Btn v="pri" onClick={doConfirm} disabled={busy||confirmable===0}>
+            {busy?"Importing…":`Confirm ${confirmable} row${confirmable!==1?"s":""}`}
+          </Btn>
+        </Row>
+      </>}
+    </div>
+  </div>;
+}
+
+function SupplierCatalogue({pop}){
+  const [loading,setLoading]=useState(true);
+  const [err,setErr]=useState(null);
+  const [spSuppliers,setSpSuppliers]=useState([]);
+  const [products,setProducts]=useState([]);
+  const [batches,setBatches]=useState([]);
+  const [filterSup,setFilterSup]=useState("all");
+  const [filterCat,setFilterCat]=useState("all");
+  const [search,setSearch]=useState("");
+  const [showImport,setShowImport]=useState(false);
+  const [showHistory,setShowHistory]=useState(false);
+  const [activating,setActivating]=useState(null);
+
+  async function load(){
+    setLoading(true); setErr(null);
+    try{
+      const [{data:s},{data:p},{data:b}]=await Promise.all([
+        dbListSuppliers(),
+        listSupplierProducts(),
+        listImportBatches(),
+      ]);
+      setSpSuppliers(s||[]);
+      setProducts(p||[]);
+      setBatches(b||[]);
+    } catch(e){ setErr(e?.message||String(e)); }
+    finally{ setLoading(false); }
+  }
+
+  useEffect(()=>{ load(); },[]);
+
+  const CATS=["Board","Hinge","Handle","Drawer System","Benchtop","Foot","Consumable","Other"];
+
+  const visible=products.filter(p=>{
+    if(filterSup!=="all"&&p.supplier_id!==filterSup) return false;
+    if(filterCat!=="all"&&p.category!==filterCat) return false;
+    if(search&&!p.product_name.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  if(loading) return <Card><div style={{color:T.muted,fontSize:13}}>Loading supplier catalogue…</div></Card>;
+  if(err) return <Card><div style={{color:T.red,fontSize:13}}>Error: {err}</div>
+    <div style={{color:T.faint,fontSize:12,marginTop:4}}>Run migrations 20260902000001–20260902000003 in Supabase if this is a missing table error.</div>
+  </Card>;
+
+  return <div>
+    {showImport&&<SupplierCsvImportModal pop={pop} onClose={()=>setShowImport(false)} onImported={load}/>}
+    {activating&&<ActivateModal product={activating} pop={pop} onClose={()=>setActivating(null)} onActivated={load}/>}
+
+    <Row gap={8} sx={{marginBottom:14,flexWrap:"wrap"}}>
+      <select value={filterSup} onChange={e=>setFilterSup(e.target.value)}
+        style={{background:T.card2,color:T.text,border:`1px solid ${T.border}`,borderRadius:7,padding:"7px 10px",fontSize:13}}>
+        <option value="all">All suppliers</option>
+        {spSuppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+      </select>
+      <select value={filterCat} onChange={e=>setFilterCat(e.target.value)}
+        style={{background:T.card2,color:T.text,border:`1px solid ${T.border}`,borderRadius:7,padding:"7px 10px",fontSize:13}}>
+        <option value="all">All categories</option>
+        {CATS.map(c=><option key={c} value={c}>{c}</option>)}
+      </select>
+      <Inp value={search} onChange={setSearch} placeholder="Search products…" sx={{marginBottom:0,flex:1,minWidth:160}}/>
+      <Btn v="gho" onClick={()=>setShowHistory(h=>!h)}>{showHistory?"Hide":"Show"} history ({batches.length})</Btn>
+      <Btn v="pri" onClick={()=>setShowImport(true)}>⬆ Import CSV</Btn>
+    </Row>
+
+    {showHistory&&<Card sx={{marginBottom:16,padding:0,overflow:"hidden"}}>
+      <div style={{padding:"10px 14px",fontWeight:600,fontSize:12,color:T.muted,borderBottom:`1px solid ${T.border}`}}>Import History</div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+          <thead><tr style={{background:T.bg}}>
+            {["Supplier","File","Imported","New","Updated","Unchanged","Rejected"].map(h=><th key={h} style={{padding:"6px 12px",color:T.faint,textAlign:"left",fontWeight:600,whiteSpace:"nowrap"}}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {batches.length===0&&<tr><td colSpan={7} style={{padding:"12px",color:T.faint}}>No imports yet.</td></tr>}
+            {batches.map(b=><tr key={b.id} style={{borderTop:`1px solid ${T.border}`}}>
+              <td style={{padding:"5px 12px",color:T.text}}>{b.supplier_name}</td>
+              <td style={{padding:"5px 12px",color:T.muted,fontSize:10}}>{b.filename||"—"}</td>
+              <td style={{padding:"5px 12px",color:T.faint,fontSize:10}}>{new Date(b.imported_at).toLocaleDateString()}</td>
+              <td style={{padding:"5px 12px",color:T.green,fontFamily:T.mono}}>{b.created_count}</td>
+              <td style={{padding:"5px 12px",color:T.accent,fontFamily:T.mono}}>{b.updated_count}</td>
+              <td style={{padding:"5px 12px",color:T.muted,fontFamily:T.mono}}>{b.unchanged_count}</td>
+              <td style={{padding:"5px 12px",color:T.red,fontFamily:T.mono}}>{b.rejected_count}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </Card>}
+
+    {products.length===0
+      ? <Card hi sx={{textAlign:"center",padding:40}}>
+          <div style={{fontSize:34,marginBottom:10}}>🏭</div>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>No supplier products yet</div>
+          <div style={{color:T.muted,fontSize:13,marginBottom:16,maxWidth:440,marginInline:"auto"}}>
+            Import a supplier price list CSV to populate your Supplier Catalogue. Use the V1 CSV contract as the template.
+          </div>
+          <Btn v="pri" onClick={()=>setShowImport(true)}>⬆ Import first CSV</Btn>
+        </Card>
+      : <Card sx={{padding:0,overflow:"hidden"}}>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{background:T.bg,color:T.faint,fontSize:11,textAlign:"left"}}>
+                {["Product","Supplier","Category","SKU","Unit","Pack Price","Unit Price","Sheet",""].map((h,i)=><th key={i} style={{padding:"8px 12px",fontWeight:600,whiteSpace:"nowrap"}}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {visible.length===0&&<tr><td colSpan={9} style={{padding:"16px 12px",color:T.faint}}>No products match the current filters.</td></tr>}
+                {visible.map(p=>(
+                  <tr key={p.id} style={{borderTop:`1px solid ${T.border}`,opacity:p.active?1:0.5}}>
+                    <td style={{padding:"6px 12px",color:T.text,minWidth:180}}>
+                      {p.product_name}
+                      {!p.active&&<span style={{marginLeft:6,fontSize:10,color:T.red,background:"rgba(239,68,68,0.1)",borderRadius:4,padding:"1px 5px"}}>Inactive</span>}
+                      {p.brand&&<div style={{fontSize:10,color:T.faint}}>{p.brand}</div>}
+                      {(p.colour||p.finish||p.thickness_mm)&&<div style={{fontSize:10,color:T.faint}}>{[p.colour,p.finish,p.thickness_mm?""+p.thickness_mm+"mm":null].filter(Boolean).join(" · ")}</div>}
+                    </td>
+                    <td style={{padding:"6px 12px",color:T.muted,fontSize:11}}>{p.supplier_name}</td>
+                    <td style={{padding:"6px 12px",color:T.muted,fontSize:11}}>{p.category}{p.subcategory&&<span style={{color:T.faint}}> / {p.subcategory}</span>}</td>
+                    <td style={{padding:"6px 12px",color:T.faint,fontFamily:T.mono,fontSize:10}}>{p.sku||"—"}</td>
+                    <td style={{padding:"6px 12px",color:T.muted,fontSize:11}}>{p.purchase_unit}</td>
+                    <td style={{padding:"6px 12px",color:T.text,fontFamily:T.mono,textAlign:"right"}}>
+                      {p.pack_price!=null?"$"+p.pack_price.toFixed(2):"-"}
+                      {p.pack_quantity&&p.pack_quantity!==1&&<span style={{color:T.faint,fontSize:10}}> /{p.pack_quantity}</span>}
+                    </td>
+                    <td style={{padding:"6px 12px",color:T.accent,fontFamily:T.mono,textAlign:"right"}}>
+                      {p.unit_price!=null?"$"+p.unit_price.toFixed(4):"-"}
+                    </td>
+                    <td style={{padding:"6px 8px",color:T.faint,fontFamily:T.mono,fontSize:10}}>
+                      {p.sheet_length_mm&&p.sheet_width_mm?`${p.sheet_length_mm}x${p.sheet_width_mm}`:"-"}
+                    </td>
+                    <td style={{padding:"6px 12px"}}>
+                      <Btn sm v="gho" onClick={()=>setActivating(p)}>Add to Library</Btn>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{padding:"8px 14px",borderTop:`1px solid ${T.border}`,fontSize:11,color:T.faint}}>
+            {visible.length} of {products.length} products
+          </div>
+        </Card>}
+  </div>;
+}
 
 function CsvImportModal({sections, activeTrade, activeSection, companyId, onImport, onClose, pop}) {
   const [file,setFile]=useState(null);
@@ -10767,6 +11593,7 @@ function CatalogueLibrary({pop}) {
   const [newItem,setNewItem]=useState({name:"",unit:"ea",rate:0,supplier:"",notes:"",attrText:"",sheet_length_mm:"",sheet_width_mm:"",kerf_mm:"",trim_mm:""});
   const [modal,setModal]=useState(null); // {type, ...}
   const [showImport,setShowImport]=useState(false);
+  const [reviewingItem,setReviewingItem]=useState(null);
 
   const trades=sections.filter(s=>!s.parent_id).sort((a,b)=>a.sort_order-b.sort_order);
   const subSections=sections.filter(s=>s.parent_id===activeTrade).sort((a,b)=>a.sort_order-b.sort_order);
@@ -10863,6 +11690,10 @@ function CatalogueLibrary({pop}) {
     if(error) return pop(error.message,"error");
     setItems(it=>it.filter(x=>x.id!==id)); pop("Removed.");
   }
+  async function toggleActive(id,current){
+    setItems(it=>it.map(x=>x.id===id?{...x,active:!current}:x));
+    await supabase.from("catalogue_items").update({active:!current}).eq("id",id);
+  }
   async function toggleLock(){
     if(role!=="owner") return pop("Only the owner can lock the library.","error");
     const { data:u }=await supabase.auth.getUser();
@@ -10889,6 +11720,11 @@ function CatalogueLibrary({pop}) {
         }
       }}
       onClose={()=>setShowImport(false)}/>}
+    {reviewingItem&&<StaleReviewModal item={reviewingItem} pop={pop}
+      onClose={()=>setReviewingItem(null)}
+      onReviewed={updated=>{
+        setItems(it=>it.map(x=>x.id===reviewingItem.id?{...x,price_stale:false,rate:updated?.rate??x.rate}:x));
+      }}/>}
     {modal?.type==="trade"&&<PromptModal title="New trade tab" label="Trade name"
       placeholder="e.g. Cabinetry, Electrical, Plumbing" confirmText="Add trade"
       onConfirm={createTrade} onCancel={()=>setModal(null)}/>}
@@ -10952,13 +11788,20 @@ function CatalogueLibrary({pop}) {
               <div style={{overflowX:"auto"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead><tr style={{background:T.bg,color:T.faint,fontSize:11,textAlign:"left"}}>
-                    {["Item","Unit","Rate","Supplier","Details","Notes","Sheet (mm)",canEdit?"":null].filter(x=>x!==null).map((h,i)=>
+                    {["Item","Unit","Rate","Supplier","Details","Notes","Sheet (mm)","Active",canEdit?"":null].filter(x=>x!==null).map((h,i)=>
                       <th key={i} style={{padding:"8px 12px",fontWeight:600}}>{h}</th>)}
                   </tr></thead>
                   <tbody>
                     {items.map(it=><tr key={it.id} style={{borderTop:`1px solid ${T.border}`}}>
                       <td style={{padding:"6px 12px",minWidth:160}}>
-                        {canEdit?<input value={it.name} onChange={e=>updItem(it.id,"name",e.target.value)} style={inlineInput}/>:<span style={{color:T.text}}>{it.name}</span>}
+                        <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          {canEdit?<input value={it.name} onChange={e=>updItem(it.id,"name",e.target.value)} style={inlineInput}/>:<span style={{color:T.text}}>{it.name}</span>}
+                          {it.price_stale&&<span onClick={()=>setReviewingItem(it)} title="Supplier updated price — click to review"
+                            style={{cursor:"pointer",fontSize:10,color:T.accent,background:"rgba(245,158,11,0.15)",border:"1px solid rgba(245,158,11,0.35)",borderRadius:4,padding:"1px 5px",whiteSpace:"nowrap",flexShrink:0}}>
+                            ↑ Review price
+                          </span>}
+                        </div>
+                        {it.price_source&&it.price_source!=="manual"&&<div style={{fontSize:10,color:T.faint}}>{it.price_source} · {it.buy_price?"$"+(+it.buy_price).toFixed(4)+" buy":"no buy price"}</div>}
                       </td>
                       <td style={{padding:"6px 12px"}}>
                         {canEdit?<input value={it.unit||""} onChange={e=>updItem(it.id,"unit",e.target.value)} style={{...inlineInput,width:60}}/>:<span style={{color:T.muted}}>{it.unit}</span>}
@@ -10989,6 +11832,13 @@ function CatalogueLibrary({pop}) {
                                 ? `${it.sheet_length_mm||3600}×${it.sheet_width_mm||1800} k${it.kerf_mm??4} t${it.trim_mm??10}`
                                 : "—"}
                             </span>}
+                      </td>
+                      <td style={{padding:"6px 12px",textAlign:"center"}}>
+                        <span onClick={()=>canEdit&&toggleActive(it.id,it.active!==false)}
+                          title={it.active!==false?"Active — click to deactivate":"Inactive — click to activate"}
+                          style={{cursor:canEdit?"pointer":"default",fontSize:15,opacity:canEdit?1:0.6}}>
+                          {it.active!==false?"🟢":"⭕"}
+                        </span>
                       </td>
                       {canEdit&&<td style={{padding:"6px 12px"}}>
                         <span onClick={()=>delItem(it.id)} style={{color:T.red,cursor:"pointer"}}>✕</span>
